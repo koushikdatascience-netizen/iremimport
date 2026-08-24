@@ -1,6 +1,5 @@
-"""
-Brand and package type normalization utilities
-"""
+"""Brand, package, and numeric normalization utilities."""
+import html
 import re
 import unicodedata
 from decimal import Decimal
@@ -19,14 +18,11 @@ def normalize_brand(brand):
     if not brand:
         return ""
 
-    # Unicode normalize
-    normalized = unicodedata.normalize("NFKC", brand)
+    normalized = html.unescape(str(brand))
+    normalized = unicodedata.normalize("NFKC", normalized)
 
-    # Casefold
-    normalized = normalized.casefold()
-
-    # Normalize apostrophes
     normalized = normalized.replace("\u2019", "'").replace("\u2018", "'").replace("\u02bc", "'")
+    normalized = normalized.casefold()
 
     # Remove unnecessary repeated punctuation (but keep single apostrophes)
     normalized = re.sub(r"([^\w\s'])\1+", r"\1", normalized)
@@ -43,7 +39,9 @@ def normalize_package_type(package):
     if not package:
         return ""
 
-    normalized = unicodedata.normalize("NFKC", package)
+    normalized = html.unescape(str(package))
+    normalized = unicodedata.normalize("NFKC", normalized)
+    normalized = normalized.replace("\u2019", "'").replace("\u2018", "'").replace("\u02bc", "'")
     normalized = normalized.casefold()
     normalized = re.sub(r"\s+", " ", normalized)
     return normalized.strip()
@@ -55,7 +53,9 @@ def parse_ml(value):
         return 0
 
     try:
-        return int(unicodedata.normalize("NFKC", str(value)).strip())
+        normalized = unicodedata.normalize("NFKC", str(value))
+        match = re.search(r"\d+", normalized)
+        return int(match.group(0)) if match else 0
     except (ValueError, TypeError):
         return 0
 
@@ -67,6 +67,7 @@ def parse_decimal(value):
 
     try:
         normalized = unicodedata.normalize("NFKC", str(value)).strip()
+        normalized = normalized.replace(",", "").replace("₹", "").replace("Rs.", "").replace("Rs", "")
         return Decimal(normalized)
     except (ValueError, TypeError, ArithmeticError):
         return None
@@ -78,8 +79,8 @@ def parse_int(value):
         return 0
 
     try:
-        return int(unicodedata.normalize("NFKC", str(value)).strip())
+        normalized = unicodedata.normalize("NFKC", str(value))
+        match = re.search(r"-?\d+", normalized)
+        return int(match.group(0)) if match else 0
     except (ValueError, TypeError):
         return 0
-</parameter>
-</write_to_file>

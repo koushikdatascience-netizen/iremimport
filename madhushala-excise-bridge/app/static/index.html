@@ -3,34 +3,145 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Madhushala Excise Import Bridge</title>
+    <title>Excise Import</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div id="container">
-        <header>
-            <h1>Madhushala Excise Import Bridge</h1>
-            <p>Production Foundation for Excise Integration</p>
+    <main class="app-shell">
+        <header class="app-header">
+            <div>
+                <span class="app-kicker">Madhushala</span>
+                <h1>Excise Import</h1>
+            </div>
+            <div class="status-pill" id="api-token-pill">API Missing</div>
         </header>
-        
-        <section id="controls">
-            <button id="start-automation" class="btn btn-primary">Start Automation</button>
-            <button id="open-excise" class="btn btn-secondary">Open Excise Portal</button>
-            <button id="stop-automation" class="btn btn-danger">Stop Automation</button>
+
+        <section class="status-strip" aria-label="Current status">
+            <div id="browser-status">Browser: Closed</div>
+            <div id="login-status">Login: Waiting</div>
+            <div id="prepare-indent-status">Prepare: Waiting</div>
+            <div id="capture-status">Captured: 0</div>
         </section>
-        
-        <section id="status">
-            <h2>System Status</h2>
-            <div id="browser-status">Browser: Not Running</div>
-            <div id="selected-items">Selected Items: None</div>
+
+        <p id="last-error" class="error" hidden></p>
+
+        <section class="action-grid" aria-label="Excise actions">
+            <article class="action-card">
+                <div>
+                    <span class="step-number">1</span>
+                    <h2>Open Portal</h2>
+                    <p>Login and go to Prepare Indent.</p>
+                </div>
+                <form id="credentials-form" autocomplete="off">
+                    <div class="form-row">
+                        <label for="username">User ID</label>
+                        <input id="username" name="username" type="text" autocomplete="username" placeholder="Saved">
+                    </div>
+                    <div class="form-row">
+                        <label for="password">Password</label>
+                        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Saved">
+                    </div>
+                    <button id="open-excise" type="submit">Open Portal</button>
+                </form>
+            </article>
+
+            <article class="action-card action-primary">
+                <div>
+                    <span class="step-number">2</span>
+                    <h2>Capture Selected</h2>
+                    <p id="instruction-message">Type case quantity, then capture.</p>
+                </div>
+                <button id="capture-selected" type="button">Capture Selected</button>
+            </article>
+
+            <article class="action-card">
+                <div>
+                    <span class="step-number">3</span>
+                    <h2>Mapping</h2>
+                    <p id="mapping-alert" class="mapping-alert idle">Waiting</p>
+                </div>
+                <button id="open-mapping" type="button" class="secondary">Open Mapping</button>
+            </article>
         </section>
-        
-        <section id="mapping-required">
-            <h2>Mapping Required</h2>
-            <p>No items require mapping yet.</p>
+
+        <section class="token-panel">
+            <form id="token-form" class="token-row" autocomplete="off">
+                <label for="api-token">API Token</label>
+                <input id="api-token" type="password" placeholder="Saved in .env">
+                <button type="submit" class="secondary">Save</button>
+            </form>
+        </section>
+    </main>
+
+    <div id="mapping-modal" class="modal" hidden>
+        <div class="modal-backdrop" data-close-modal></div>
+        <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="mapping-title">
+            <header class="modal-header">
+                <div>
+                    <span class="app-kicker">Item Mapping</span>
+                    <h2 id="mapping-title">Match Items</h2>
+                </div>
+                <button id="close-mapping" type="button" class="icon-button" aria-label="Close mapping">X</button>
+            </header>
+
+            <div class="modal-toolbar">
+                <div class="view-switch" aria-label="Mapping list view">
+                    <button id="show-latest-unmapped" class="selected" type="button">Latest Items</button>
+                    <button id="show-all-unmapped" type="button">All Unmapped</button>
+                </div>
+                <button id="refresh-workspace" type="button" class="secondary">Reload</button>
+            </div>
+
+            <div class="mapping-layout">
+                <aside class="unmapped-list" aria-label="Unmapped excise items">
+                    <div class="list-title">
+                        <span>Needs Match</span>
+                        <span id="unmapped-count">0</span>
+                    </div>
+                    <div id="unmapped-items" class="list-body empty">No items</div>
+                </aside>
+
+                <section class="mapper">
+                    <div id="selected-excise" class="selected-empty">Choose an item.</div>
+
+                    <div id="best-match-card" class="best-match-card" hidden></div>
+
+                    <div class="search-block">
+                        <label for="madhushala-search">Find Item</label>
+                        <input id="madhushala-search" type="search" placeholder="Type name or code">
+                    </div>
+
+                    <div>
+                        <h3>Matches</h3>
+                        <div id="suggestions" class="candidate-list empty">No matches</div>
+                    </div>
+                </section>
+            </div>
+
+            <footer class="mapping-footer">
+                <div id="mapping-summary">Selected: 0</div>
+                <button id="submit-mappings" type="button" disabled>Save All</button>
+            </footer>
         </section>
     </div>
-    
+
+    <div id="guardrail-modal" class="modal" hidden>
+        <div class="modal-backdrop"></div>
+        <section class="guardrail-panel" role="dialog" aria-modal="true" aria-labelledby="guardrail-title">
+            <header class="modal-header">
+                <div>
+                    <span class="app-kicker">Check Match</span>
+                    <h2 id="guardrail-title">Confirm Mapping</h2>
+                </div>
+            </header>
+            <div id="guardrail-body" class="guardrail-body"></div>
+            <footer class="guardrail-actions">
+                <button id="cancel-guardrail" type="button" class="secondary">Cancel</button>
+                <button id="confirm-guardrail" type="button">Save Anyway</button>
+            </footer>
+        </section>
+    </div>
+
     <script src="/static/app.js"></script>
 </body>
 </html>

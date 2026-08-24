@@ -1,20 +1,19 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+"""Madhushala Excise Bridge Phase 1 FastAPI app."""
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import asyncio
 import logging
-from datetime import datetime
 import os
+from typing import Optional, Dict
 
-# Import local modules
 from app.config import settings
-from app.db.database import database
-from app.services.session_manager import SessionManager
-from app.services.import_processor import ImportProcessor
-from app.integrations.madhushala.client import MadhushalaClient
 from app.automation.browser_manager import BrowserManager
-from app.automation.prepare_indent_monitor import PrepareIndentMonitor
-from app.integrations.madhushala.payload_mapper import get_payload_mapper
+from app.integrations.madhushala.client import MadhushalaApiError
+from app.services.capture_service import CaptureService
+from app.services.mapping_service import MappingService
+from app.services.matching_service import score_dropdown_search
 
 # Initialize logger
 logging.basicConfig(
@@ -25,170 +24,284 @@ logger = logging.getLogger("madhushala-excise-bridge")
 
 # Create FastAPI app
 app = FastAPI(
-    title="Madhushala Excise Bridge",
-    description="Production foundation for Madhushala CRM Excise integration",
-    version="0.1.0"
+    title="Madhushala Excise Bridge - Phase 1",
+    description="Simple local UI for manual excise portal interaction and data capture",
+    version="1.0.0"
 )
 
-# CORS middleware
+# Mount static files
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+# CORS middleware - bind only to localhost for security
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to specific origins
+    allow_origins=["http://127.0.0.1:8091", "http://localhost:8091"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+capture_service = CaptureService()
+mapping_service = MappingService()
+madhushala_token = settings.MADHUSHALA_TOKEN
+
+async def auto_process_latest_capture(batch_id: str) -> None:
+    latest = capture_service.get_latest_capture()
+    await mapping_service.auto_process_capture(latest, madhushala_token)
+
+browser_manager = BrowserManager(capture_service, on_capture_saved=auto_process_latest_capture)
+
+# Pydantic models
+class Credentials(BaseModel):
+    username: str = ""
+    password: str = ""
+
+class HealthResponse(BaseModel):
+    status: str
+    browserRunning: bool
+    loginPageDetected: bool
+    prepareIndentDetected: bool
+    lastCapturedCount: int
+
+class StatusResponse(BaseModel):
+    browserRunning: bool
+    currentUrl: Optional[str]
+    loginPageDetected: bool
+    prepareIndentDetected: bool
+    lastCapturedBatch: Optional[Dict]
+    lastError: Optional[str]
+    mappingStatus: Optional[Dict] = None
+
+class TokenRequest(BaseModel):
+    token: str
+
+class MappingSelection(BaseModel):
+    exciseItemCode: int
+    itemCode: str
+
+class MappingSubmitRequest(BaseModel):
+    mappings: list[MappingSelection]
+
 # Global exception handler
 @app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
+async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return {"error": "Internal server error"}
+    return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 # Health check endpoint
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse)
 async def health_check():
     return {
         "status": "ready",
-        "browserRunning": settings.HEADLESS is False,  # Will be set by browser manager
-        "activeSession": SessionManager.session_id if SessionManager.session_id else None
+        "browserRunning": browser_manager.is_running,
+        "loginPageDetected": browser_manager.login_page_detected,
+        "prepareIndentDetected": browser_manager.prepare_indent_detected,
+        "lastCapturedCount": (capture_service.get_latest_capture() or {}).get("itemCount", 0)
     }
 
 # Startup event
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting up application...")
-    
-    # Initialize database
-    await database.connect()
-    logger.info("Database connected")
-    
-    # Initialize session manager
-    await SessionManager.start()
-    logger.info("Session manager started")
-    
-    # Initialize Madhushala client
-    await MadhushalaClient.start()
-    logger.info("Madhushala client initialized")
-    
+
+    # Ensure data directories exist
+    os.makedirs(settings.CAPTURES_DIR, exist_ok=True)
+    os.makedirs(settings.BROWSER_PROFILE_DIR, exist_ok=True)
+
     # Initialize browser manager
-    await BrowserManager.start()
-    logger.info("Browser manager started")
-    
-    # Initialize import processor
-    await ImportProcessor.start()
-    logger.info("Import processor started")
+    await browser_manager.initialize()
+    logger.info("Browser manager initialized")
+
+    # Initialize capture service
+    await capture_service.initialize()
+    logger.info("Capture service initialized")
+
+    await mapping_service.initialize()
+    logger.info("Mapping service initialized")
 
 # Shutdown event
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Shutting down application...")
-    
-    # Stop import processor
-    await ImportProcessor.stop()
-    logger.info("Import processor stopped")
-    
-    # Stop browser manager
-    await BrowserManager.stop()
-    logger.info("Browser manager stopped")
-    
-    # Stop Madhushala client
-    await MadhushalaClient.stop()
-    logger.info("Madhushala client stopped")
-    
-    # Close database connection
-    await database.disconnect()
-    logger.info("Database disconnected")
 
-# WebSocket endpoint for events
-@app.websocket("/ws/events")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    logger.info("WebSocket client connected")
-    
-    try:
-        while True:
-            # Keep connection alive
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        logger.info("WebSocket client disconnected")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+    # Stop browser manager
+    await browser_manager.shutdown()
+    logger.info("Browser manager stopped")
+
+    # Stop capture service
+    await capture_service.shutdown()
+    logger.info("Capture service stopped")
 
 # Automation endpoints
 @app.post("/automation/start")
-async def start_automation(session_data: dict = None):
-    """Start a new automation session"""
+async def start_automation(credentials: Credentials):
+    """Start a new automation session with credentials"""
     try:
-        session_id = await SessionManager.create_session()
-        logger.info(f"New session started: {session_id}")
-        
-        # Start browser if not already running
-        await BrowserManager.start_browser()
-        
+        username = credentials.username.strip() or settings.EXCISE_USERNAME
+        password = credentials.password or settings.EXCISE_PASSWORD
+        if not username or not password:
+            raise HTTPException(
+                status_code=400,
+                detail="Excise username/password are missing. Enter them once or set EXCISE_USERNAME and EXCISE_PASSWORD in .env.",
+            )
+
+        # Start browser with persistent context
+        success = await browser_manager.start_browser()
+        if not success:
+            raise HTTPException(status_code=500, detail=browser_manager.last_error or "Failed to start browser")
+
+        # Open excise portal and fill credentials
+        await browser_manager.open_excise_portal(username, password)
+
         return {
-            "sessionId": session_id,
-            "status": "started"
+            "status": "started",
+            "browserRunning": True,
+            "message": (
+                "Browser opened. Username/password filled. Please enter CAPTCHA manually "
+                "in the Excise browser and click Login."
+            )
         }
     except Exception as e:
         logger.error(f"Failed to start automation: {e}")
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/automation/open-excise")
-async def open_excise():
-    """Open the Excise portal in the browser"""
-    try:
-        await BrowserManager.open_excise_portal()
-        return {"status": "browser_opened"}
-    except Exception as e:
-        logger.error(f"Failed to open Excise portal: {e}")
-        return {"error": str(e)}
-
-@app.get("/automation/status")
+@app.get("/automation/status", response_model=StatusResponse)
 async def get_status():
     """Get current status of automation"""
     return {
-        "browserRunning": BrowserManager.is_running,
-        "pageUrl": BrowserManager.current_url,
-        "selectedItems": SessionManager.selected_items,
-        "activeSession": SessionManager.session_id,
-        "lastError": SessionManager.last_error,
-        "browserStatus": BrowserManager.browser_status
+        "browserRunning": browser_manager.is_running,
+        "currentUrl": browser_manager.current_url,
+        "loginPageDetected": browser_manager.login_page_detected,
+        "prepareIndentDetected": browser_manager.prepare_indent_detected,
+        "lastCapturedBatch": capture_service.get_latest_capture(),
+        "lastError": browser_manager.last_error,
+        "mappingStatus": mapping_service.get_auto_status(),
     }
 
-@app.get("/automation/selected-items")
-async def get_selected_items():
-    """Get currently selected items"""
-    return SessionManager.selected_items
-
-@app.get("/automation/pending-mappings")
-async def get_pending_mappings():
-    """Get mapping-required records"""
-    # This would query the database for unmapped items
-    # For now, return empty list
-    return []
-
-@app.post("/automation/map")
-async def map_excise_item(code_data: dict):
-    """Map Excise item to Madhushala item code"""
+@app.post("/automation/capture-selected")
+async def capture_selected_rows():
     try:
-        result = await ImportProcessor.handle_mapping(code_data)
-        return result
+        return await browser_manager.capture_selected_rows()
     except Exception as e:
-        logger.error(f"Mapping failed: {e}")
-        return {"error": str(e)}
+        logger.error(f"Failed to capture selected rows: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/captures/latest")
+async def get_latest_capture():
+    """Get latest structured capture"""
+    latest = capture_service.get_latest_capture()
+    if not latest:
+        raise HTTPException(status_code=404, detail="No captures available")
+    return latest
+
+@app.get("/captures")
+async def get_captures():
+    """Get capture-batch summaries"""
+    return capture_service.get_all_captures()
 
 @app.post("/automation/stop")
 async def stop_automation():
     """Stop the current automation session"""
     try:
-        await BrowserManager.stop_browser()
-        await SessionManager.end_session()
+        await browser_manager.stop_browser()
         return {"status": "stopped"}
     except Exception as e:
         logger.error(f"Failed to stop automation: {e}")
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8091, reload=True)
+@app.get("/madhushala/status")
+async def madhushala_status():
+    return {
+        "tokenConfigured": bool(madhushala_token),
+        "exciseCredentialsConfigured": bool(settings.EXCISE_USERNAME and settings.EXCISE_PASSWORD),
+        "shopCode": settings.MADHUSHALA_SHOP_CODE,
+        "companyCode": settings.MADHUSHALA_COMPANY_CODE,
+        "billType": settings.MADHUSHALA_BILL_TYPE,
+    }
+
+@app.post("/madhushala/token")
+async def set_madhushala_token(payload: TokenRequest):
+    global madhushala_token
+    madhushala_token = payload.token.strip()
+    if madhushala_token and capture_service.get_latest_capture():
+        await mapping_service.auto_process_capture(capture_service.get_latest_capture(), madhushala_token)
+    return {
+        "status": "configured",
+        "tokenConfigured": bool(madhushala_token),
+        "mappingStatus": mapping_service.get_auto_status(),
+    }
+
+def require_madhushala_token() -> str:
+    if not madhushala_token:
+        raise HTTPException(status_code=400, detail="Madhushala API token is not configured")
+    return madhushala_token
+
+def handle_madhushala_error(exc: MadhushalaApiError):
+    status_code = exc.status_code if exc.status_code and exc.status_code >= 400 else 502
+    raise HTTPException(status_code=status_code, detail=str(exc))
+
+@app.post("/mapping/prepare-latest-capture")
+async def prepare_latest_capture_for_mapping():
+    latest = capture_service.get_latest_capture()
+    if not latest:
+        raise HTTPException(status_code=404, detail="No capture available")
+
+    try:
+        return await mapping_service.prepare_latest_capture(latest, require_madhushala_token())
+    except MadhushalaApiError as exc:
+        handle_madhushala_error(exc)
+
+@app.get("/mapping/status")
+async def get_mapping_status():
+    return mapping_service.get_auto_status()
+
+@app.get("/mapping/workspace")
+async def get_mapping_workspace(latestOnly: bool = True):
+    try:
+        token = require_madhushala_token()
+        latest_capture = capture_service.get_latest_capture()
+        if latestOnly and latest_capture:
+            await mapping_service.prepare_latest_capture(latest_capture, token)
+        return await mapping_service.workspace(
+            token,
+            capture=latest_capture,
+            latest_only=latestOnly,
+        )
+    except MadhushalaApiError as exc:
+        handle_madhushala_error(exc)
+
+@app.get("/madhushala/items")
+async def get_madhushala_items(q: str = ""):
+    try:
+        workspace = await mapping_service.workspace(require_madhushala_token(), latest_only=False)
+    except MadhushalaApiError as exc:
+        handle_madhushala_error(exc)
+
+    query = q.casefold().strip()
+    items = workspace["madhushalaItems"]
+    if query:
+        scored = [
+            (score_dropdown_search(item, query), item)
+            for item in items
+        ]
+        items = [
+            item for score, item in sorted(scored, key=lambda entry: entry[0], reverse=True)
+            if score > 0
+        ]
+    return {"items": items[:100], "count": len(items)}
+
+@app.post("/mapping/submit")
+async def submit_mappings(payload: MappingSubmitRequest):
+    try:
+        selections = [
+            item.model_dump() if hasattr(item, "model_dump") else item.dict()
+            for item in payload.mappings
+        ]
+        return await mapping_service.save_mappings(selections, require_madhushala_token())
+    except MadhushalaApiError as exc:
+        handle_madhushala_error(exc)
+
+# Serve the main HTML page
+@app.get("/")
+async def serve_index():
+    return FileResponse("app/static/index.html")
