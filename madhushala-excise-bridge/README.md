@@ -111,3 +111,26 @@ pytest -v
 - Excise password and Madhushala token use password inputs.
 - Credentials/tokens are not saved to source or capture JSON.
 - Browser profile, captures, mapping state, DB files, logs, and `.env` are ignored by git.
+
+## Production Packaging
+
+The project now includes Option A server packaging:
+
+- `Dockerfile`
+- `docker-compose.prod.yml`
+- `.env.example`
+- `deploy/nginx/madhushala-excise-bridge.conf`
+- `deploy/README.md`
+
+For the current server, deploy it as an independent project under:
+
+```text
+/srv/projects/madhushala-excise-bridge
+```
+
+The compose file binds the app only to private host ports, so Nginx should be the public entry point:
+
+- Bridge UI/API: `127.0.0.1:8091`
+- Browser view/noVNC: `127.0.0.1:6080`
+
+In server mode, the container starts a virtual display and noVNC so the operator can see the server-side Chromium browser, enter CAPTCHA, and work from the SnapKey CRM button flow.

@@ -1,0 +1,36 @@
+name: madhushala-excise-bridge
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: madhushala_excise_bridge_web
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      LOCAL_HOST: 0.0.0.0
+      LOCAL_PORT: 8091
+      DISPLAY: :99
+      HEADLESS: "false"
+      BROWSER_PROFILE_DIR: /app/data/browser_profile
+      CAPTURES_DIR: /app/data/captures
+      MAPPINGS_DIR: /app/data/mappings
+    ports:
+      - "127.0.0.1:8091:8091"
+      - "127.0.0.1:6080:6080"
+    volumes:
+      - excise_bridge_data:/app/data
+    shm_size: "1gb"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8091/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  excise_bridge_data:

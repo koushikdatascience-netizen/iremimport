@@ -35,7 +35,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # CORS middleware - bind only to localhost for security
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8091", "http://localhost:8091"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

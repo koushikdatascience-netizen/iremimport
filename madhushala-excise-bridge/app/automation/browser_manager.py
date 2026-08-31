@@ -55,8 +55,12 @@ class BrowserManager:
             # Launch persistent browser context
             self.context = await self.playwright.chromium.launch_persistent_context(
                 user_data_dir=settings.BROWSER_PROFILE_DIR,
-                headless=False,
-                args=['--disable-gpu']
+                headless=settings.HEADLESS,
+                args=[
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--no-sandbox",
+                ],
             )
 
             await self._setup_context_hooks()

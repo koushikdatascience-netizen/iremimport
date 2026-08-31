@@ -595,6 +595,10 @@ document.getElementById('credentials-form')?.addEventListener('submit', async (e
     }
 });
 
+document.getElementById('open-browser-view')?.addEventListener('click', () => {
+    window.open('/excise-browser/vnc.html?autoconnect=true&resize=remote', '_blank', 'noopener,noreferrer');
+});
+
 document.getElementById('capture-selected')?.addEventListener('click', async () => {
     try {
         const result = await api('/automation/capture-selected', {method: 'POST'});
