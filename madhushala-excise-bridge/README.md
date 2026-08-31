@@ -122,11 +122,13 @@ The project now includes Option A server packaging:
 - `deploy/nginx/madhushala-excise-bridge.conf`
 - `deploy/README.md`
 
-For the current server, deploy it as an independent project under:
+For the current server, clone the repo under:
 
 ```text
-/srv/projects/madhushala-excise-bridge
+/srv/projects/iremimport
 ```
+
+Then run the service from `/srv/projects/iremimport/madhushala-excise-bridge`.
 
 The compose file binds the app only to private host ports, so Nginx should be the public entry point:
 

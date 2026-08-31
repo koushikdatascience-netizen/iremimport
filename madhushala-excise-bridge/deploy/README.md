@@ -25,9 +25,10 @@ Using a dedicated subdomain is preferred because the app serves root-relative st
 
 ```bash
 cd /srv/projects
-git clone https://github.com/koushikdatascience-netizen/iremimport.git madhushala-excise-bridge
-cd madhushala-excise-bridge
+git clone https://github.com/koushikdatascience-netizen/iremimport.git iremimport
+cd iremimport
 git checkout master
+cd madhushala-excise-bridge
 cp .env.example .env
 nano .env
 docker compose -f docker-compose.prod.yml up -d --build
@@ -83,7 +84,9 @@ The noVNC endpoint has no password because access should be controlled at Nginx/
 
 ```bash
 cd /srv/projects/madhushala-excise-bridge
+cd /srv/projects/iremimport
 git pull
+cd madhushala-excise-bridge
 docker compose -f docker-compose.prod.yml up -d --build
 docker image prune -f
 ```
