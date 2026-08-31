@@ -6,9 +6,10 @@ const selectedMappings = new Map();
 let appConfig = {tokenConfigured: false, exciseCredentialsConfigured: false};
 let workspaceMode = 'latest';
 let pendingGuardrailAction = null;
+const basePath = window.location.pathname.startsWith('/excise-import/') ? '/excise-import' : '';
 
 async function api(path, options = {}) {
-    const response = await fetch(path, {
+    const response = await fetch(`${basePath}${path}`, {
         ...options,
         headers: {
             'Content-Type': 'application/json',
@@ -596,7 +597,8 @@ document.getElementById('credentials-form')?.addEventListener('submit', async (e
 });
 
 document.getElementById('open-browser-view')?.addEventListener('click', () => {
-    window.open('/excise-browser/vnc.html?autoconnect=true&resize=remote', '_blank', 'noopener,noreferrer');
+    const browserPath = basePath ? `${basePath}/browser/vnc.html?autoconnect=true&resize=remote` : '/excise-browser/vnc.html?autoconnect=true&resize=remote';
+    window.open(browserPath, '_blank', 'noopener,noreferrer');
 });
 
 document.getElementById('capture-selected')?.addEventListener('click', async () => {
