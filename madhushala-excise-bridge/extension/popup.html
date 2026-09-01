@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Excise Capture</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <span>Madhushala</span>
+      <h1>Excise Capture</h1>
+    </header>
+
+    <section class="panel">
+      <label for="server-url">Bridge URL</label>
+      <input id="server-url" type="url" value="http://13.232.52.191/excise-import" spellcheck="false">
+      <button id="save-url" type="button" class="secondary">Save URL</button>
+    </section>
+
+    <section class="panel">
+      <div id="status" class="status">Open Prepare Indent, type case quantity, then capture.</div>
+      <button id="capture" type="button">Capture Typed Rows</button>
+      <button id="open-mapping" type="button" class="secondary">Open Mapping</button>
+    </section>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

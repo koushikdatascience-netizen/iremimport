@@ -1,10 +1,11 @@
 # Madhushala Excise Bridge
 
-Local FastAPI + Playwright bridge for WB Excise Prepare Indent capture and Madhushala item mapping.
+FastAPI backend plus Chrome extension workflow for WB Excise Prepare Indent capture and Madhushala item mapping.
 
 ## Implemented
 
 - Local UI at `http://127.0.0.1:8091`
+- Chrome extension capture flow for scalable client-side Excise portal use
 - Visible Playwright Chromium browser with persistent profile
 - WB Excise login autofill, with manual CAPTCHA and manual login
 - Manual Prepare Indent flow observation
@@ -21,6 +22,20 @@ Local FastAPI + Playwright bridge for WB Excise Prepare Indent capture and Madhu
   - submit: batch `save-mapping`
 - Automatic mapping check after local Capture Selected
 - Local mapping state in `data/mappings/`
+
+## Recommended Production Flow
+
+Use the Chrome extension for real users. This keeps Chrome, CAPTCHA, and Excise portal interaction on the user's own computer instead of opening one server-side Chrome instance per user.
+
+1. User opens Excise portal in Chrome and logs in normally.
+2. User goes to Prepare Indent.
+3. User types case quantity in the rows to import.
+4. User clicks the Madhushala Excise Capture extension.
+5. Extension posts only typed case rows to `POST /extension/capture`.
+6. Backend creates/checks Excise item records, opens mapping status, and keeps all guardrails.
+7. User opens Mapping from the bridge UI or extension popup and saves correct item mappings.
+
+The old server-side Playwright/noVNC flow remains available as a fallback, but it is not the recommended path for 100 concurrent users.
 
 ## Setup
 
@@ -75,6 +90,7 @@ When these are set, users can leave the local UI credential/token fields blank.
 - `GET /health`
 - `POST /automation/start`
 - `POST /automation/capture-selected`
+- `POST /extension/capture`
 - `GET /automation/status`
 - `GET /captures/latest`
 - `GET /captures`
@@ -135,4 +151,6 @@ The compose file binds the app only to private host ports, so Nginx should be th
 - Bridge UI/API: `127.0.0.1:8091`
 - Browser view/noVNC: `127.0.0.1:6080`
 
-In server mode, the container starts a virtual display and noVNC so the operator can see the server-side Chromium browser, enter CAPTCHA, and work from the SnapKey CRM button flow.
+In fallback server mode, the container starts a virtual display and noVNC so the operator can see the server-side Chromium browser, enter CAPTCHA, and work from the SnapKey CRM button flow.
+
+For production scale, deploy the backend privately behind the final subdomain and install the Chrome extension from the `extension/` folder on operator machines.

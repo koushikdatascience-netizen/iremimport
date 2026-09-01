@@ -52,6 +52,7 @@ class Settings:
             ["http://localhost:8091", "http://127.0.0.1:8091"],
         )
     )
+    CORS_ORIGIN_REGEX: str | None = os.getenv("CORS_ORIGIN_REGEX", r"chrome-extension://.*")
 
     @property
     def MADHUSHALA_TOKEN(self) -> str:

@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import logging
 import os
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 
 from app.config import settings
 from app.automation.browser_manager import BrowserManager
@@ -36,6 +36,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -81,6 +82,12 @@ class MappingSelection(BaseModel):
 
 class MappingSubmitRequest(BaseModel):
     mappings: list[MappingSelection]
+
+class ExtensionCaptureRequest(BaseModel):
+    pageUrl: str = ""
+    capturedAt: Optional[str] = None
+    items: list[dict[str, Any]]
+    source: str = "chrome_extension"
 
 # Global exception handler
 @app.exception_handler(Exception)
@@ -184,6 +191,28 @@ async def capture_selected_rows():
         return await browser_manager.capture_selected_rows()
     except Exception as e:
         logger.error(f"Failed to capture selected rows: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/extension/capture")
+async def capture_from_extension(payload: ExtensionCaptureRequest):
+    try:
+        if not payload.items:
+            raise HTTPException(status_code=400, detail="No typed case rows found")
+
+        raw_batch = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+        batch_id = await capture_service.save_capture(raw_batch)
+        await auto_process_latest_capture(batch_id)
+        latest = capture_service.get_latest_capture()
+        return {
+            "status": "captured",
+            "batchId": batch_id,
+            "itemCount": latest.get("itemCount", 0) if latest else 0,
+            "mappingStatus": mapping_service.get_auto_status(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to capture extension rows: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/captures/latest")

@@ -136,3 +136,44 @@ def test_password_never_appears_in_start_response_or_logs(monkeypatch, caplog):
     assert response.status_code == 200
     assert secret not in response.text
     assert secret not in "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_extension_capture_saves_typed_rows(monkeypatch):
+    from app.main import app, mapping_service
+
+    async def fake_auto_process_capture(capture, token):
+        mapping_service._set_auto_status(
+            state="complete",
+            message="All captured items are mapped.",
+            mappingRequired=False,
+            unmappedCount=0,
+            preparedCount=capture.get("itemCount", 0),
+            lastError=None,
+        )
+        return mapping_service.get_auto_status()
+
+    monkeypatch.setattr(mapping_service, "auto_process_capture", fake_auto_process_capture)
+
+    client = TestClient(app)
+    response = client.post(
+        "/extension/capture",
+        json={
+            "pageUrl": "https://excise.wb.gov.in/WBSBCL/Bevco/Indent/PrepareIndent.aspx",
+            "capturedAt": "2026-08-20T12:00:00+00:00",
+            "items": snapshot_case_typed_rows_from_fixture(),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["itemCount"] == 1
+    assert response.json()["mappingStatus"]["state"] == "complete"
+
+
+def test_extension_capture_rejects_empty_rows():
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.post("/extension/capture", json={"items": []})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "No typed case rows found"
