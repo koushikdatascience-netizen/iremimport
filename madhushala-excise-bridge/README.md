@@ -27,13 +27,15 @@ FastAPI backend plus Chrome extension workflow for WB Excise Prepare Indent capt
 
 Use the Chrome extension for real users. This keeps Chrome, CAPTCHA, and Excise portal interaction on the user's own computer instead of opening one server-side Chrome instance per user.
 
-1. User opens Excise portal in Chrome and logs in normally.
-2. User goes to Prepare Indent.
-3. User types case quantity in the rows to import.
-4. User clicks the Madhushala Excise Capture extension.
-5. Extension posts only typed case rows to `POST /extension/capture`.
-6. Backend creates/checks Excise item records, opens mapping status, and keeps all guardrails.
-7. User opens Mapping from the bridge UI or extension popup and saves correct item mappings.
+1. User clicks `Open Portal` in the Chrome extension.
+2. Extension opens the Excise portal and fills saved ID/password.
+3. User enters CAPTCHA and logs in.
+4. User goes to Prepare Indent.
+5. User types case quantity in the rows to import.
+6. User clicks `Capture Selected` in the extension.
+7. Extension posts only typed case rows to `POST /extension/capture`.
+8. Backend creates/checks Excise item records and returns mapped/unmapped status.
+9. User opens Mapping from the extension popup or bridge UI and saves correct item mappings.
 
 The old server-side Playwright/noVNC flow remains available as a fallback, but it is not the recommended path for 100 concurrent users.
 

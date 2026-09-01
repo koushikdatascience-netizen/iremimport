@@ -16,12 +16,17 @@
     <section class="panel">
       <label for="server-url">Bridge URL</label>
       <input id="server-url" type="url" value="http://13.232.52.191/excise-import" spellcheck="false">
-      <button id="save-url" type="button" class="secondary">Save URL</button>
+      <label for="excise-user">Excise User ID</label>
+      <input id="excise-user" type="text" autocomplete="username" spellcheck="false">
+      <label for="excise-password">Excise Password</label>
+      <input id="excise-password" type="password" autocomplete="current-password">
+      <button id="save-settings" type="button" class="secondary">Save Setup</button>
     </section>
 
     <section class="panel">
-      <div id="status" class="status">Open Prepare Indent, type case quantity, then capture.</div>
-      <button id="capture" type="button">Capture Typed Rows</button>
+      <div id="status" class="status">Open portal, enter CAPTCHA, then prepare indent.</div>
+      <button id="open-portal" type="button">Open Portal</button>
+      <button id="capture" type="button">Capture Selected</button>
       <button id="open-mapping" type="button" class="secondary">Open Mapping</button>
     </section>
   </main>

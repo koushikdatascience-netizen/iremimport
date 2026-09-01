@@ -1,7 +1,11 @@
 const DEFAULT_SERVER_URL = "http://13.232.52.191/excise-import";
+const EXCISE_LOGIN_URL = "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx";
 
 const serverInput = document.getElementById("server-url");
-const saveButton = document.getElementById("save-url");
+const userInput = document.getElementById("excise-user");
+const passwordInput = document.getElementById("excise-password");
+const saveButton = document.getElementById("save-settings");
+const openPortalButton = document.getElementById("open-portal");
 const captureButton = document.getElementById("capture");
 const mappingButton = document.getElementById("open-mapping");
 const statusEl = document.getElementById("status");
@@ -16,15 +20,106 @@ function cleanServerUrl(value) {
 }
 
 async function getServerUrl() {
-  const stored = await chrome.storage.sync.get({serverUrl: DEFAULT_SERVER_URL});
-  return cleanServerUrl(stored.serverUrl);
+  const settings = await loadSettings();
+  return cleanServerUrl(settings.serverUrl);
 }
 
-async function setServerUrl(value) {
-  const serverUrl = cleanServerUrl(value);
-  await chrome.storage.sync.set({serverUrl});
+async function loadSettings() {
+  return chrome.storage.local.get({
+    serverUrl: DEFAULT_SERVER_URL,
+    exciseUser: "",
+    excisePassword: "",
+  });
+}
+
+async function saveSettings() {
+  const serverUrl = cleanServerUrl(serverInput.value);
+  await chrome.storage.local.set({
+    serverUrl,
+    exciseUser: userInput.value.trim(),
+    excisePassword: passwordInput.value,
+  });
   serverInput.value = serverUrl;
-  setStatus("Bridge URL saved.", "success");
+  setStatus("Setup saved.", "success");
+}
+
+function fillExciseLogin(credentials) {
+  function visibleInput(selectors) {
+    for (const selector of selectors) {
+      const input = document.querySelector(selector);
+      if (input && input.offsetParent !== null) return input;
+    }
+    return null;
+  }
+
+  function setNativeValue(input, value) {
+    if (!input || !value) return false;
+    const setter = Object.getOwnPropertyDescriptor(input.constructor.prototype, "value")?.set;
+    if (setter) {
+      setter.call(input, value);
+    } else {
+      input.value = value;
+    }
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+    input.dispatchEvent(new Event("change", {bubbles: true}));
+    return true;
+  }
+
+  const user = visibleInput([
+    'input[type="text"]',
+    'input[name*="User" i]',
+    'input[id*="User" i]',
+    'input[name*="Login" i]',
+    'input[id*="Login" i]',
+  ]);
+  const password = visibleInput([
+    'input[type="password"]',
+    'input[name*="Password" i]',
+    'input[id*="Password" i]',
+  ]);
+
+  return {
+    userFilled: setNativeValue(user, credentials.exciseUser),
+    passwordFilled: setNativeValue(password, credentials.excisePassword),
+  };
+}
+
+async function waitForTabComplete(tabId) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.status === "complete") return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+async function openPortal() {
+  openPortalButton.disabled = true;
+  setStatus("Opening Excise portal...");
+
+  try {
+    const settings = await loadSettings();
+    if (!settings.exciseUser || !settings.excisePassword) {
+      throw new Error("Save Excise User ID and Password first.");
+    }
+
+    const tab = await chrome.tabs.create({url: EXCISE_LOGIN_URL});
+    await waitForTabComplete(tab.id);
+    const [{result}] = await chrome.scripting.executeScript({
+      target: {tabId: tab.id},
+      func: fillExciseLogin,
+      args: [{exciseUser: settings.exciseUser, excisePassword: settings.excisePassword}],
+    });
+
+    if (!result?.userFilled || !result?.passwordFilled) {
+      throw new Error("Portal opened. Fill login once if fields were not detected.");
+    }
+
+    setStatus("ID/password filled. Enter CAPTCHA and login.", "success");
+  } catch (error) {
+    setStatus(error.message || "Could not open portal.", "error");
+  } finally {
+    openPortalButton.disabled = false;
+  }
 }
 
 function snapshotPrepareIndentRows() {
@@ -102,10 +197,12 @@ async function captureTypedRows() {
     }
 
     const needsMapping = data.mappingStatus?.mappingRequired;
+    const unmappedCount = Number(data.mappingStatus?.unmappedCount || 0);
+    const mappedCount = Math.max(0, Number(data.itemCount || 0) - unmappedCount);
     setStatus(
       needsMapping
-        ? `Captured ${data.itemCount}. Open Mapping to match items.`
-        : `Captured ${data.itemCount}. All items are mapped.`,
+        ? `Captured ${data.itemCount}. Mapped ${mappedCount}, need mapping ${unmappedCount}.`
+        : `Captured ${data.itemCount}. All selected items are mapped.`,
       "success",
     );
   } catch (error) {
@@ -121,9 +218,13 @@ async function openMapping() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  serverInput.value = await getServerUrl();
+  const settings = await loadSettings();
+  serverInput.value = cleanServerUrl(settings.serverUrl);
+  userInput.value = settings.exciseUser || "";
+  passwordInput.value = settings.excisePassword || "";
 });
 
-saveButton.addEventListener("click", () => setServerUrl(serverInput.value));
+saveButton.addEventListener("click", saveSettings);
+openPortalButton.addEventListener("click", openPortal);
 captureButton.addEventListener("click", captureTypedRows);
 mappingButton.addEventListener("click", openMapping);

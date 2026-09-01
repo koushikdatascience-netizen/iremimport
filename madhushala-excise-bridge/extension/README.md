@@ -4,12 +4,14 @@ This extension moves the Excise portal browser work to the user's own Chrome bro
 
 ## Operator Flow
 
-1. Open the Excise portal in Chrome and log in normally.
-2. Go to Prepare Indent.
-3. Type case quantity in the rows that should be imported.
-4. Click the extension icon.
-5. Click `Capture Typed Rows`.
-6. Click `Open Mapping` when matching is required.
+1. Save Bridge URL, Excise User ID, and Excise Password once.
+2. Click `Open Portal`.
+3. Enter CAPTCHA and log in.
+4. Go to Prepare Indent.
+5. Type case quantity in the rows that should be imported.
+6. Click the extension icon.
+7. Click `Capture Selected`.
+8. Click `Open Mapping` when matching is required.
 
 The extension captures only rows where case quantity is typed. Checkbox-only rows are ignored.
 
@@ -20,5 +22,6 @@ The extension captures only rows where case quantity is typed. Checkbox-only row
 3. Click `Load unpacked`.
 4. Select this `extension` folder.
 5. Keep the Bridge URL as `http://13.232.52.191/excise-import` while testing the public IP route.
+6. Save the Excise credentials once in the extension popup.
 
 For production, set the Bridge URL to the final private subdomain.
