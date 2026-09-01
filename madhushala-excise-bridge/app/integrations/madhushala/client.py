@@ -16,7 +16,14 @@ class MadhushalaClient:
     def __init__(self, base_url: str, shop_code: str, token: str = ""):
         self.base_url = base_url.rstrip("/")
         self.shop_code = shop_code
-        self.token = token
+        self.token = self._normalize_token(token)
+
+    @staticmethod
+    def _normalize_token(token: str) -> str:
+        value = (token or "").strip()
+        if value.casefold().startswith("bearer "):
+            value = value[7:].strip()
+        return value
 
     def _auth_headers(self, accept: str = "application/json") -> dict[str, str]:
         if not self.token:
@@ -99,5 +106,5 @@ class MadhushalaClient:
             "GET",
             "/api/purchase/dropdown/items",
             params={"shopCode": self.shop_code, "companyCode": company_code, "billType": bill_type},
-            headers={"accept": "*/*"},
+            headers=self._auth_headers("*/*"),
         )

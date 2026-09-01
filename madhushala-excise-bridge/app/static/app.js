@@ -7,6 +7,8 @@ let appConfig = {tokenConfigured: false, exciseCredentialsConfigured: false};
 let workspaceMode = 'latest';
 let pendingGuardrailAction = null;
 const basePath = window.location.pathname.startsWith('/excise-import/') ? '/excise-import' : '';
+const pageParams = new URLSearchParams(window.location.search);
+const mappingOnlyMode = pageParams.get('view') === 'mapping';
 
 async function api(path, options = {}) {
     const response = await fetch(`${basePath}${path}`, {
@@ -17,9 +19,17 @@ async function api(path, options = {}) {
         }
     });
     const text = await response.text();
-    const data = text ? JSON.parse(text) : null;
+    let data = null;
+    if (text) {
+        try {
+            data = JSON.parse(text);
+        } catch {
+            data = {detail: text};
+        }
+    }
     if (!response.ok) {
-        throw new Error(data?.detail || data?.error || 'Request failed');
+        const detail = data?.detail || data?.error || `Request failed (HTTP ${response.status})`;
+        throw new Error(detail);
     }
     return data;
 }
@@ -694,8 +704,17 @@ async function submitMappings(mappings) {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     updateWorkspaceModeButtons();
+
+    if (mappingOnlyMode) {
+        document.body.classList.add('mapping-only');
+        workspaceMode = 'latest';
+        openMappingModal();
+        await refreshWorkspace(false);
+        return;
+    }
+
     pollStatus();
     loadApiStatus();
 });

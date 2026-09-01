@@ -378,7 +378,7 @@ async function openMapping() {
     requireApiConfig(settings);
     await ensureBackendToken(settings);
 
-    const url = buildUrl(settings.bridgeUrl, "/");
+    const url = `${buildUrl(settings.bridgeUrl, "/")}?view=mapping`;
     const stored = await chrome.storage.local.get(STORAGE_KEYS.mappingWindowId);
     if (stored[STORAGE_KEYS.mappingWindowId]) {
       try {

@@ -602,3 +602,155 @@ dd {
         grid-template-columns: 1fr;
     }
 }
+
+/* Dedicated mapping-only view opened by the Chrome extension. */
+body.mapping-only {
+    margin: 0;
+    min-height: 100vh;
+    overflow: hidden;
+    background: #f5f7f8;
+}
+
+body.mapping-only .app-shell {
+    display: none !important;
+}
+
+body.mapping-only #mapping-modal {
+    position: fixed;
+    inset: 0;
+    display: block !important;
+    z-index: 1;
+    background: #f5f7f8;
+}
+
+body.mapping-only #mapping-modal .modal-backdrop,
+body.mapping-only #close-mapping,
+body.mapping-only .modal-toolbar {
+    display: none !important;
+}
+
+body.mapping-only .modal-panel {
+    width: 100%;
+    height: 100vh;
+    max-height: none;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: #ffffff;
+}
+
+body.mapping-only .modal-header {
+    padding: 14px 18px;
+    flex: 0 0 auto;
+}
+
+body.mapping-only .modal-header h2 {
+    margin: 2px 0 0;
+    font-size: 20px;
+}
+
+body.mapping-only .mapping-layout {
+    flex: 1 1 auto;
+    min-height: 0;
+    grid-template-columns: minmax(300px, 0.82fr) minmax(440px, 1.18fr);
+    gap: 12px;
+    padding: 12px;
+}
+
+body.mapping-only .unmapped-list,
+body.mapping-only .mapper {
+    border-radius: 10px;
+    background: #fff;
+}
+
+body.mapping-only .list-title {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+body.mapping-only .list-body {
+    max-height: none;
+    height: 100%;
+}
+
+body.mapping-only .mapper {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+}
+
+body.mapping-only .selected-excise {
+    flex: 0 0 auto;
+}
+
+body.mapping-only .best-match-card {
+    flex: 0 0 auto;
+}
+
+body.mapping-only .search-block {
+    position: relative;
+    flex: 0 0 auto;
+    margin-top: 2px;
+}
+
+body.mapping-only .search-block input {
+    width: 100%;
+    min-height: 44px;
+}
+
+body.mapping-only .results-title {
+    margin: 2px 0 8px;
+    font-size: 13px;
+    color: var(--muted);
+}
+
+body.mapping-only .mapper > div:last-child {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+}
+
+body.mapping-only .candidate-list {
+    max-height: none;
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 0;
+}
+
+body.mapping-only .candidate {
+    border-radius: 8px;
+}
+
+body.mapping-only .mapping-footer {
+    flex: 0 0 auto;
+    padding: 12px 18px;
+    background: #fff;
+}
+
+@media (max-width: 760px) {
+    body.mapping-only {
+        overflow: auto;
+    }
+
+    body.mapping-only .modal-panel {
+        height: auto;
+        min-height: 100vh;
+        overflow: visible;
+    }
+
+    body.mapping-only .mapping-layout {
+        display: grid;
+        grid-template-columns: 1fr;
+        overflow: visible;
+    }
+
+    body.mapping-only .list-body,
+    body.mapping-only .candidate-list {
+        max-height: 38vh;
+    }
+}

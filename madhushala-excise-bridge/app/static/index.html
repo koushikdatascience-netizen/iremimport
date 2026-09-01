@@ -79,8 +79,8 @@
         <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="mapping-title">
             <header class="modal-header">
                 <div>
-                    <span class="app-kicker">Item Mapping</span>
-                    <h2 id="mapping-title">Match Items</h2>
+                    <span class="app-kicker">Excise → Madhushala</span>
+                    <h2 id="mapping-title">Product Mapping</h2>
                 </div>
                 <button id="close-mapping" type="button" class="icon-button" aria-label="Close mapping">X</button>
             </header>
@@ -96,7 +96,7 @@
             <div class="mapping-layout">
                 <aside class="unmapped-list" aria-label="Unmapped excise items">
                     <div class="list-title">
-                        <span>Needs Match</span>
+                        <span>Unmapped Excise Items</span>
                         <span id="unmapped-count">0</span>
                     </div>
                     <div id="unmapped-items" class="list-body empty">No items</div>
@@ -108,13 +108,13 @@
                     <div id="best-match-card" class="best-match-card" hidden></div>
 
                     <div class="search-block">
-                        <label for="madhushala-search">Find Item</label>
-                        <input id="madhushala-search" type="search" placeholder="Type name or code">
+                        <label for="madhushala-search">Search Madhushala Item</label>
+                        <input id="madhushala-search" type="search" placeholder="Search name, code, barcode or ML" autocomplete="off">
                     </div>
 
                     <div>
-                        <h3>Matches</h3>
-                        <div id="suggestions" class="candidate-list empty">No matches</div>
+                        <h3 class="results-title">Suggested / Search Results</h3>
+                        <div id="suggestions" class="candidate-list empty">Select an Excise item to see matches</div>
                     </div>
                 </section>
             </div>
@@ -143,6 +143,6 @@
         </section>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="static/app.js"></script>
 </body>
 </html>

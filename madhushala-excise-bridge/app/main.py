@@ -251,7 +251,10 @@ async def madhushala_status():
 @app.post("/madhushala/token")
 async def set_madhushala_token(payload: TokenRequest):
     global madhushala_token
-    madhushala_token = payload.token.strip()
+    token = payload.token.strip()
+    if token.casefold().startswith("bearer "):
+        token = token[7:].strip()
+    madhushala_token = token
     if madhushala_token and capture_service.get_latest_capture():
         await mapping_service.auto_process_capture(capture_service.get_latest_capture(), madhushala_token)
     return {
