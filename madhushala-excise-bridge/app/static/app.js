@@ -9,6 +9,57 @@ let pendingGuardrailAction = null;
 const basePath = window.location.pathname.startsWith('/excise-import/') ? '/excise-import' : '';
 const pageParams = new URLSearchParams(window.location.search);
 const mappingOnlyMode = pageParams.get('view') === 'mapping';
+let extensionConnected = false;
+const extensionRequests = new Map();
+
+function extensionRequest(type, payload = {}, timeoutMs = 15000) {
+    return new Promise((resolve, reject) => {
+        if (!extensionConnected) {
+            reject(new Error('Extension not connected. Reload the Madhushala Excise Capture extension.'));
+            return;
+        }
+
+        const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const timeout = setTimeout(() => {
+            extensionRequests.delete(requestId);
+            reject(new Error('Extension did not respond. Reload the extension and try again.'));
+        }, timeoutMs);
+
+        extensionRequests.set(requestId, {resolve, reject, timeout});
+        window.postMessage({
+            source: 'madhushala-web',
+            requestId,
+            type,
+            payload,
+        }, window.location.origin);
+    });
+}
+
+window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    const message = event.data || {};
+    if (message.source !== 'madhushala-extension') return;
+
+    if (message.type === 'READY') {
+        extensionConnected = true;
+        setText('extension-status', 'Extension: Connected', 'status-active');
+        loadExtensionSettings();
+        return;
+    }
+
+    const pending = extensionRequests.get(message.requestId);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    extensionRequests.delete(message.requestId);
+
+    if (message.ok) {
+        const response = message.response || {};
+        if (response.ok === false) pending.reject(new Error(response.error || 'Extension action failed'));
+        else pending.resolve(response.result ?? response);
+    } else {
+        pending.reject(new Error(message.error || 'Extension action failed'));
+    }
+});
 
 async function api(path, options = {}) {
     const response = await fetch(`${basePath}${path}`, {
@@ -62,6 +113,63 @@ async function loadApiStatus() {
         }
     } catch (error) {
         setText('api-token-pill', 'API Unknown', 'status-pill');
+    }
+}
+
+async function loadExtensionSettings() {
+    try {
+        const settings = await extensionRequest('GET_SETTINGS', {}, 5000);
+        const username = document.getElementById('username');
+        const password = document.getElementById('password');
+        const token = document.getElementById('api-token');
+        if (username) username.value = settings.exciseUser || '';
+        if (password) password.value = settings.excisePassword || '';
+        if (token) token.value = settings.apiSecret || '';
+        setText('api-status', settings.apiSecret ? 'API: Saved' : 'API: Missing', settings.apiSecret ? 'status-active' : 'status-waiting');
+    } catch (error) {
+        setText('extension-status', 'Extension: Not Connected', 'status-waiting');
+    }
+}
+
+function currentSettingsPayload() {
+    return {
+        bridgeUrl: window.location.origin + basePath,
+        exciseUser: document.getElementById('username')?.value.trim() || '',
+        excisePassword: document.getElementById('password')?.value || '',
+        apiSecret: document.getElementById('api-token')?.value.trim() || '',
+    };
+}
+
+async function saveSetup() {
+    const payload = currentSettingsPayload();
+    if (!payload.exciseUser || !payload.excisePassword) {
+        showNotification('Enter User ID and Password', 'error');
+        return;
+    }
+    if (!payload.apiSecret) {
+        showNotification('Enter API Token', 'error');
+        return;
+    }
+
+    await extensionRequest('SAVE_SETTINGS', payload);
+    await api('/madhushala/token', {
+        method: 'POST',
+        body: JSON.stringify({token: payload.apiSecret}),
+    });
+    setText('api-token-pill', 'API Ready', 'status-pill ready');
+    setText('api-status', 'API: Ready', 'status-active');
+    showNotification('Setup saved', 'success');
+}
+
+async function testApiFromPage() {
+    const payload = currentSettingsPayload();
+    try {
+        await extensionRequest('TEST_API', payload, 30000);
+        setText('api-status', 'API: Ready', 'status-active');
+        showNotification('API connected', 'success');
+    } catch (error) {
+        setText('api-status', 'API: Error', 'status-waiting');
+        showNotification(error.message || 'API test failed', 'error');
     }
 }
 
@@ -581,26 +689,24 @@ async function switchWorkspaceMode(mode) {
     await refreshWorkspace(true);
 }
 
-document.getElementById('credentials-form')?.addEventListener('submit', async (event) => {
+document.getElementById('settings-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
-
-    const username = document.getElementById('username')?.value.trim();
-    const passwordInput = document.getElementById('password');
-    const password = passwordInput?.value || '';
-
-    if ((!username || !password) && !appConfig.exciseCredentialsConfigured) {
-        showNotification('Enter User ID and Password', 'error');
-        return;
-    }
-
     try {
-        await api('/automation/start', {
-            method: 'POST',
-            body: JSON.stringify({username, password})
-        });
-        passwordInput.value = '';
+        await saveSetup();
+    } catch (error) {
+        showNotification(error.message || 'Could not save setup', 'error');
+    }
+});
+
+document.getElementById('api-token')?.addEventListener('change', testApiFromPage);
+
+document.getElementById('open-excise')?.addEventListener('click', async () => {
+    try {
+        await saveSetup();
+        await extensionRequest('OPEN_PORTAL', {}, 30000);
+        setText('portal-status', 'Portal: Opened', 'status-active');
+        setText('instruction-message', 'Enter CAPTCHA, login, then open Prepare Indent.');
         showNotification('Portal opened', 'success');
-        updateInstructions({browserRunning: true, loginPageDetected: true});
     } catch (error) {
         showNotification(error.message || 'Could not open portal', 'error');
     }
@@ -615,35 +721,19 @@ document.getElementById('open-browser-view')?.addEventListener('click', () => {
 
 document.getElementById('capture-selected')?.addEventListener('click', async () => {
     try {
-        const result = await api('/automation/capture-selected', {method: 'POST'});
+        const payload = currentSettingsPayload();
+        if (!payload.apiSecret) {
+            showNotification('Enter API Token', 'error');
+            return;
+        }
+        await extensionRequest('SAVE_SETTINGS', payload);
+        const result = await extensionRequest('CAPTURE_SELECTED', {}, 45000);
         showNotification(`Captured ${result.itemCount}`, 'success');
+        setText('capture-status', `Captured: ${result.itemCount}`, 'status-active');
         await refreshWorkspace(false);
         openMappingModal();
     } catch (error) {
         showNotification(error.message || 'Capture failed', 'error');
-    }
-});
-
-document.getElementById('token-form')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const input = document.getElementById('api-token');
-    const token = input?.value.trim();
-    if (!token && !appConfig.tokenConfigured) {
-        showNotification('Add API Token', 'error');
-        return;
-    }
-
-    try {
-        if (token) {
-            await api('/madhushala/token', {method: 'POST', body: JSON.stringify({token})});
-        }
-        input.value = '';
-        await loadApiStatus();
-        const status = await api('/mapping/status');
-        await updateMappingAlert(status);
-        showNotification('API Ready', 'success');
-    } catch (error) {
-        showNotification(error.message, 'error');
     }
 });
 
@@ -715,6 +805,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
     }
 
+    setTimeout(() => {
+        if (!extensionConnected) {
+            setText('extension-status', 'Extension: Reload Page', 'status-waiting');
+        }
+    }, 2000);
     pollStatus();
     loadApiStatus();
 });

@@ -17,22 +17,21 @@
         </header>
 
         <section class="status-strip" aria-label="Current status">
-            <div id="browser-status">Browser: Closed</div>
-            <div id="login-status">Login: Waiting</div>
-            <div id="prepare-indent-status">Prepare: Waiting</div>
+            <div id="extension-status">Extension: Checking</div>
+            <div id="api-status">API: Waiting</div>
+            <div id="portal-status">Portal: Waiting</div>
             <div id="capture-status">Captured: 0</div>
         </section>
 
         <p id="last-error" class="error" hidden></p>
 
-        <section class="action-grid" aria-label="Excise actions">
-            <article class="action-card">
+        <section class="control-panel" aria-label="Excise import control panel">
+            <article class="panel-section">
                 <div>
-                    <span class="step-number">1</span>
-                    <h2>Open Portal</h2>
-                    <p>Open browser, login, then go to Prepare Indent.</p>
+                    <span class="app-kicker">Setup</span>
+                    <h2>Login & API</h2>
                 </div>
-                <form id="credentials-form" autocomplete="off">
+                <form id="settings-form" class="settings-grid" autocomplete="off">
                     <div class="form-row">
                         <label for="username">User ID</label>
                         <input id="username" name="username" type="text" autocomplete="username" placeholder="Saved">
@@ -41,36 +40,34 @@
                         <label for="password">Password</label>
                         <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Saved">
                     </div>
-                    <button id="open-excise" type="submit">Open Portal</button>
-                    <button id="open-browser-view" type="button" class="secondary">Open Browser View</button>
+                    <div class="form-row">
+                        <label for="api-token">API Token</label>
+                        <input id="api-token" type="password" autocomplete="off" placeholder="Madhushala token">
+                    </div>
+                    <button id="save-settings" type="submit" class="secondary">Save Setup</button>
                 </form>
             </article>
 
-            <article class="action-card action-primary">
+            <article class="panel-section workflow-section">
                 <div>
-                    <span class="step-number">2</span>
-                    <h2>Capture Selected</h2>
-                    <p id="instruction-message">Type case quantity, then capture.</p>
+                    <span class="app-kicker">Workflow</span>
+                    <h2>Excise Import</h2>
                 </div>
-                <button id="capture-selected" type="button">Capture Selected</button>
+                <div class="workflow-buttons">
+                    <button id="open-excise" type="button">Open Excise Portal</button>
+                    <button id="capture-selected" type="button">Capture Entered Items</button>
+                    <button id="open-mapping" type="button" class="secondary">Product Mapping</button>
+                </div>
             </article>
 
-            <article class="action-card">
+            <article class="panel-section status-section">
                 <div>
-                    <span class="step-number">3</span>
-                    <h2>Mapping</h2>
-                    <p id="mapping-alert" class="mapping-alert idle">Waiting</p>
+                    <span class="app-kicker">Status</span>
+                    <h2>Current Result</h2>
                 </div>
-                <button id="open-mapping" type="button" class="secondary">Open Mapping</button>
+                <p id="instruction-message">Save setup, then open portal.</p>
+                <p id="mapping-alert" class="mapping-alert idle">Waiting</p>
             </article>
-        </section>
-
-        <section class="token-panel">
-            <form id="token-form" class="token-row" autocomplete="off">
-                <label for="api-token">API Token</label>
-                <input id="api-token" type="password" placeholder="Saved in .env">
-                <button type="submit" class="secondary">Save</button>
-            </form>
         </section>
     </main>
 

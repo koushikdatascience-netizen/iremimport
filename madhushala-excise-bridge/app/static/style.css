@@ -52,6 +52,8 @@ body.modal-open {
 .status-strip,
 .token-panel,
 .action-card,
+.control-panel,
+.panel-section,
 .modal-panel,
 .guardrail-panel {
     background: var(--surface);
@@ -165,6 +167,45 @@ dd {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 16px;
+}
+
+.control-panel {
+    display: grid;
+    grid-template-columns: minmax(320px, 1.1fr) minmax(280px, 0.9fr) minmax(260px, 0.8fr);
+    gap: 1px;
+    overflow: hidden;
+}
+
+.panel-section {
+    min-height: 250px;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.settings-grid {
+    display: grid;
+    gap: 12px;
+}
+
+.workflow-section {
+    background: linear-gradient(180deg, #ffffff 0%, var(--brand-soft) 100%);
+}
+
+.workflow-buttons {
+    display: grid;
+    gap: 12px;
+    margin-top: auto;
+}
+
+.workflow-buttons button,
+.settings-grid button {
+    width: 100%;
+}
+
+.status-section p {
+    line-height: 1.45;
 }
 
 .action-card {
@@ -579,6 +620,7 @@ dd {
 }
 
 @media (max-width: 900px) {
+    .control-panel,
     .status-strip,
     .action-grid,
     .mapping-layout,
