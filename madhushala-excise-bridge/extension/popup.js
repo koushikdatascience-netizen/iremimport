@@ -382,7 +382,12 @@ async function openMapping() {
     const stored = await chrome.storage.local.get(STORAGE_KEYS.mappingWindowId);
     if (stored[STORAGE_KEYS.mappingWindowId]) {
       try {
-        await chrome.windows.update(stored[STORAGE_KEYS.mappingWindowId], {focused: true});
+        const existingWindow = await chrome.windows.get(stored[STORAGE_KEYS.mappingWindowId], {populate: true});
+        const tab = existingWindow.tabs?.[0];
+        if (tab?.id) {
+          await chrome.tabs.update(tab.id, {url, active: true});
+        }
+        await chrome.windows.update(existingWindow.id, {focused: true});
         return;
       } catch {
         await chrome.storage.local.remove(STORAGE_KEYS.mappingWindowId);
