@@ -597,7 +597,9 @@ document.getElementById('credentials-form')?.addEventListener('submit', async (e
 });
 
 document.getElementById('open-browser-view')?.addEventListener('click', () => {
-    const browserPath = basePath ? `${basePath}/browser/vnc.html?autoconnect=true&resize=remote` : '/excise-browser/vnc.html?autoconnect=true&resize=remote';
+    const browserPath = basePath
+        ? `${basePath}/browser/vnc.html?autoconnect=true&resize=remote&path=excise-import/browser/websockify`
+        : '/excise-browser/vnc.html?autoconnect=true&resize=remote&path=excise-browser/websockify';
     window.open(browserPath, '_blank', 'noopener,noreferrer');
 });
 
