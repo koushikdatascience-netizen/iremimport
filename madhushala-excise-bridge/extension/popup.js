@@ -1,10 +1,27 @@
-const DEFAULT_SERVER_URL = "http://13.232.52.191/excise-import";
+const STORAGE_KEYS = {
+  bridgeUrl: "bridgeUrl",
+  apiBaseUrl: "apiBaseUrl",
+  apiSecret: "apiSecret",
+  exciseUser: "exciseUser",
+  excisePassword: "excisePassword",
+  mappingWindowId: "mappingWindowId",
+};
+
+const LEGACY_KEYS = {
+  bridgeUrl: ["serverUrl", "bridgeBaseUrl", "apiUrl", "baseUrl"],
+  apiSecret: ["apiKey", "apiToken", "madhushalaToken", "bridgeSecret"],
+};
+
+const DEFAULT_BRIDGE_URL = "http://13.232.52.191/excise-import";
 const EXCISE_LOGIN_URL = "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx";
 
 const serverInput = document.getElementById("server-url");
+const apiSecretInput = document.getElementById("api-secret");
 const userInput = document.getElementById("excise-user");
 const passwordInput = document.getElementById("excise-password");
-const saveButton = document.getElementById("save-settings");
+const saveLoginButton = document.getElementById("save-login");
+const saveApiButton = document.getElementById("save-api");
+const testApiButton = document.getElementById("test-api");
 const openPortalButton = document.getElementById("open-portal");
 const captureButton = document.getElementById("capture");
 const mappingButton = document.getElementById("open-mapping");
@@ -15,32 +32,180 @@ function setStatus(message, type = "") {
   statusEl.className = `status ${type}`.trim();
 }
 
-function cleanServerUrl(value) {
-  return String(value || DEFAULT_SERVER_URL).replace(/\/+$/, "");
+function normalizeBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
 }
 
-async function getServerUrl() {
-  const settings = await loadSettings();
-  return cleanServerUrl(settings.serverUrl);
+function pickValue(data, canonicalKey, legacyKeys = []) {
+  for (const key of [canonicalKey, ...legacyKeys]) {
+    const value = data[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return "";
+}
+
+async function migrateSettings() {
+  const keys = [
+    ...Object.values(STORAGE_KEYS),
+    ...LEGACY_KEYS.bridgeUrl,
+    ...LEGACY_KEYS.apiSecret,
+  ];
+  const data = await chrome.storage.local.get(keys);
+  const storedBridgeUrl = pickValue(data, STORAGE_KEYS.bridgeUrl, [STORAGE_KEYS.apiBaseUrl, ...LEGACY_KEYS.bridgeUrl]);
+  const bridgeUrl = normalizeBaseUrl(storedBridgeUrl || DEFAULT_BRIDGE_URL);
+  const apiSecret = pickValue(data, STORAGE_KEYS.apiSecret, LEGACY_KEYS.apiSecret);
+  const updates = {
+    [STORAGE_KEYS.bridgeUrl]: bridgeUrl,
+    [STORAGE_KEYS.apiBaseUrl]: bridgeUrl,
+  };
+  if (apiSecret) updates[STORAGE_KEYS.apiSecret] = apiSecret;
+  await chrome.storage.local.set(updates);
+  return {...data, ...updates};
 }
 
 async function loadSettings() {
-  return chrome.storage.local.get({
-    serverUrl: DEFAULT_SERVER_URL,
-    exciseUser: "",
-    excisePassword: "",
-  });
+  const data = await migrateSettings();
+  return {
+    bridgeUrl: normalizeBaseUrl(data[STORAGE_KEYS.bridgeUrl] || data[STORAGE_KEYS.apiBaseUrl]),
+    apiSecret: data[STORAGE_KEYS.apiSecret] || "",
+    exciseUser: data[STORAGE_KEYS.exciseUser] || "",
+    excisePassword: data[STORAGE_KEYS.excisePassword] || "",
+  };
 }
 
-async function saveSettings() {
-  const serverUrl = cleanServerUrl(serverInput.value);
+function readApiFields() {
+  return {
+    bridgeUrl: normalizeBaseUrl(serverInput.value),
+    apiSecret: apiSecretInput.value.trim(),
+  };
+}
+
+function requireApiConfig(config) {
+  if (!config.bridgeUrl) {
+    throw new Error("API URL is not configured. Open Control Panel -> Backend / API Configuration.");
+  }
+  if (!config.apiSecret) {
+    throw new Error("API Secret is not configured. Open Control Panel -> Backend / API Configuration.");
+  }
+}
+
+function buildUrl(baseUrl, path) {
+  return `${normalizeBaseUrl(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+async function saveLoginSettings() {
   await chrome.storage.local.set({
-    serverUrl,
-    exciseUser: userInput.value.trim(),
-    excisePassword: passwordInput.value,
+    [STORAGE_KEYS.exciseUser]: userInput.value.trim(),
+    [STORAGE_KEYS.excisePassword]: passwordInput.value,
   });
-  serverInput.value = serverUrl;
-  setStatus("Setup saved.", "success");
+  setStatus("Login saved.", "success");
+}
+
+async function saveApiSettings() {
+  const config = readApiFields();
+  if (!config.bridgeUrl) {
+    setStatus("API URL is not configured. Open Control Panel -> Backend / API Configuration.", "error");
+    return;
+  }
+
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.bridgeUrl]: config.bridgeUrl,
+    [STORAGE_KEYS.apiBaseUrl]: config.bridgeUrl,
+    [STORAGE_KEYS.apiSecret]: config.apiSecret,
+  });
+  setStatus("API settings saved successfully.", "success");
+}
+
+async function apiError(response) {
+  if (response.status === 401 || response.status === 403) {
+    return new Error("Authentication failed. Check API Secret.");
+  }
+  let body = {};
+  try {
+    body = await response.json();
+  } catch {
+    body = {};
+  }
+  return new Error(body.detail || body.error || `Server returned HTTP ${response.status}`);
+}
+
+async function ensureBackendToken(config) {
+  requireApiConfig(config);
+  let response;
+  try {
+    response = await fetch(buildUrl(config.bridgeUrl, "/madhushala/token"), {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({token: config.apiSecret}),
+    });
+  } catch {
+    throw new Error("Unable to connect to backend.");
+  }
+  if (!response.ok) throw await apiError(response);
+}
+
+async function apiFetch(path, options = {}, overrideConfig = null) {
+  const config = overrideConfig || await loadSettings();
+  requireApiConfig(config);
+  await ensureBackendToken(config);
+
+  let response;
+  try {
+    response = await fetch(buildUrl(config.bridgeUrl, path), {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+    });
+  } catch {
+    throw new Error("Unable to connect to backend.");
+  }
+
+  if (!response.ok) throw await apiError(response);
+  return response.json().catch(() => null);
+}
+
+async function testApiConnection() {
+  testApiButton.disabled = true;
+  setStatus("Testing API connection...");
+  const config = readApiFields();
+
+  try {
+    requireApiConfig(config);
+    let healthResponse;
+    try {
+      healthResponse = await fetch(buildUrl(config.bridgeUrl, "/health"));
+    } catch {
+      throw new Error("Backend unreachable");
+    }
+    if (!healthResponse.ok) throw new Error("Backend unavailable");
+
+    await ensureBackendToken(config);
+    const authResponse = await fetch(buildUrl(config.bridgeUrl, "/mapping/workspace?latestOnly=false"), {
+      headers: {"Content-Type": "application/json"},
+    });
+    if (!authResponse.ok) throw await apiError(authResponse);
+
+    setStatus("API connected and authenticated", "success");
+  } catch (error) {
+    const message = error.message || "";
+    if (message.includes("Authentication failed") || message.includes("HTTP 401") || message.includes("HTTP 403")) {
+      setStatus("Authentication failed. Check API Secret.", "error");
+    } else if (message.includes("API URL") || message.includes("API Secret")) {
+      setStatus(message, "error");
+    } else {
+      setStatus("Backend unreachable", "error");
+    }
+  } finally {
+    testApiButton.disabled = false;
+  }
+}
+
+function toggleSecret(input, button) {
+  const hidden = input.type === "password";
+  input.type = hidden ? "text" : "password";
+  button.textContent = hidden ? "Hide" : "Show";
 }
 
 function fillExciseLogin(credentials) {
@@ -160,18 +325,19 @@ function snapshotPrepareIndentRows() {
     }));
 }
 
-async function activeTab() {
-  const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+async function activeExciseTab() {
+  const tabs = await chrome.tabs.query({url: "https://excise.wb.gov.in/*"});
+  const tab = tabs.find((item) => item.active) || tabs[0];
   if (!tab?.id) throw new Error("Open the Excise Prepare Indent tab first.");
   return tab;
 }
 
 async function captureTypedRows() {
   captureButton.disabled = true;
-  setStatus("Capturing typed rows...");
+  setStatus("Capturing selected rows...");
 
   try {
-    const tab = await activeTab();
+    const tab = await activeExciseTab();
     const [{result: items}] = await chrome.scripting.executeScript({
       target: {tabId: tab.id},
       func: snapshotPrepareIndentRows,
@@ -181,20 +347,14 @@ async function captureTypedRows() {
       throw new Error("No rows found. Type case quantity in Prepare Indent first.");
     }
 
-    const serverUrl = await getServerUrl();
-    const response = await fetch(`${serverUrl}/extension/capture`, {
+    const data = await apiFetch("/extension/capture", {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         pageUrl: tab.url || "",
         capturedAt: new Date().toISOString(),
         items,
       }),
     });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(data.detail || data.error || "Capture failed.");
-    }
 
     const needsMapping = data.mappingStatus?.mappingRequired;
     const unmappedCount = Number(data.mappingStatus?.unmappedCount || 0);
@@ -213,18 +373,54 @@ async function captureTypedRows() {
 }
 
 async function openMapping() {
-  const serverUrl = await getServerUrl();
-  await chrome.tabs.create({url: `${serverUrl}/`});
+  try {
+    const settings = await loadSettings();
+    requireApiConfig(settings);
+    await ensureBackendToken(settings);
+
+    const url = buildUrl(settings.bridgeUrl, "/");
+    const stored = await chrome.storage.local.get(STORAGE_KEYS.mappingWindowId);
+    if (stored[STORAGE_KEYS.mappingWindowId]) {
+      try {
+        await chrome.windows.update(stored[STORAGE_KEYS.mappingWindowId], {focused: true});
+        return;
+      } catch {
+        await chrome.storage.local.remove(STORAGE_KEYS.mappingWindowId);
+      }
+    }
+
+    const win = await chrome.windows.create({
+      url,
+      type: "popup",
+      width: 1180,
+      height: 820,
+      focused: true,
+    });
+    if (win?.id) {
+      await chrome.storage.local.set({[STORAGE_KEYS.mappingWindowId]: win.id});
+    }
+  } catch (error) {
+    setStatus(error.message || "Could not open Product Mapping.", "error");
+  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
   const settings = await loadSettings();
-  serverInput.value = cleanServerUrl(settings.serverUrl);
+  serverInput.value = settings.bridgeUrl;
+  apiSecretInput.value = settings.apiSecret || "";
   userInput.value = settings.exciseUser || "";
   passwordInput.value = settings.excisePassword || "";
 });
 
-saveButton.addEventListener("click", saveSettings);
+document.getElementById("toggle-excise-password").addEventListener("click", () => {
+  toggleSecret(passwordInput, document.getElementById("toggle-excise-password"));
+});
+document.getElementById("toggle-api-secret").addEventListener("click", () => {
+  toggleSecret(apiSecretInput, document.getElementById("toggle-api-secret"));
+});
+saveLoginButton.addEventListener("click", saveLoginSettings);
+saveApiButton.addEventListener("click", saveApiSettings);
+testApiButton.addEventListener("click", testApiConnection);
 openPortalButton.addEventListener("click", openPortal);
 captureButton.addEventListener("click", captureTypedRows);
 mappingButton.addEventListener("click", openMapping);

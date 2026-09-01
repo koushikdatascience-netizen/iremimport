@@ -4,7 +4,7 @@ This extension moves the Excise portal browser work to the user's own Chrome bro
 
 ## Operator Flow
 
-1. Save Bridge URL, Excise User ID, and Excise Password once.
+1. Save Bridge/API URL, API Secret, Excise User ID, and Excise Password once.
 2. Click `Open Portal`.
 3. Enter CAPTCHA and log in.
 4. Go to Prepare Indent.
@@ -22,6 +22,6 @@ The extension captures only rows where case quantity is typed. Checkbox-only row
 3. Click `Load unpacked`.
 4. Select this `extension` folder.
 5. Keep the Bridge URL as `http://13.232.52.191/excise-import` while testing the public IP route.
-6. Save the Excise credentials once in the extension popup.
+6. Save the API Secret and Excise credentials once in the extension popup.
 
 For production, set the Bridge URL to the final private subdomain.

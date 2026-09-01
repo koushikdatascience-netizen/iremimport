@@ -3,11 +3,11 @@
   "name": "Madhushala Excise Capture",
   "version": "1.0.0",
   "description": "Capture typed Prepare Indent rows and send them to Madhushala Excise Import.",
-  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "windows"],
   "host_permissions": [
     "https://excise.wb.gov.in/*",
-    "http://13.232.52.191/*",
-    "https://*.madhushalasoftware.com/*"
+    "http://*/*",
+    "https://*/*"
   ],
   "action": {
     "default_title": "Excise Capture",

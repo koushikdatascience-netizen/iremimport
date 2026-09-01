@@ -14,20 +14,38 @@
     </header>
 
     <section class="panel">
-      <label for="server-url">Bridge URL</label>
-      <input id="server-url" type="url" value="http://13.232.52.191/excise-import" spellcheck="false">
-      <label for="excise-user">Excise User ID</label>
+      <h2>Excise Login</h2>
+      <label for="excise-user">User ID</label>
       <input id="excise-user" type="text" autocomplete="username" spellcheck="false">
-      <label for="excise-password">Excise Password</label>
-      <input id="excise-password" type="password" autocomplete="current-password">
-      <button id="save-settings" type="button" class="secondary">Save Setup</button>
+      <label for="excise-password">Password</label>
+      <div class="secret-row">
+        <input id="excise-password" type="password" autocomplete="current-password">
+        <button id="toggle-excise-password" type="button" class="mini">Show</button>
+      </div>
+      <button id="save-login" type="button" class="secondary">Save Login</button>
     </section>
 
     <section class="panel">
+      <h2>Backend / API Configuration</h2>
+      <label for="server-url">Bridge/API URL</label>
+      <input id="server-url" type="url" value="http://13.232.52.191/excise-import" spellcheck="false">
+      <label for="api-secret">API Secret</label>
+      <div class="secret-row">
+        <input id="api-secret" type="password" autocomplete="off" spellcheck="false">
+        <button id="toggle-api-secret" type="button" class="mini">Show</button>
+      </div>
+      <div class="button-row">
+        <button id="save-api" type="button" class="secondary">Save API Settings</button>
+        <button id="test-api" type="button" class="secondary">Test API Connection</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Workflow</h2>
       <div id="status" class="status">Open portal, enter CAPTCHA, then prepare indent.</div>
       <button id="open-portal" type="button">Open Portal</button>
       <button id="capture" type="button">Capture Selected</button>
-      <button id="open-mapping" type="button" class="secondary">Open Mapping</button>
+      <button id="open-mapping" type="button" class="secondary">Open Product Mapping</button>
     </section>
   </main>
 
