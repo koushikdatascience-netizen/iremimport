@@ -251,6 +251,11 @@ async def madhushala_status():
 @app.post("/madhushala/token")
 async def set_madhushala_token(payload: TokenRequest):
     global madhushala_token
+    if not settings.ALLOW_RUNTIME_TOKEN_CONFIG:
+        raise HTTPException(
+            status_code=403,
+            detail="Runtime token configuration is disabled. Configure MADHUSHALA_TOKEN on the server.",
+        )
     token = payload.token.strip()
     if token.casefold().startswith("bearer "):
         token = token[7:].strip()

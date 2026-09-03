@@ -48,8 +48,23 @@ class MappingService:
 
     @staticmethod
     def build_excise_payload(item: dict[str, Any]) -> dict[str, str]:
+        """Build the catalogue payload expected by ExciseItemMasterSave.
+
+        The API stores every catalogue value as text.  Keep the legacy tag
+        fields during the API transition because existing shops may still use
+        them, while also sending the new named fields.
+        """
         return {
             "itemName": f"{item['brand']}, {item['measureMl']} Ml. ({item['packageType']})",
+            "strengthRaw": str(item.get("strengthRaw", "")),
+            "measureMl": str(item.get("measureMl", "")),
+            "packageType": str(item.get("packageType", "")),
+            "retailerMargin": str(item.get("retailerMargin", "")),
+            "roundOffGovt": str(item.get("roundOffGovt", "")),
+            "specialPurposeFee": str(item.get("specialPurposeFee", "")),
+            "mrpPerUnit": str(item.get("mrpPerUnit", "")),
+            "bottlesPerCase": str(item.get("bottlesPerCase", "")),
+            "mrpPerCase": str(item.get("mrpPerCase", "")),
             "t1": str(item.get("measureMl", "")),
             "t2": str(item.get("mrpPerUnit", "")),
             "t3": str(item.get("packageType", "")),
@@ -87,12 +102,9 @@ class MappingService:
                 if existing_unmapped:
                     prepare_action = "already_unmapped"
                     response = {
+                        **payload,
                         "itemCode": existing_unmapped["exciseItemCode"],
                         "itemName": existing_unmapped["itemName"],
-                        "t1": payload["t1"],
-                        "t2": payload["t2"],
-                        "t3": payload["t3"],
-                        "t4": payload["t4"],
                     }
                 else:
                     prepare_action = "created"

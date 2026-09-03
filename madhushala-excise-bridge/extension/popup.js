@@ -13,4 +13,11 @@ async function openControlPanel() {
   await chrome.tabs.create({url: `${url}/`});
 }
 
+async function changeExciseLogin() {
+  await chrome.storage.local.remove(["exciseUser", "excisePassword"]);
+  await openControlPanel();
+  window.close();
+}
+
 document.getElementById("open-control-panel").addEventListener("click", openControlPanel);
+document.getElementById("change-excise-login").addEventListener("click", changeExciseLogin);

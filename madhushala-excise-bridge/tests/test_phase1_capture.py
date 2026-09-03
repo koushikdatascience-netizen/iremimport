@@ -177,3 +177,24 @@ def test_extension_capture_rejects_empty_rows():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "No typed case rows found"
+
+
+def test_runtime_token_configuration_is_disabled_by_default():
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.post("/madhushala/token", json={"token": "client-supplied-token"})
+
+    assert response.status_code == 403
+    assert "server" in response.json()["detail"].lower()
+
+
+def test_operator_page_uses_single_action_auto_capture_flow():
+    html = (Path(__file__).parents[1] / "app" / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="open-excise"' in html
+    assert 'id="credentials-modal"' in html
+    assert 'id="capture-selected"' not in html
+    assert 'id="open-mapping"' not in html
+    assert 'id="api-token"' not in html
+    assert 'id="settings-form"' not in html

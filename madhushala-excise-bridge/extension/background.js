@@ -24,7 +24,6 @@ async function saveSettings(payload = {}) {
     updates[STORAGE_KEYS.bridgeUrl] = bridgeUrl;
     updates[STORAGE_KEYS.apiBaseUrl] = bridgeUrl;
   }
-  if ("apiSecret" in payload) updates[STORAGE_KEYS.apiSecret] = String(payload.apiSecret || "").trim();
   if ("exciseUser" in payload) updates[STORAGE_KEYS.exciseUser] = String(payload.exciseUser || "").trim();
   if ("excisePassword" in payload) updates[STORAGE_KEYS.excisePassword] = String(payload.excisePassword || "");
   await chrome.storage.local.set(updates);
@@ -41,7 +40,6 @@ async function getSettings() {
   });
   return {
     bridgeUrl: normalizeBaseUrl(data[STORAGE_KEYS.bridgeUrl] || data[STORAGE_KEYS.apiBaseUrl] || DEFAULT_BRIDGE_URL),
-    apiSecret: data[STORAGE_KEYS.apiSecret] || "",
     exciseUser: data[STORAGE_KEYS.exciseUser] || "",
     excisePassword: data[STORAGE_KEYS.excisePassword] || "",
   };
@@ -49,7 +47,6 @@ async function getSettings() {
 
 function requireApiConfig(settings) {
   if (!settings.bridgeUrl) throw new Error("API URL is not configured.");
-  if (!settings.apiSecret) throw new Error("API Token is not configured.");
 }
 
 async function apiError(response) {
@@ -65,21 +62,6 @@ async function apiError(response) {
   return new Error(body.detail || body.error || `Server returned HTTP ${response.status}`);
 }
 
-async function ensureBackendToken(settings) {
-  requireApiConfig(settings);
-  let response;
-  try {
-    response = await fetch(buildUrl(settings.bridgeUrl, "/madhushala/token"), {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({token: settings.apiSecret}),
-    });
-  } catch {
-    throw new Error("Unable to connect to backend.");
-  }
-  if (!response.ok) throw await apiError(response);
-}
-
 async function testApiConnection(payload = {}) {
   const settings = {...await getSettings(), ...payload};
   settings.bridgeUrl = normalizeBaseUrl(settings.bridgeUrl);
@@ -93,7 +75,6 @@ async function testApiConnection(payload = {}) {
   }
   if (!health.ok) throw new Error("Backend unavailable.");
 
-  await ensureBackendToken(settings);
   const authResponse = await fetch(buildUrl(settings.bridgeUrl, "/mapping/workspace?latestOnly=false"));
   if (!authResponse.ok) throw await apiError(authResponse);
   return {status: "connected"};
@@ -211,7 +192,6 @@ async function activeExciseTab() {
 async function captureSelected() {
   const settings = await getSettings();
   requireApiConfig(settings);
-  await ensureBackendToken(settings);
 
   const tab = await activeExciseTab();
   const [{result: items}] = await chrome.scripting.executeScript({
@@ -220,14 +200,18 @@ async function captureSelected() {
   });
   if (!items?.length) throw new Error("No rows found. Type case quantity first.");
 
+  return submitCapture(settings, items, tab.url || "", new Date().toISOString());
+}
+
+async function submitCapture(settings, items, pageUrl, capturedAt) {
   let response;
   try {
     response = await fetch(buildUrl(settings.bridgeUrl, "/extension/capture"), {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
-        pageUrl: tab.url || "",
-        capturedAt: new Date().toISOString(),
+        pageUrl,
+        capturedAt,
         items,
       }),
     });
@@ -238,10 +222,77 @@ async function captureSelected() {
   return response.json();
 }
 
+let lastAutoCaptureSignature = "";
+let mappingWindowId = null;
+
+function captureSignature(items) {
+  return JSON.stringify(items.map((item) => [
+    item.brand,
+    item.measureMl,
+    item.packageType,
+    item.requestedCases,
+    item.requestedBottles,
+  ]));
+}
+
+async function openMappingWindow(settings) {
+  const mappingUrl = `${normalizeBaseUrl(settings.bridgeUrl)}/?view=mapping`;
+
+  if (mappingWindowId !== null) {
+    try {
+      const existing = await chrome.windows.get(mappingWindowId, {populate: true});
+      const tab = existing.tabs?.[0];
+      if (tab?.id) await chrome.tabs.update(tab.id, {url: mappingUrl, active: true});
+      await chrome.windows.update(mappingWindowId, {focused: true});
+      return;
+    } catch {
+      mappingWindowId = null;
+    }
+  }
+
+  const created = await chrome.windows.create({
+    url: mappingUrl,
+    type: "popup",
+    width: 1240,
+    height: 860,
+    focused: true,
+  });
+  mappingWindowId = created.id ?? null;
+}
+
+async function autoCapture(payload, sender) {
+  if (!sender.tab?.url?.startsWith("https://excise.wb.gov.in/")) {
+    throw new Error("Automatic capture is allowed only on the Excise portal.");
+  }
+
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  if (!items.length) return {status: "empty"};
+
+  const signature = captureSignature(items);
+  if (signature === lastAutoCaptureSignature) return {status: "unchanged"};
+
+  const settings = await getSettings();
+  requireApiConfig(settings);
+  const result = await submitCapture(
+    settings,
+    items,
+    payload.pageUrl || sender.tab.url,
+    payload.capturedAt || new Date().toISOString(),
+  );
+  lastAutoCaptureSignature = signature;
+
+  if (result.mappingStatus?.mappingRequired) {
+    await openMappingWindow(settings);
+  }
+  return result;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.source !== "madhushala-web" && message?.source !== "madhushala-popup") return false;
+  const allowedSources = ["madhushala-web", "madhushala-popup", "madhushala-excise-page"];
+  if (!allowedSources.includes(message?.source)) return false;
 
   (async () => {
+    if (message.type === "AUTO_CAPTURE") return autoCapture(message.payload, sender);
     if (message.type === "GET_SETTINGS") return getSettings();
     if (message.type === "SAVE_SETTINGS") return saveSettings(message.payload);
     if (message.type === "TEST_API") return testApiConnection(message.payload);
@@ -253,4 +304,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     .catch((error) => sendResponse({ok: false, error: error.message || "Extension action failed"}));
 
   return true;
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  // Madhushala API credentials now live only in the backend environment.
+  chrome.storage.local.remove(STORAGE_KEYS.apiSecret);
 });

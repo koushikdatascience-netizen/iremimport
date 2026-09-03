@@ -52,9 +52,11 @@ body.modal-open {
 .status-strip,
 .token-panel,
 .action-card,
+.operator-card,
 .control-panel,
 .panel-section,
 .modal-panel,
+.credential-panel,
 .guardrail-panel {
     background: var(--surface);
     border: 1px solid var(--line);
@@ -239,6 +241,81 @@ dd {
     margin-bottom: 8px;
 }
 
+.operator-card {
+    min-height: 360px;
+    padding: clamp(28px, 6vw, 68px);
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 30px;
+    text-align: center;
+    background:
+        radial-gradient(circle at 50% 0%, rgba(255, 213, 74, 0.22), transparent 42%),
+        var(--surface);
+}
+
+.operator-copy {
+    max-width: 650px;
+    display: grid;
+    gap: 12px;
+}
+
+.operator-copy h2 {
+    font-size: clamp(26px, 4vw, 38px);
+}
+
+.operator-copy p {
+    font-size: 16px;
+    line-height: 1.65;
+}
+
+.portal-button {
+    min-width: min(100%, 310px);
+    min-height: 58px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 0 22px;
+    background: var(--charcoal);
+    font-size: 16px;
+}
+
+.operator-status {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px 18px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.credential-panel {
+    position: relative;
+    width: min(480px, calc(100% - 28px));
+    margin: 10vh auto 0;
+    overflow: hidden;
+    box-shadow: 0 22px 60px rgba(18, 39, 50, 0.28);
+}
+
+.credential-help {
+    padding: 18px 20px 0;
+    line-height: 1.55;
+}
+
+.credentials-form {
+    padding: 18px 20px 20px;
+    gap: 16px;
+}
+
+.credential-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 4px;
+}
+
 form,
 .form-row,
 .token-row,
@@ -336,6 +413,7 @@ button.secondary:hover {
 }
 
 .modal-panel,
+.credential-panel,
 .guardrail-panel {
     position: relative;
     width: min(1160px, calc(100% - 28px));

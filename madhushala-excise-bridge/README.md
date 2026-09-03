@@ -5,7 +5,7 @@ FastAPI backend plus Chrome extension workflow for WB Excise Prepare Indent capt
 ## Implemented
 
 - Local UI at `http://127.0.0.1:8091`
-- Chrome extension capture flow for scalable client-side Excise portal use
+- Chrome extension auto-capture flow for scalable client-side Excise portal use
 - Visible Playwright Chromium browser with persistent profile
 - WB Excise login autofill, with manual CAPTCHA and manual login
 - Manual Prepare Indent flow observation
@@ -20,22 +20,22 @@ FastAPI backend plus Chrome extension workflow for WB Excise Prepare Indent capt
   - left: unmapped excise items
   - right: best suggested Madhushala match, manual search fallback
   - submit: batch `save-mapping`
-- Automatic mapping check after local Capture Selected
+- Automatic mapping check after each extension capture
 - Local mapping state in `data/mappings/`
 
 ## Recommended Production Flow
 
 Use the Chrome extension for real users. This keeps Chrome, CAPTCHA, and Excise portal interaction on the user's own computer instead of opening one server-side Chrome instance per user.
 
-1. User clicks `Open Portal` in the Chrome extension.
-2. Extension opens the Excise portal and fills saved ID/password.
-3. User enters CAPTCHA and logs in.
-4. User goes to Prepare Indent.
-5. User types case quantity in the rows to import.
-6. User clicks `Capture Selected` in the extension.
-7. Extension posts only typed case rows to `POST /extension/capture`.
-8. Backend creates/checks Excise item records and returns mapped/unmapped status.
-9. User opens Mapping from the extension popup or bridge UI and saves correct item mappings.
+1. User clicks `Open Excise Portal` in the bridge UI.
+2. On first use only, the UI asks for the user's BEVCO/WB Excise ID and password and stores them in that Chrome profile.
+3. Extension opens the Excise portal and fills the saved ID/password.
+4. User enters CAPTCHA and logs in.
+5. User goes to Prepare Indent and types case quantities in the rows to import.
+6. After input settles, the extension automatically posts only positive case-quantity rows to `POST /extension/capture`.
+7. Backend creates/checks Excise item records and returns mapped/unmapped status.
+8. If matching is required, the extension automatically opens the mapping workspace in a focused popup.
+9. User reviews the suggested matches and saves the correct mappings.
 
 The old server-side Playwright/noVNC flow remains available as a fallback, but it is not the recommended path for 100 concurrent users.
 
@@ -61,31 +61,26 @@ Open:
 http://127.0.0.1:8091
 ```
 
-Paste the Madhushala testing token into the UI before the daily Excise work. It is kept only in process memory unless you choose to set `MADHUSHALA_TOKEN` in your local environment.
+Configure `MADHUSHALA_TOKEN` on the backend. The client-facing UI intentionally does not display API-token settings.
 
 For the simplest operator flow, create `.env` locally:
 
 ```text
 MADHUSHALA_TOKEN=your_token_here
-EXCISE_USERNAME=your_excise_username
-EXCISE_PASSWORD=your_excise_password
 ```
 
-When these are set, users can leave the local UI credential/token fields blank.
+`EXCISE_USERNAME` and `EXCISE_PASSWORD` remain optional for the legacy server-side Playwright fallback. Extension users enter their separate Excise credentials once in the browser-profile prompt.
 
 ## Workflow
 
-1. Paste Madhushala token once in the local UI, or set it in `.env`.
-2. Open Excise portal from the local UI.
-3. Manually enter CAPTCHA and log in.
-4. Manually use Prepare Indent.
-5. Type case quantity for the rows to import in Excise.
-6. Do not click Add to Bucket for testing. Click Capture Selected in the local app.
-7. The local app captures rows with case quantity, saves JSON, calls Madhushala import, and checks mapping status.
-8. If mapping is required, the local app scrolls to the mapping area and shows a yellow Mapping Required message.
-9. Select each unmapped item on the left.
-10. Use Correct for the best suggestion, or type in Find Item and choose the right match.
-11. Submit mappings in one batch.
+1. Configure the Madhushala token in the server `.env`.
+2. Click `Open Excise Portal` in the bridge UI.
+3. On first use, enter the separate BEVCO/WB Excise credentials. CRM credentials are not reused for the government portal.
+4. Manually enter CAPTCHA, log in, and open Prepare Indent.
+5. Type case quantities for the rows to import.
+6. The extension automatically captures positive case-quantity rows, saves JSON, calls Madhushala import, and checks mapping status.
+7. When mapping is required, the mapping workspace opens automatically.
+8. Review the best suggestion or search for the correct item, then submit mappings in one batch.
 
 ## API
 
@@ -98,7 +93,7 @@ When these are set, users can leave the local UI credential/token fields blank.
 - `GET /captures`
 - `POST /automation/stop`
 - `GET /madhushala/status`
-- `POST /madhushala/token`
+- `POST /madhushala/token` for explicitly enabled local testing only (`ALLOW_RUNTIME_TOKEN_CONFIG=true`)
 - `POST /mapping/prepare-latest-capture` for recovery/manual retry
 - `GET /mapping/status`
 - `GET /mapping/workspace`

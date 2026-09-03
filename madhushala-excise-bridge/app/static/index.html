@@ -13,63 +13,56 @@
                 <span class="app-kicker">Madhushala</span>
                 <h1>Excise Import</h1>
             </div>
-            <div class="status-pill" id="api-token-pill">API Missing</div>
+            <div class="status-pill" id="api-token-pill">Checking service</div>
         </header>
-
-        <section class="status-strip" aria-label="Current status">
-            <div id="extension-status">Extension: Checking</div>
-            <div id="api-status">API: Waiting</div>
-            <div id="portal-status">Portal: Waiting</div>
-            <div id="capture-status">Captured: 0</div>
-        </section>
 
         <p id="last-error" class="error" hidden></p>
 
-        <section class="control-panel" aria-label="Excise import control panel">
-            <article class="panel-section">
-                <div>
-                    <span class="app-kicker">Setup</span>
-                    <h2>Login & API</h2>
-                </div>
-                <form id="settings-form" class="settings-grid" autocomplete="off">
-                    <div class="form-row">
-                        <label for="username">User ID</label>
-                        <input id="username" name="username" type="text" autocomplete="username" placeholder="Saved">
-                    </div>
-                    <div class="form-row">
-                        <label for="password">Password</label>
-                        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Saved">
-                    </div>
-                    <div class="form-row">
-                        <label for="api-token">API Token</label>
-                        <input id="api-token" type="password" autocomplete="off" placeholder="Madhushala token">
-                    </div>
-                    <button id="save-settings" type="submit" class="secondary">Save Setup</button>
-                </form>
-            </article>
-
-            <article class="panel-section workflow-section">
-                <div>
-                    <span class="app-kicker">Workflow</span>
-                    <h2>Excise Import</h2>
-                </div>
-                <div class="workflow-buttons">
-                    <button id="open-excise" type="button">Open Excise Portal</button>
-                    <button id="capture-selected" type="button">Capture Entered Items</button>
-                    <button id="open-mapping" type="button" class="secondary">Product Mapping</button>
-                </div>
-            </article>
-
-            <article class="panel-section status-section">
-                <div>
-                    <span class="app-kicker">Status</span>
-                    <h2>Current Result</h2>
-                </div>
-                <p id="instruction-message">Save setup, then open portal.</p>
-                <p id="mapping-alert" class="mapping-alert idle">Waiting</p>
-            </article>
+        <section class="operator-card" aria-label="Excise import">
+            <div class="operator-copy">
+                <span class="app-kicker">Prepare Indent</span>
+                <h2>Import Excise products</h2>
+                <p id="instruction-message">Open the portal, enter the CAPTCHA, and update case quantities. Product mapping opens automatically when required.</p>
+            </div>
+            <button id="open-excise" class="portal-button" type="button">
+                <span>Open Excise Portal</span>
+                <span aria-hidden="true">→</span>
+            </button>
+            <div class="operator-status" aria-live="polite">
+                <span id="extension-status">Checking browser extension…</span>
+                <span id="capture-status">No items captured yet</span>
+                <span id="mapping-alert" class="mapping-alert idle">Waiting</span>
+            </div>
         </section>
     </main>
+
+    <div id="credentials-modal" class="modal" hidden>
+        <div class="modal-backdrop"></div>
+        <section class="credential-panel" role="dialog" aria-modal="true" aria-labelledby="credentials-title">
+            <header class="modal-header">
+                <div>
+                    <span class="app-kicker">One-time setup</span>
+                    <h2 id="credentials-title">Excise portal credentials</h2>
+                </div>
+                <button id="close-credentials" type="button" class="icon-button" aria-label="Close">X</button>
+            </header>
+            <p class="credential-help">These are your BEVCO/WB Excise credentials, not your CRM login. They are stored only in this Chrome profile.</p>
+            <form id="credentials-form" class="credentials-form" autocomplete="off">
+                <div class="form-row">
+                    <label for="username">Excise User ID</label>
+                    <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+                </div>
+                <div class="form-row">
+                    <label for="password">Excise Password</label>
+                    <input id="password" name="password" type="password" autocomplete="current-password" required>
+                </div>
+                <div class="credential-actions">
+                    <button id="cancel-credentials" type="button" class="secondary">Cancel</button>
+                    <button type="submit">Save &amp; Open Portal</button>
+                </div>
+            </form>
+        </section>
+    </div>
 
     <div id="mapping-modal" class="modal" hidden>
         <div class="modal-backdrop" data-close-modal></div>

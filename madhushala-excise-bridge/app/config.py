@@ -46,6 +46,7 @@ class Settings:
     MADHUSHALA_SHOP_CODE: str = os.getenv("MADHUSHALA_SHOP_CODE", "hedu_test3")
     MADHUSHALA_COMPANY_CODE: str = os.getenv("MADHUSHALA_COMPANY_CODE", "2")
     MADHUSHALA_BILL_TYPE: str = os.getenv("MADHUSHALA_BILL_TYPE", "AI")
+    ALLOW_RUNTIME_TOKEN_CONFIG: bool = _env_bool("ALLOW_RUNTIME_TOKEN_CONFIG", False)
     CORS_ORIGINS: list[str] = field(
         default_factory=lambda: _env_list(
             "CORS_ORIGINS",

@@ -10,7 +10,12 @@ const basePath = window.location.pathname.startsWith('/excise-import/') ? '/exci
 const pageParams = new URLSearchParams(window.location.search);
 const mappingOnlyMode = pageParams.get('view') === 'mapping';
 let extensionConnected = false;
+let extensionSettings = {bridgeUrl: '', exciseUser: '', excisePassword: ''};
 const extensionRequests = new Map();
+
+function discoverExtension() {
+    window.postMessage({source: 'madhushala-web', type: 'DISCOVER'}, window.location.origin);
+}
 
 function extensionRequest(type, payload = {}, timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
@@ -42,7 +47,7 @@ window.addEventListener('message', (event) => {
 
     if (message.type === 'READY') {
         extensionConnected = true;
-        setText('extension-status', 'Extension: Connected', 'status-active');
+        setText('extension-status', 'Browser extension connected', 'status-active');
         loadExtensionSettings();
         return;
     }
@@ -102,74 +107,59 @@ async function loadApiStatus() {
         appConfig = status;
         setText(
             'api-token-pill',
-            status.tokenConfigured ? 'API Ready' : 'API Missing',
+            status.tokenConfigured ? 'Service ready' : 'Service setup required',
             status.tokenConfigured ? 'status-pill ready' : 'status-pill'
         );
-        const username = document.getElementById('username');
-        const password = document.getElementById('password');
-        if (status.exciseCredentialsConfigured) {
-            if (username) username.placeholder = 'Saved';
-            if (password) password.placeholder = 'Saved';
-        }
     } catch (error) {
-        setText('api-token-pill', 'API Unknown', 'status-pill');
+        setText('api-token-pill', 'Service unavailable', 'status-pill');
     }
 }
 
 async function loadExtensionSettings() {
     try {
         const settings = await extensionRequest('GET_SETTINGS', {}, 5000);
-        const username = document.getElementById('username');
-        const password = document.getElementById('password');
-        const token = document.getElementById('api-token');
-        if (username) username.value = settings.exciseUser || '';
-        if (password) password.value = settings.excisePassword || '';
-        if (token) token.value = settings.apiSecret || '';
-        setText('api-status', settings.apiSecret ? 'API: Saved' : 'API: Missing', settings.apiSecret ? 'status-active' : 'status-waiting');
+        extensionSettings = settings;
+        return settings;
     } catch (error) {
-        setText('extension-status', 'Extension: Not Connected', 'status-waiting');
+        setText('extension-status', 'Browser extension not connected', 'status-waiting');
+        return null;
     }
 }
 
-function currentSettingsPayload() {
+function currentCredentialPayload() {
     return {
         bridgeUrl: window.location.origin + basePath,
         exciseUser: document.getElementById('username')?.value.trim() || '',
         excisePassword: document.getElementById('password')?.value || '',
-        apiSecret: document.getElementById('api-token')?.value.trim() || '',
     };
 }
 
-async function saveSetup() {
-    const payload = currentSettingsPayload();
-    if (!payload.exciseUser || !payload.excisePassword) {
-        showNotification('Enter User ID and Password', 'error');
-        return;
-    }
-    if (!payload.apiSecret) {
-        showNotification('Enter API Token', 'error');
-        return;
-    }
-
+async function saveCredentialsAndOpen() {
+    const payload = currentCredentialPayload();
+    if (!payload.exciseUser || !payload.excisePassword) throw new Error('Enter both Excise credentials.');
     await extensionRequest('SAVE_SETTINGS', payload);
-    await api('/madhushala/token', {
-        method: 'POST',
-        body: JSON.stringify({token: payload.apiSecret}),
-    });
-    setText('api-token-pill', 'API Ready', 'status-pill ready');
-    setText('api-status', 'API: Ready', 'status-active');
-    showNotification('Setup saved', 'success');
+    extensionSettings = {...extensionSettings, ...payload};
+    closeCredentialsModal();
+    await extensionRequest('OPEN_PORTAL', {}, 30000);
+    setText('instruction-message', 'Enter the CAPTCHA, log in, then update case quantities. Mapping will open automatically if required.');
+    showNotification('Excise portal opened', 'success');
 }
 
-async function testApiFromPage() {
-    const payload = currentSettingsPayload();
-    try {
-        await extensionRequest('TEST_API', payload, 30000);
-        setText('api-status', 'API: Ready', 'status-active');
-        showNotification('API connected', 'success');
-    } catch (error) {
-        setText('api-status', 'API: Error', 'status-waiting');
-        showNotification(error.message || 'API test failed', 'error');
+function openCredentialsModal(settings = extensionSettings) {
+    const modal = document.getElementById('credentials-modal');
+    if (!modal) return;
+    document.getElementById('username').value = settings?.exciseUser || '';
+    document.getElementById('password').value = settings?.excisePassword || '';
+    modal.hidden = false;
+    document.body.classList.add('modal-open');
+    setTimeout(() => document.getElementById('username')?.focus(), 0);
+}
+
+function closeCredentialsModal() {
+    const modal = document.getElementById('credentials-modal');
+    if (modal) modal.hidden = true;
+    if (document.getElementById('mapping-modal')?.hidden !== false) {
+        document.body.classList.remove('modal-open');
     }
 }
 
@@ -203,7 +193,7 @@ function updateStatusUI(status) {
     const batch = status.lastCapturedBatch;
     setText(
         'capture-status',
-        batch ? `Captured: ${batch.itemCount}` : 'Captured: 0',
+        batch ? `${batch.itemCount} item${batch.itemCount === 1 ? '' : 's'} saved` : 'No items captured yet',
         batch ? 'status-active' : 'status-waiting'
     );
 
@@ -248,7 +238,7 @@ function mappingStatusLabel(mappingStatus) {
     const count = Number(mappingStatus?.unmappedCount || 0);
     const labels = {
         idle: 'Waiting',
-        needs_token: 'Add API Token',
+        needs_token: 'Service setup required',
         processing: 'Checking...',
         mapping_required: count === 1 ? '1 item needs match' : `${count} items need match`,
         complete: 'All items matched',
@@ -261,14 +251,12 @@ function updateInstructions(status) {
     const instructionEl = document.getElementById('instruction-message');
     if (!instructionEl) return;
 
-    if (!status.browserRunning) {
-        instructionEl.textContent = 'Click Open Portal.';
-    } else if (status.loginPageDetected) {
-        instructionEl.textContent = 'Enter CAPTCHA, then Login.';
-    } else if (status.prepareIndentDetected) {
-        instructionEl.textContent = 'Type case quantity, then Capture Selected.';
+    if (status.mappingStatus?.mappingRequired) {
+        instructionEl.textContent = 'Product mapping is ready for review.';
+    } else if (status.lastCapturedBatch) {
+        instructionEl.textContent = 'Items saved. Continue updating case quantities in the Excise portal.';
     } else {
-        instructionEl.textContent = 'Open Prepare Indent.';
+        instructionEl.textContent = 'Open the portal, enter the CAPTCHA, and update case quantities. Product mapping opens automatically when required.';
     }
 }
 
@@ -689,59 +677,36 @@ async function switchWorkspaceMode(mode) {
     await refreshWorkspace(true);
 }
 
-document.getElementById('settings-form')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    try {
-        await saveSetup();
-    } catch (error) {
-        showNotification(error.message || 'Could not save setup', 'error');
-    }
-});
-
-document.getElementById('api-token')?.addEventListener('change', testApiFromPage);
-
 document.getElementById('open-excise')?.addEventListener('click', async () => {
     try {
-        await saveSetup();
+        const settings = await loadExtensionSettings();
+        if (!settings) throw new Error('Install or reload the Madhushala Excise Capture extension.');
+        if (!settings.exciseUser || !settings.excisePassword) {
+            openCredentialsModal(settings);
+            return;
+        }
+        await extensionRequest('SAVE_SETTINGS', {bridgeUrl: window.location.origin + basePath});
         await extensionRequest('OPEN_PORTAL', {}, 30000);
-        setText('portal-status', 'Portal: Opened', 'status-active');
-        setText('instruction-message', 'Enter CAPTCHA, login, then open Prepare Indent.');
-        showNotification('Portal opened', 'success');
+        setText('instruction-message', 'Enter the CAPTCHA, log in, then update case quantities. Mapping will open automatically if required.');
+        showNotification('Excise portal opened', 'success');
     } catch (error) {
         showNotification(error.message || 'Could not open portal', 'error');
     }
 });
 
-document.getElementById('open-browser-view')?.addEventListener('click', () => {
-    const browserPath = basePath
-        ? `${basePath}/browser/vnc.html?autoconnect=true&resize=remote&path=excise-import/browser/websockify`
-        : '/excise-browser/vnc.html?autoconnect=true&resize=remote&path=excise-browser/websockify';
-    window.open(browserPath, '_blank', 'noopener,noreferrer');
-});
-
-document.getElementById('capture-selected')?.addEventListener('click', async () => {
+document.getElementById('credentials-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
     try {
-        const payload = currentSettingsPayload();
-        if (!payload.apiSecret) {
-            showNotification('Enter API Token', 'error');
-            return;
-        }
-        await extensionRequest('SAVE_SETTINGS', payload);
-        const result = await extensionRequest('CAPTURE_SELECTED', {}, 45000);
-        showNotification(`Captured ${result.itemCount}`, 'success');
-        setText('capture-status', `Captured: ${result.itemCount}`, 'status-active');
-        await refreshWorkspace(false);
-        openMappingModal();
+        await saveCredentialsAndOpen();
     } catch (error) {
-        showNotification(error.message || 'Capture failed', 'error');
+        showNotification(error.message || 'Could not save Excise credentials', 'error');
     }
 });
 
+document.getElementById('close-credentials')?.addEventListener('click', closeCredentialsModal);
+document.getElementById('cancel-credentials')?.addEventListener('click', closeCredentialsModal);
+
 document.getElementById('refresh-workspace')?.addEventListener('click', refreshWorkspace);
-document.getElementById('open-mapping')?.addEventListener('click', async () => {
-    openMappingModal();
-    await refreshWorkspace(false);
-});
 document.getElementById('close-mapping')?.addEventListener('click', closeMappingModal);
 document.querySelector('[data-close-modal]')?.addEventListener('click', closeMappingModal);
 document.getElementById('show-latest-unmapped')?.addEventListener('click', () => switchWorkspaceMode('latest'));
@@ -796,6 +761,7 @@ async function submitMappings(mappings) {
 
 document.addEventListener('DOMContentLoaded', async () => {
     updateWorkspaceModeButtons();
+    discoverExtension();
 
     if (mappingOnlyMode) {
         document.body.classList.add('mapping-only');
@@ -807,7 +773,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     setTimeout(() => {
         if (!extensionConnected) {
-            setText('extension-status', 'Extension: Reload Page', 'status-waiting');
+            discoverExtension();
+            setText('extension-status', 'Browser extension required', 'status-waiting');
         }
     }, 2000);
     pollStatus();

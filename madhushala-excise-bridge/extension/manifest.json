@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Madhushala Excise Capture",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Capture typed Prepare Indent rows and send them to Madhushala Excise Import.",
   "permissions": ["activeTab", "scripting", "storage", "tabs", "windows"],
   "host_permissions": [
@@ -14,7 +14,13 @@
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
+      "matches": [
+        "https://excise.wb.gov.in/*",
+        "https://excise.connect.snapkey.in/*",
+        "http://13.232.52.191/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
       "js": ["bridge_content.js"],
       "run_at": "document_idle"
     }
