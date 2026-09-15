@@ -1351,3 +1351,13 @@ body.mapping-mode {
 .unmapped-item.selected .excise-expanded {
     display: grid !important;
 }
+
+.unmapped-item.selected {
+    grid-template-rows: auto auto !important;
+}
+
+.unmapped-item.selected .excise-expanded {
+    grid-column: 2 / -1 !important;
+    width: 100%;
+    min-width: 0;
+}

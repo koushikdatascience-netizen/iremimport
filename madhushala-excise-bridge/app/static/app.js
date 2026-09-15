@@ -475,7 +475,7 @@ function compactValue(value) {
 }
 
 function selectedExciseDetails(item) {
-    const captured = item?.capturedItem || {};
+    const captured = item?.capturedItem || item || {};
     const ml = compactValue(captured.measureMl || captured.ml);
     const packageType = compactValue(captured.packageType);
     const pack = compactValue(captured.bottlesPerCase || captured.packing);
@@ -551,6 +551,13 @@ function renderWorkspace() {
         return;
     }
 
+    if (!selectedExciseCode && workspace.unmappedItems[0]) {
+        selectedExciseCode = String(workspace.unmappedItems[0].exciseItemCode);
+    }
+    if (selectedExciseCode && !currentExciseItem()) {
+        selectedExciseCode = workspace.unmappedItems[0] ? String(workspace.unmappedItems[0].exciseItemCode) : null;
+    }
+
     list.className = "list-body";
     list.innerHTML = workspace.unmappedItems.map((item) => {
         const code = String(item.exciseItemCode);
@@ -561,7 +568,7 @@ function renderWorkspace() {
                 <span class="item-code">${escapeHtml(code)}</span>
                 <span class="item-name">${escapeHtml(item.itemName)}</span>
                 <span class="${mapped ? "map-badge done" : "map-badge"}">${mapped ? "Selected" : "Pending"}</span>
-                ${selected ? selectedExciseDetails(item) : ""}
+                ${selectedExciseDetails(item)}
             </button>`;
     }).join("");
 
@@ -574,14 +581,6 @@ function renderWorkspace() {
         });
     });
 
-    if (!selectedExciseCode && workspace.unmappedItems[0]) {
-        selectedExciseCode = String(workspace.unmappedItems[0].exciseItemCode);
-        renderWorkspace();
-        return;
-    }
-    if (selectedExciseCode && !currentExciseItem()) {
-        selectedExciseCode = workspace.unmappedItems[0] ? String(workspace.unmappedItems[0].exciseItemCode) : null;
-    }
 
     renderSelectedExcise(currentExciseItem());
     updateSummary();
@@ -1006,6 +1005,7 @@ document.addEventListener("DOMContentLoaded", () => {
     else if (mappingMode) initMapping();
     else initLaunch();
 });
+
 
 
 
