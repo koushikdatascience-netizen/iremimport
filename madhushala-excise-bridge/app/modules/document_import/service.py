@@ -19,7 +19,7 @@ from app.config import settings
 from app.db import conn, now_iso
 from app.modules.document_import.llama_client import LlamaCloudClient, LlamaCloudError
 from app.modules.document_import.normalizer import normalize_extracted_document
-from app.modules.document_import.schemas import ExtractedDocument, NormalizedImportItem
+from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct, NormalizedImportItem
 from app.services.mapping_service import MappingService
 from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
 
@@ -83,6 +83,100 @@ class _ReadableHtmlParser(HTMLParser):
         }
 
 
+
+def _cell_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _clean_cell(value: Any) -> str:
+    return " ".join(str(value or "").replace("\xa0", " ").split()).strip()
+
+
+def _first_present(row: dict[str, Any], *aliases: str) -> Any:
+    normalized = {_cell_key(key): value for key, value in row.items()}
+    for alias in aliases:
+        value = normalized.get(_cell_key(alias))
+        if value not in (None, ""):
+            return value
+    return None
+
+
+
+def _normalize_html_date(value: Any) -> str:
+    text = _clean_cell(value)
+    if not text:
+        return ""
+    iso = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", text)
+    if iso:
+        return text
+    named = re.match(r"^(\d{1,2})[-/ ]([A-Za-z]{3,})[-/ ](\d{4})$", text)
+    if named:
+        month = MONTHS.get(named.group(2)[:3].casefold())
+        if month:
+            return f"{named.group(3)}-{month}-{int(named.group(1)):02d}"
+    numeric = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$", text)
+    if numeric:
+        return f"{numeric.group(3)}-{int(numeric.group(2)):02d}-{int(numeric.group(1)):02d}"
+    return text
+
+def _parse_ml_value(*values: Any) -> int | None:
+    for value in values:
+        text = str(value or "")
+        match = re.search(r"(\d{2,5})\s*m\.?l\.?", text, re.IGNORECASE)
+        if match:
+            return _int_value(match.group(1)) or None
+        parsed = _int_value(text)
+        if 30 <= parsed <= 5000:
+            return parsed
+    return None
+
+
+def _qr_meta_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+    text = str(payload.get("text") or "")
+    meta: dict[str, str] = {}
+    patterns = {
+        "indentNo": r"Indent\s*No\s*[:\-]?\s*([A-Z0-9\-/]+)",
+        "indentDate": r"Indent\s*Date\s*[:\-]?\s*(\d{1,2}[-/]\w{3}[-/]\d{4}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}-\d{2}-\d{2})",
+        "invoiceNo": r"Invoice\s*No\.?\s*[:\-]?\s*([A-Z0-9\-/]+)",
+        "invoiceDate": r"Dated\s*[:\-]?\s*(\d{1,2}[-/]\w{3}[-/]\d{4}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}-\d{2}-\d{2})",
+    }
+    for key, pattern in patterns.items():
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            meta[key] = _normalize_html_date(match.group(1)) if key.lower().endswith("date") else _clean_cell(match.group(1))
+    for row in payload.get("tables") or []:
+        cells = [_clean_cell(cell) for cell in row]
+        for index, cell in enumerate(cells[:-1]):
+            key = _cell_key(cell)
+            if key in {"indentno", "indentnumber"} and cells[index + 1]:
+                meta.setdefault("indentNo", cells[index + 1])
+            if key in {"indentdate", "date"} and cells[index + 1]:
+                meta.setdefault("indentDate", _normalize_html_date(cells[index + 1]))
+    return meta
+
+
+def _table_dict_rows(tables: list[list[list[str]]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for table in tables or []:
+        header: list[str] | None = None
+        for raw_row in table:
+            cells = [_clean_cell(cell) for cell in raw_row]
+            keys = [_cell_key(cell) for cell in cells]
+            has_name = any(key in {"brand", "description", "descriptionofgoods", "itemname", "productname"} for key in keys)
+            has_item_shape = has_name and any("pack" in key or "quantity" in key or "bottle" in key or "amount" in key or "duty" in key or "rate" in key for key in keys)
+            if has_item_shape:
+                header = cells
+                continue
+            if not header or len(cells) < 3:
+                continue
+            values = cells[:len(header)]
+            if len(values) < len(header):
+                values.extend([""] * (len(header) - len(values)))
+            row = {header[index] or f"column{index + 1}": values[index] for index in range(len(header))}
+            name = _first_present(row, "Description", "Description of Goods", "Brand", "Item Name", "Product Name")
+            if name and not _cell_key(str(name)).startswith(("total", "tcspayable", "roundoff")):
+                rows.append(row)
+    return rows
 def _money(value: Any) -> float:
     try:
         return float(Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
@@ -272,6 +366,78 @@ class DocumentImportService:
             if temp_path:
                 temp_path.unlink(missing_ok=True)
 
+    def _qr_document_from_html(self, payload: dict[str, Any]) -> ExtractedDocument:
+        meta = _qr_meta_from_payload(payload)
+        items: list[ExtractedProduct] = []
+        for index, row in enumerate(_table_dict_rows(payload.get("tables") or []), start=1):
+            name = _clean_cell(_first_present(row, "Description", "Description of Goods", "Brand", "Item Name", "Product Name"))
+            if not name:
+                continue
+            brand = _clean_cell(_first_present(row, "Brand") or name)
+            package_type = _clean_cell(_first_present(row, "Packaging Type", "Package Type", "Packing Type"))
+            ml = _parse_ml_value(
+                _first_present(row, "Packaging Size", "Packing Size", "Size", "ML", "Measure ML"),
+                name,
+            )
+            boxes = _first_present(
+                row,
+                "No of Cases / Mono Cartons Dispatched",
+                "No of Cases Dispatched",
+                "Cases Dispatched",
+                "No of Cases / Mono Cartons Requested",
+                "No of Cases Requested",
+                "Quantity",
+                "Qty",
+            )
+            bottles = _first_present(row, "No of Bottles Dispatched", "Bottles Dispatched", "No of Bottles Requested", "Bottles Requested")
+            amount = _first_present(row, "Amount", "Duty Fee", "DutyFee", "Total Amount")
+            rate = _first_present(row, "Rate", "Box Rate", "Case Rate")
+            mrp = _first_present(row, "MRP", "MRP Per Unit", "MrpPerUnit")
+            packing = None
+            if bottles and boxes and _int_value(boxes):
+                packing = _int_value(bottles) // max(1, _int_value(boxes))
+            raw = {
+                **meta,
+                **row,
+                "packageType": package_type,
+                "measureMl": ml,
+                "box": boxes,
+                "quantity": boxes,
+                "qnty": bottles,
+                "itemAmount": amount,
+                "sourceRow": index,
+            }
+            extras = {
+                key: value for key, value in raw.items()
+                if key not in {
+                    "itemName", "brand", "ml", "packing", "quantity", "box", "rate", "mrp",
+                    "amount", "itemAmount", "confidence"
+                }
+            }
+            items.append(
+                ExtractedProduct(
+                    itemName=name,
+                    brand=brand,
+                    ml=ml,
+                    packing=packing,
+                    quantity=boxes,
+                    box=boxes,
+                    rate=rate,
+                    mrp=mrp,
+                    amount=amount,
+                    itemAmount=amount,
+                    confidence=1,
+                    **extras,
+                )
+            )
+        return ExtractedDocument(
+            documentType="stock_list",
+            supplierName=None,
+            invoiceNumber=meta.get("indentNo") or meta.get("invoiceNo"),
+            invoiceDate=meta.get("indentDate") or meta.get("invoiceDate"),
+            items=items,
+        )
+
     async def extract_qr_link(self, session: dict[str, Any], url: str) -> dict[str, Any]:
         clean_url = str(url or "").strip()
         parsed = urlparse(clean_url)
@@ -280,35 +446,67 @@ class DocumentImportService:
         host = (parsed.hostname or "").lower()
         if host in {"localhost", "127.0.0.1", "0.0.0.0"} or host.endswith(".local"):
             raise HTTPException(status_code=400, detail="QR link host is not allowed")
+
+        job_id = self._create_job(session, "QR_HTML", clean_url[:240])
         try:
+            self._update_job(job_id, status="FETCHING_QR_LINK")
             async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
                 response = await client.get(clean_url, headers={"accept": "text/html,application/json,*/*"})
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            self._update_job(job_id, status="FAILED", error=exc.response.text[:500] or "QR link request failed")
             raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text[:500] or "QR link request failed") from exc
         except httpx.HTTPError as exc:
+            self._update_job(job_id, status="FAILED", error=str(exc))
             raise HTTPException(status_code=502, detail=f"QR link could not be opened: {exc}") from exc
 
         content_type = response.headers.get("content-type", "")
-        body: Any
         if "json" in content_type:
             try:
-                body = response.json()
+                body: dict[str, Any] = response.json()
             except ValueError:
-                body = {"text": response.text[:12000]}
+                body = {"text": response.text[:12000], "tables": []}
         else:
             parser = _ReadableHtmlParser()
             parser.feed(response.text[:500000])
             body = parser.payload()
+
+        extracted = self._qr_document_from_html(body)
+        self._update_job(
+            job_id,
+            status="NORMALIZING",
+            document_type=extracted.documentType,
+            invoice_number=extracted.invoiceNumber,
+            invoice_date=extracted.invoiceDate,
+        )
+        normalized = normalize_extracted_document(extracted, "QR_HTML")
+        if not normalized:
+            self._update_job(job_id, status="FAILED", error="No item rows were found in the QR linked page")
+            raise HTTPException(status_code=422, detail="No item rows were found in the QR linked page")
+
+        self._persist_items(job_id, normalized)
+        self._update_job(job_id, status="CHECKING_MAPPING", extracted_count=len(normalized))
+        await self.mapping_service.prepare_document_job(session, job_id)
+        workspace = await self.mapping_service.workspace_for_session(session, job_id=job_id)
+        unmapped_count = len(workspace.get("unmappedItems", []))
+        status = "MAPPING_REQUIRED" if unmapped_count else "READY"
+        self._update_job(job_id, status=status, mapped_count=len(normalized) - unmapped_count)
         return {
-            "source": "QR_LINK",
+            "source": "QR_HTML",
             "url": clean_url,
             "finalUrl": str(response.url),
             "statusCode": response.status_code,
             "contentType": content_type,
+            "job": self.get_job(session, job_id),
+            "summary": {
+                "detected": len(normalized),
+                "recognized": len(normalized) - unmapped_count,
+                "needMapping": unmapped_count,
+            },
+            "extractedDocument": extracted.model_dump(),
+            "normalizedItems": [item.model_dump() for item in normalized],
             "extracted": body,
         }
-
     @staticmethod
     def _catalogue_key(name: str) -> str:
         return re.sub(r"[^a-z0-9]", "", str(name or "").casefold())
@@ -569,14 +767,15 @@ class DocumentImportService:
             "taxes": header.get("taxes") if isinstance(header.get("taxes"), list) else [],
         }
         client = self._client_for_session(session)
-        try:
-            calculation = await client.calculate_purchase(self._build_purchase_calculation_request(payload, header))
-            self._merge_purchase_calculation(payload, calculation)
-        except MadhushalaApiError:
-            raise
-        except Exception:
-            # Calculation response shape is not documented; keep the extracted/mapped payload if calculation is unavailable.
-            pass
+        if str(job.get("source_type") or "") != "QR_HTML":
+            try:
+                calculation = await client.calculate_purchase(self._build_purchase_calculation_request(payload, header))
+                self._merge_purchase_calculation(payload, calculation)
+            except MadhushalaApiError:
+                raise
+            except Exception:
+                # Calculation response shape is not documented; keep the extracted/mapped payload if calculation is unavailable.
+                pass
         if payload["taxMode"] == "BILLWISE":
             for item in payload["items"]:
                 for key in ("cgst", "sgst", "cess", "addCess", "igst", "t1Amt", "t2Amt", "t3Amt", "t4Amt", "etd"):
@@ -593,5 +792,9 @@ class DocumentImportService:
                 ("PURCHASE_SAVED", now_iso(), now_iso(), job_id),
             )
         return {"success": True, "jobId": job_id, "purchasePayload": payload, "madhushalaResponse": response, "job": job}
+
+
+
+
 
 

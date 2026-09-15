@@ -227,6 +227,21 @@ async function extractQrUrl(qrUrl) {
 
 function renderQrReview(payload) {
     currentUploadKind = "qr";
+    if (payload?.job) {
+        renderDocumentReview(payload);
+        currentUploadKind = "qr";
+        const summary = payload.summary || {};
+        const detected = summary.detected || 0;
+        const recognized = summary.recognized || 0;
+        const needMapping = summary.needMapping || 0;
+        setText(document.getElementById("document-action-summary"), `${detected} QR HTML items extracted | ${recognized} recognized | ${needMapping} require mapping`);
+        setText(document.getElementById("continue-document-mapping"), "Map QR Items");
+        setInputValue("purchase-doc-no", payload.extractedDocument?.invoiceNumber || "");
+        setInputValue("purchase-doc-date", payload.extractedDocument?.invoiceDate || "");
+        setInputValue("purchase-narration", "QR HTML import");
+        setDocumentImportState("review");
+        return;
+    }
     currentDocumentResult = payload;
     currentDocumentJobId = "";
     setText(document.getElementById("metric-detected"), "1");
@@ -959,7 +974,7 @@ document.getElementById("document-upload-another")?.addEventListener("click", re
 document.getElementById("success-upload-another")?.addEventListener("click", resetDocumentImport);
 document.getElementById("choose-another-document")?.addEventListener("click", resetDocumentImport);
 document.getElementById("retry-document")?.addEventListener("click", () => {
-    if (currentDocumentFile) uploadDocument(currentDocumentFile);
+    if (currentDocumentFile) (currentUploadKind === "qr" ? uploadQr(currentDocumentFile) : uploadDocument(currentDocumentFile));
     else resetDocumentImport();
 });
 document.getElementById("copy-document-json")?.addEventListener("click", async () => {
@@ -991,6 +1006,7 @@ document.addEventListener("DOMContentLoaded", () => {
     else if (mappingMode) initMapping();
     else initLaunch();
 });
+
 
 
 
