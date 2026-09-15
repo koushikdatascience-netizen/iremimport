@@ -1,11 +1,11 @@
-name: madhushala-excise-bridge
+name: madhushala-automation-platform
 
 services:
   web:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: madhushala_excise_bridge_web
+    container_name: madhushala_automation_web
     restart: unless-stopped
     env_file:
       - .env
@@ -21,7 +21,7 @@ services:
       - "127.0.0.1:8091:8091"
       - "127.0.0.1:6080:6080"
     volumes:
-      - excise_bridge_data:/app/data
+      - madhushala_automation_data:/app/data
     shm_size: "1gb"
     security_opt:
       - no-new-privileges:true
@@ -33,4 +33,6 @@ services:
       start_period: 20s
 
 volumes:
-  excise_bridge_data:
+  madhushala_automation_data:
+    external: true
+    name: madhushala-automation-platform_madhushala_automation_data
