@@ -6,12 +6,13 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -39,6 +40,16 @@ async def lifespan(_app: FastAPI):
 
 
 PUBLIC_PREFIX = "/excise-import"
+INDEX_HTML_PATH = Path("app/static/index.html")
+QR_BROWSER_FALLBACK_SCRIPT = '<script src="./static/qr-browser-fallback.js"></script>'
+
+
+def document_import_html() -> str:
+    html = INDEX_HTML_PATH.read_text(encoding="utf-8")
+    if "qr-browser-fallback.js" not in html:
+        html = html.replace("</head>", f"    {QR_BROWSER_FALLBACK_SCRIPT}\n</head>", 1)
+    return html
+
 
 app = FastAPI(
     title="Madhushala Automation Platform",
@@ -359,9 +370,12 @@ async def submit_mappings(payload: MappingRequest, request: Request):
 
 @app.get("/")
 async def serve_index():
-    return FileResponse("app/static/index.html")
+    return FileResponse(INDEX_HTML_PATH)
 
 
 @app.get("/document-import")
 async def serve_document_import():
-    return FileResponse("app/static/index.html")
+    return HTMLResponse(
+        content=document_import_html(),
+        headers={"Cache-Control": "no-store"},
+    )
