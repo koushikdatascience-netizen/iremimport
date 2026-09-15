@@ -1,44 +1,43 @@
-name: Diagnose Madhushala Purchase API
+name: Test Purchase Header Autofill
 
 on:
   push:
     branches:
       - fix/purchase-header-autofill
     paths:
+      - "madhushala-excise-bridge/**"
       - ".github/workflows/diagnose-madhushala-purchase-api.yml"
 
 permissions:
   contents: read
 
 jobs:
-  inspect:
+  test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: madhushala-excise-bridge
     steps:
-      - name: Inspect purchase master endpoint schemas
-        shell: bash
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: madhushala-excise-bridge/requirements.txt
+
+      - name: Install dependencies
         run: |
-          set -euo pipefail
-          BASE='https://reportapi.madhushalasoftware.com'
-          curl -k -fsSL "$BASE/swagger/v1/swagger.json" -o /tmp/api.json
-          python - <<'PY'
-          import json
-          api = json.load(open('/tmp/api.json'))
-          wanted = [
-              '/api/purchase/dropdown/suppliers',
-              '/api/purchase/dropdown/storages',
-              '/api/purchase/dropdown/purchase-accounts',
-              '/api/counter-sales/users',
-              '/api/excise-import/supplier',
-              '/api/purchase/dropdown/company',
-          ]
-          for path in wanted:
-              print('\n===', path, '===')
-              print(json.dumps((api.get('paths') or {}).get(path), indent=2)[:12000])
-          print('\n=== Referenced component schemas ===')
-          text = json.dumps({p: (api.get('paths') or {}).get(p) for p in wanted})
-          schemas = api.get('components', {}).get('schemas', {})
-          for name, schema in schemas.items():
-              if f'#/components/schemas/{name}' in text:
-                  print('\n---', name, '---')
-                  print(json.dumps(schema, indent=2)[:12000])
-          PY
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile application
+        run: python -m compileall -q app
+
+      - name: Check purchase context JavaScript
+        run: node --check app/static/purchase-context.js
+
+      - name: Run tests
+        run: pytest -q
