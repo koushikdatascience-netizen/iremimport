@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: madhushala-excise-production
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -48,7 +48,6 @@ jobs:
   deploy:
     name: Deploy production
     needs: test
-    if: ${{ vars.EXCISE_PRODUCTION_SYNCED == 'true' }}
     runs-on: ubuntu-latest
     environment: production
 
