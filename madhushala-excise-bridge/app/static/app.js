@@ -445,6 +445,40 @@ async function openPortal() {
     }
 }
 
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function compactValue(value) {
+    const text = String(value ?? "").trim();
+    return text && text !== "0" && text !== "0.00" ? text : "";
+}
+
+function selectedExciseDetails(item) {
+    const captured = item?.capturedItem || {};
+    const ml = compactValue(captured.measureMl || captured.ml);
+    const packageType = compactValue(captured.packageType);
+    const pack = compactValue(captured.bottlesPerCase || captured.packing);
+    const meta = [ml, packageType, pack].filter(Boolean).map(escapeHtml).join(" • ");
+    const chips = [
+        [captured.mrpPerUnit, "MRP per unit"],
+        [captured.retailerMargin, "Retailer margin"],
+        [captured.roundOffGovt, "Government round off"],
+        [captured.specialPurposeFee, "Special purpose fee"],
+    ]
+        .map(([value, title]) => [compactValue(value), title])
+        .filter(([value]) => value)
+        .map(([value, title]) => `<span class="excise-value-chip" title="${escapeHtml(title)}">${escapeHtml(value)}</span>`)
+        .join("");
+    if (!meta && !chips) return "";
+    return `<span class="excise-expanded"><span class="excise-meta" title="ML, package type, bottles per case">${meta}</span>${chips ? `<span class="excise-values">${chips}</span>` : ""}</span>`;
+}
+
 function itemLabel(item) {
     return `${item.itemCode} - ${item.itemName}`;
 }
@@ -505,12 +539,14 @@ function renderWorkspace() {
     list.className = "list-body";
     list.innerHTML = workspace.unmappedItems.map((item) => {
         const code = String(item.exciseItemCode);
+        const selected = code === String(selectedExciseCode);
         const mapped = selectedMappings.get(code) || item.selectedItemCode;
         return `
-            <button class="unmapped-item ${code === String(selectedExciseCode) ? "selected" : ""}" data-excise="${code}" type="button">
-                <span class="item-code">${code}</span>
-                <span class="item-name">${item.itemName}</span>
+            <button class="unmapped-item ${selected ? "selected" : ""}" data-excise="${escapeHtml(code)}" type="button">
+                <span class="item-code">${escapeHtml(code)}</span>
+                <span class="item-name">${escapeHtml(item.itemName)}</span>
                 <span class="${mapped ? "map-badge done" : "map-badge"}">${mapped ? "Selected" : "Pending"}</span>
+                ${selected ? selectedExciseDetails(item) : ""}
             </button>`;
     }).join("");
 
@@ -955,6 +991,7 @@ document.addEventListener("DOMContentLoaded", () => {
     else if (mappingMode) initMapping();
     else initLaunch();
 });
+
 
 
 

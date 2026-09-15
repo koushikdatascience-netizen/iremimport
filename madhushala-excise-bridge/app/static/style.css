@@ -1162,6 +1162,54 @@ body.mapping-mode {
 }
 
 
+
+.unmapped-item .excise-expanded {
+    grid-column: 1 / -1;
+    display: none;
+    gap: 6px;
+    padding-top: 2px;
+}
+
+.unmapped-item.selected .excise-expanded {
+    display: grid;
+}
+
+.excise-meta {
+    min-width: 0;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.excise-values {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.excise-value-chip {
+    min-width: 0;
+    max-width: 76px;
+    padding: 2px 6px;
+    border: 1px solid #d7dfda;
+    border-radius: 999px;
+    background: #f8faf9;
+    color: #34453c;
+    font-size: 10px;
+    font-weight: 750;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.unmapped-item.selected {
+    align-items: start;
+}
 /* Compact mapping right panel: keep search visible and remove duplicated selected Excise details. */
 #selected-excise,
 .selected-excise,
@@ -1284,5 +1332,6 @@ body.mapping-mode {
         grid-template-columns: 1fr;
     }
 }
+
 
 
