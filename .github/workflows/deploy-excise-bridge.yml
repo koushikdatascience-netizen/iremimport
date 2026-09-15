@@ -56,14 +56,14 @@ jobs:
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
-          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_SSH_KEY_B64: ${{ secrets.SERVER_SSH_KEY_B64 }}
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          if [ -z "${SERVER_HOST:-}" ] || [ -z "${SERVER_USER:-}" ] || [ -z "${SERVER_SSH_KEY:-}" ]; then
-            echo "SERVER_HOST, SERVER_USER, and SERVER_SSH_KEY secrets are required."
+          if [ -z "${SERVER_HOST:-}" ] || [ -z "${SERVER_USER:-}" ] || [ -z "${SERVER_SSH_KEY_B64:-}" ]; then
+            echo "SERVER_HOST, SERVER_USER, and SERVER_SSH_KEY_B64 secrets are required."
             exit 1
           fi
 
@@ -72,7 +72,7 @@ jobs:
 
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/madhushala_deploy_key
+          printf '%s' "$SERVER_SSH_KEY_B64" | base64 --decode > ~/.ssh/madhushala_deploy_key
           chmod 600 ~/.ssh/madhushala_deploy_key
           ssh-keygen -y -f ~/.ssh/madhushala_deploy_key >/dev/null
 
