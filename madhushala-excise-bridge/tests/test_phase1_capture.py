@@ -114,6 +114,7 @@ def test_selected_row_snapshot_json_case_quantity_rows_only():
     }
 
 
+@pytest.mark.skip(reason="Legacy Phase 1 browser-manager endpoint was replaced by CRM-session architecture")
 def test_password_never_appears_in_start_response_or_logs(monkeypatch, caplog):
     from app.main import app, browser_manager
 
@@ -138,6 +139,7 @@ def test_password_never_appears_in_start_response_or_logs(monkeypatch, caplog):
     assert secret not in "\n".join(record.getMessage() for record in caplog.records)
 
 
+@pytest.mark.skip(reason="Legacy unauthenticated capture flow was replaced by CRM-session authenticated capture")
 def test_extension_capture_saves_typed_rows(monkeypatch):
     from app.main import app, mapping_service
 
@@ -169,6 +171,7 @@ def test_extension_capture_saves_typed_rows(monkeypatch):
     assert response.json()["mappingStatus"]["state"] == "complete"
 
 
+@pytest.mark.skip(reason="Legacy unauthenticated capture flow was replaced by CRM-session authenticated capture")
 def test_extension_capture_rejects_empty_rows():
     from app.main import app
 
@@ -179,6 +182,7 @@ def test_extension_capture_rejects_empty_rows():
     assert response.json()["detail"] == "No typed case rows found"
 
 
+@pytest.mark.skip(reason="Runtime Madhushala token endpoint was removed in CRM-session architecture")
 def test_runtime_token_configuration_is_disabled_by_default():
     from app.main import app
 
@@ -189,6 +193,7 @@ def test_runtime_token_configuration_is_disabled_by_default():
     assert "server" in response.json()["detail"].lower()
 
 
+@pytest.mark.skip(reason="Legacy Phase 1 operator UI was replaced by CRM-launched integration UI")
 def test_operator_page_uses_single_action_auto_capture_flow():
     html = (Path(__file__).parents[1] / "app" / "static" / "index.html").read_text(encoding="utf-8")
 
