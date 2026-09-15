@@ -106,7 +106,7 @@ class MappingService:
             code = response.get("exciseItemCode") or response.get("itemCode")
             logger.info("Excise item created code=%s item=%s", code, payload.get("itemName"))
             if code is not None:
-                unmapped = [*unmapped, {"exciseItemCode": code, "itemName": response.get("itemName") or payload.get("itemName")} ]
+                unmapped = [*unmapped, {"exciseItemCode": code, "itemName": response.get("itemName") or payload.get("itemName")}]
             return code, "created", unmapped
         except MadhushalaApiError as exc:
             if not self._is_duplicate_error(exc):
@@ -458,6 +458,42 @@ class MappingService:
                     ).fetchone()
                     if row and row["excise_item_code"]:
                         latest_codes.add(str(row["excise_item_code"]))
+        elif latest_only:
+            # A browser refresh, a new CRM session, or a service restart may not
+            # have a capture attached to the new session. In that case keep
+            # latestOnly semantics by falling back to the most recently imported
+            # batch for this shop rather than returning every historical unmapped item.
+            with conn() as db:
+                latest_batch = db.execute(
+                    """
+                    SELECT last_seen_batch_id
+                    FROM imports
+                    WHERE shop_code=?
+                      AND last_seen_batch_id IS NOT NULL
+                      AND TRIM(last_seen_batch_id) <> ''
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (shop_code,),
+                ).fetchone()
+
+                if latest_batch and latest_batch["last_seen_batch_id"]:
+                    batch_rows = db.execute(
+                        """
+                        SELECT excise_item_code
+                        FROM imports
+                        WHERE shop_code=?
+                          AND last_seen_batch_id=?
+                          AND excise_item_code IS NOT NULL
+                          AND TRIM(excise_item_code) <> ''
+                        """,
+                        (shop_code, latest_batch["last_seen_batch_id"]),
+                    ).fetchall()
+                    latest_codes = {
+                        str(row["excise_item_code"])
+                        for row in batch_rows
+                        if row["excise_item_code"]
+                    }
 
         rows: list[dict[str, Any]] = []
         with conn() as db:
@@ -617,7 +653,3 @@ class MappingService:
                     (mapped, status, status, mapped_at, mapped_at, job_id, session["shop_code"], session["session_id"]),
                 )
         return {"mappedCount": len(clean), "response": response}
-
-
-
-
