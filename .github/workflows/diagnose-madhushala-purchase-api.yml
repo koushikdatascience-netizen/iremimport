@@ -1,0 +1,39 @@
+name: Diagnose Madhushala Purchase API
+
+on:
+  push:
+    branches:
+      - fix/purchase-header-autofill
+    paths:
+      - ".github/workflows/diagnose-madhushala-purchase-api.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect public API metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE='https://reportapi.madhushalasoftware.com'
+          for path in /swagger/v1/swagger.json /swagger/index.html /openapi.json; do
+            echo "=== $path ==="
+            status=$(curl -k -sS -L -o /tmp/api.out -w '%{http_code}' "$BASE$path" || true)
+            ctype=$(file -b --mime-type /tmp/api.out 2>/dev/null || true)
+            echo "status=$status content-type=$ctype bytes=$(wc -c </tmp/api.out)"
+            if [ "$status" = "200" ] && python -m json.tool /tmp/api.out >/tmp/api.json 2>/dev/null; then
+              python - <<'PY'
+import json
+p=json.load(open('/tmp/api.json'))
+for path in sorted((p.get('paths') or {})):
+    if 'purchase' in path.lower() or 'supplier' in path.lower() or 'store' in path.lower() or 'account' in path.lower() or 'user' in path.lower():
+        print(path)
+PY
+            else
+              head -c 500 /tmp/api.out | tr '\n' ' '
+              echo
+            fi
+          done
