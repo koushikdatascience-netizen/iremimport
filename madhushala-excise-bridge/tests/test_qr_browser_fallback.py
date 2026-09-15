@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import base64
+from io import BytesIO
 import os
 import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.config import settings
 from app.db import init_db
@@ -17,11 +18,11 @@ UP_EXCISE_QR_URL = (
     "&tptype=FG&tpyear=2026"
 )
 
-# Small valid PNG. The decoder result is monkeypatched so this test exercises
-# upload/session/image handling without depending on a generated QR fixture.
-ONE_PIXEL_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII="
-)
+
+def valid_png_bytes() -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (16, 16), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 @pytest.fixture()
@@ -76,7 +77,7 @@ def test_server_qr_decode_endpoint_returns_detected_url(client: TestClient, monk
     response = client.post(
         "/api/v1/document-import/qr/decode",
         headers=auth(session),
-        files={"file": ("transport-pass.png", ONE_PIXEL_PNG, "image/png")},
+        files={"file": ("transport-pass.png", valid_png_bytes(), "image/png")},
     )
 
     assert response.status_code == 200, response.text
