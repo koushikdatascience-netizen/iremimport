@@ -41,13 +41,17 @@ async def lifespan(_app: FastAPI):
 
 PUBLIC_PREFIX = "/excise-import"
 INDEX_HTML_PATH = Path("app/static/index.html")
-QR_BROWSER_FALLBACK_SCRIPT = '<script src="./static/qr-browser-fallback.js"></script>'
+DOCUMENT_IMPORT_SCRIPTS = (
+    '<script src="./static/qr-browser-fallback.js"></script>',
+    '<script src="./static/purchase-context.js"></script>',
+)
 
 
 def document_import_html() -> str:
     html = INDEX_HTML_PATH.read_text(encoding="utf-8")
-    if "qr-browser-fallback.js" not in html:
-        html = html.replace("</head>", f"    {QR_BROWSER_FALLBACK_SCRIPT}\n</head>", 1)
+    missing_scripts = [script for script in DOCUMENT_IMPORT_SCRIPTS if script.split('src="', 1)[1].split('"', 1)[0] not in html]
+    if missing_scripts:
+        html = html.replace("</head>", "    " + "\n    ".join(missing_scripts) + "\n</head>", 1)
     return html
 
 
