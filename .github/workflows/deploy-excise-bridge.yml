@@ -1,0 +1,177 @@
+name: Deploy Excise Bridge
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "madhushala-excise-bridge/**"
+      - ".github/workflows/deploy-excise-bridge.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: madhushala-excise-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: madhushala-excise-bridge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: madhushala-excise-bridge/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile application
+        run: python -m compileall -q app
+
+      - name: Run tests
+        run: pytest -q
+
+  deploy:
+    name: Deploy production
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          PORT="${DEPLOY_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Backup data and deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          PORT="${DEPLOY_PORT:-22}"
+
+          ssh -i ~/.ssh/deploy_key -p "$PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+
+          REPO=/srv/projects/iremimport
+          SERVICE_DIR=madhushala-excise-bridge
+          RELEASES=/srv/releases
+          BACKUPS=/srv/backups/madhushala
+          LIVE_VOLUME=madhushala-automation-platform_madhushala_automation_data
+          LIVE_CONTAINER=madhushala_automation_web
+
+          echo "== Preflight =="
+          test -d "$REPO/.git"
+          docker volume inspect "$LIVE_VOLUME" >/dev/null
+          test -d "$BACKUPS"
+
+          echo "== Fetch GitHub master =="
+          git -C "$REPO" fetch origin master
+          DEPLOY_SHA="$(git -C "$REPO" rev-parse origin/master)"
+          SHORT_SHA="$(printf '%s' "$DEPLOY_SHA" | cut -c1-8)"
+          STAMP="$(date +%Y%m%d-%H%M%S)"
+          RELEASE_ROOT="$RELEASES/madhushala-$STAMP-$SHORT_SHA"
+          APP_DIR="$RELEASE_ROOT/$SERVICE_DIR"
+
+          echo "Deploying $DEPLOY_SHA"
+
+          echo "== Back up persistent data =="
+          docker run --rm \
+            -v "$LIVE_VOLUME:/data:ro" \
+            -v "$BACKUPS:/backup" \
+            alpine sh -c "tar czf /backup/madhushala-data-$STAMP-$SHORT_SHA.tar.gz -C /data ."
+
+          echo "== Create immutable release =="
+          mkdir -p "$RELEASE_ROOT"
+          git -C "$REPO" archive origin/master "$SERVICE_DIR" | tar -x -C "$RELEASE_ROOT"
+
+          echo "== Restore server-only environment =="
+          CONFIG_ENV=/srv/config/madhushala-excise-bridge/.env
+          if [ -f "$CONFIG_ENV" ]; then
+            cp "$CONFIG_ENV" "$APP_DIR/.env"
+          else
+            CURRENT_DIR=""
+            if docker inspect "$LIVE_CONTAINER" >/dev/null 2>&1; then
+              CURRENT_DIR="$(docker inspect "$LIVE_CONTAINER" --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)"
+            fi
+            if [ -n "$CURRENT_DIR" ] && [ -f "$CURRENT_DIR/.env" ]; then
+              cp "$CURRENT_DIR/.env" "$APP_DIR/.env"
+              mkdir -p /srv/config/madhushala-excise-bridge 2>/dev/null || true
+              cp "$CURRENT_DIR/.env" "$CONFIG_ENV" 2>/dev/null || true
+            else
+              echo "ERROR: production .env not found"
+              exit 1
+            fi
+          fi
+          chmod 600 "$APP_DIR/.env" || true
+
+          echo "== Validate Compose uses the live volume =="
+          cd "$APP_DIR"
+          docker compose -f docker-compose.prod.yml config >/tmp/madhushala-compose-$SHORT_SHA.yml
+          grep -q 'madhushala-automation-platform_madhushala_automation_data' /tmp/madhushala-compose-$SHORT_SHA.yml
+
+          echo "== Build image =="
+          docker compose -f docker-compose.prod.yml build web
+
+          echo "== Deploy =="
+          docker compose -f docker-compose.prod.yml up -d --no-deps web
+
+          echo "== Health check =="
+          HEALTHY=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8091/health >/tmp/madhushala-health.json 2>/dev/null; then
+              HEALTHY=1
+              break
+            fi
+            sleep 3
+          done
+
+          if [ "$HEALTHY" -ne 1 ]; then
+            echo "ERROR: health check failed"
+            docker compose -f docker-compose.prod.yml ps
+            docker compose -f docker-compose.prod.yml logs --tail=200 web
+            exit 1
+          fi
+
+          cat /tmp/madhushala-health.json
+          echo
+          docker compose -f docker-compose.prod.yml ps
+
+          echo "== Record current release =="
+          ln -sfn "$RELEASE_ROOT" /srv/releases/madhushala-current 2>/dev/null || true
+          printf '%s\n' "$DEPLOY_SHA" > "$RELEASE_ROOT/DEPLOYED_GIT_SHA"
+
+          echo "== Remove old release directories, keep newest 5 =="
+          find "$RELEASES" -maxdepth 1 -mindepth 1 -type d -name 'madhushala-20*' -printf '%T@ %p\n' \
+            | sort -nr \
+            | tail -n +6 \
+            | cut -d' ' -f2- \
+            | xargs -r rm -rf
+
+          echo "Deployment complete: $DEPLOY_SHA"
+          REMOTE
