@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 
@@ -9,6 +10,84 @@ from app.config import settings
 from app.db import init_db
 from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct
 from app.modules.document_import.normalizer import normalize_extracted_document
+
+
+UP_EXCISE_QR_URL = (
+    "https://cms.upexciseonline.co/transport-pass-tracking/"
+    "?tpnum=WHOLESALE1501-FL2-RETAIL995782-FL4C-LUCK-Jun26_00000674"
+    "&tptype=FG&tpyear=2026"
+)
+
+UP_EXCISE_TRANSPORT_HTML = """
+<!doctype html>
+<html>
+<head><title>Transport Pass Tracking – UP Excise</title></head>
+<body>
+  <h4>TRANSPORT PASS DETAILS</h4>
+  <div>Indent &amp; Dispatch Details</div>
+  <table id="indent-details">
+    <tr>
+      <th>S.No</th>
+      <th>Indent No.</th>
+      <th>Indent Date</th>
+      <th>No. of Cases / Monocartons Requested</th>
+      <th>No. of Bottles Requested</th>
+      <th>Total Bulk Litres</th>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td>IND-LUCK-2026-00042</td>
+      <td>16-Jun-2026</td>
+      <td>3</td>
+      <td>72</td>
+      <td>45.72</td>
+    </tr>
+  </table>
+
+  <table id="finished-goods">
+    <tr>
+      <th>S.No</th>
+      <th>Brand</th>
+      <th>Liquor Type</th>
+      <th>Liquor Sub Type</th>
+      <th>Packaging Size</th>
+      <th>Packaging Type</th>
+      <th>No of Cases/ Monocartons Requested</th>
+      <th>No of Bottles Requested</th>
+      <th>No of Cases/ Monocartons Dispatched</th>
+      <th>No of Bottles Dispatched</th>
+      <th>BULK LITRES</th>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td>ROYAL STAG PREMIER WHISKY</td>
+      <td>FL</td>
+      <td>WHISKY</td>
+      <td>750 ML</td>
+      <td>Glass Bottle</td>
+      <td>2</td>
+      <td>24</td>
+      <td>2</td>
+      <td>24</td>
+      <td>18.00</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>100 PIPERS DELUXE SCOTCH WHISKY</td>
+      <td>FL</td>
+      <td>WHISKY</td>
+      <td>180 ML</td>
+      <td>PET Bottle</td>
+      <td>1</td>
+      <td>48</td>
+      <td>1</td>
+      <td>48</td>
+      <td>8.64</td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
 
 
 @pytest.fixture()
@@ -114,6 +193,97 @@ def test_document_upload_accepts_pdf_and_persists_job(client, monkeypatch):
     assert payload["summary"]["detected"] == 1
     items = client.get(f"/api/v1/document-import/jobs/{payload['job']['id']}/items", headers=auth(session)).json()["items"]
     assert items[0]["raw_name"] == "100 PIPER 180"
+
+
+def test_up_excise_transport_pass_qr_exact_url_and_table_shape(client, monkeypatch):
+    from app.db import conn
+    from app.main import document_import_service
+    from app.modules.document_import import up_excise_qr
+
+    assert up_excise_qr.is_up_transport_pass_url(UP_EXCISE_QR_URL)
+    assert up_excise_qr.parse_up_transport_url(UP_EXCISE_QR_URL) == {
+        "transportPassNo": "WHOLESALE1501-FL2-RETAIL995782-FL4C-LUCK-Jun26_00000674",
+        "transportPassType": "FG",
+        "transportPassYear": "2026",
+    }
+
+    async def fake_fetch(url):
+        assert url == UP_EXCISE_QR_URL
+        return {
+            "text": UP_EXCISE_TRANSPORT_HTML,
+            "contentType": "text/html; charset=UTF-8",
+            "finalUrl": url,
+            "statusCode": 200,
+        }
+
+    async def should_not_render(url):
+        raise AssertionError("Browser fallback should not run when populated HTML tables are already present")
+
+    async def fake_prepare(session, job_id):
+        with conn() as db:
+            rows = db.execute("SELECT id FROM import_items WHERE job_id=? ORDER BY created_at, id", (job_id,)).fetchall()
+            for index, row in enumerate(rows, start=733):
+                db.execute(
+                    "UPDATE import_items SET excise_item_code=?, mapping_status='UNMAPPED' WHERE id=?",
+                    (str(index), row["id"]),
+                )
+        return {"preparedCount": len(rows)}
+
+    async def fake_workspace(session, capture=None, latest_only=True, job_id=None):
+        return {
+            "unmappedItems": [
+                {"exciseItemCode": 733},
+                {"exciseItemCode": 734},
+            ]
+        }
+
+    monkeypatch.setattr(up_excise_qr, "_fetch_up_transport_page", fake_fetch)
+    monkeypatch.setattr(up_excise_qr, "_render_up_transport_page", should_not_render)
+    monkeypatch.setattr(document_import_service.mapping_service, "prepare_document_job", fake_prepare)
+    monkeypatch.setattr(document_import_service.mapping_service, "workspace_for_session", fake_workspace)
+
+    session = create_session(client)
+    response = client.post(
+        "/api/v1/document-import/qr/extract",
+        headers=auth(session),
+        json={"url": UP_EXCISE_QR_URL},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["provider"] == "UP_EXCISE_IESCMS"
+    assert payload["renderedWithBrowser"] is False
+    assert payload["transportPass"] == {
+        "transportPassNo": "WHOLESALE1501-FL2-RETAIL995782-FL4C-LUCK-Jun26_00000674",
+        "transportPassType": "FG",
+        "transportPassYear": "2026",
+    }
+    assert payload["job"]["status"] == "MAPPING_REQUIRED"
+    assert payload["summary"] == {"detected": 2, "recognized": 0, "needMapping": 2}
+    assert payload["extractedDocument"]["invoiceNumber"] == "IND-LUCK-2026-00042"
+    assert payload["extractedDocument"]["invoiceDate"] == "2026-06-16"
+    assert payload["extractedDocument"]["transportPassNo"] == "WHOLESALE1501-FL2-RETAIL995782-FL4C-LUCK-Jun26_00000674"
+
+    normalized = payload["normalizedItems"]
+    assert normalized[0]["rawName"] == "ROYAL STAG PREMIER WHISKY"
+    assert normalized[0]["ml"] == 750
+    assert normalized[0]["packing"] == 12
+    assert normalized[0]["quantity"] == 2.0
+    assert normalized[1]["rawName"] == "100 PIPERS DELUXE SCOTCH WHISKY"
+    assert normalized[1]["ml"] == 180
+    assert normalized[1]["packing"] == 48
+
+    items = client.get(
+        f"/api/v1/document-import/jobs/{payload['job']['id']}/items",
+        headers=auth(session),
+    ).json()["items"]
+    assert len(items) == 2
+    raw = json.loads(items[0]["raw_data_json"])
+    assert raw["transportPassNo"] == "WHOLESALE1501-FL2-RETAIL995782-FL4C-LUCK-Jun26_00000674"
+    assert raw["transportPassType"] == "FG"
+    assert raw["transportPassYear"] == "2026"
+    assert raw["qnty"] == 24
+    assert raw["bulkLitres"] == "18.00"
 
 
 def test_shop_cannot_read_other_shop_job(client, monkeypatch):
