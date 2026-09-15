@@ -75,8 +75,7 @@ def test_suggestions_put_matching_ml_and_name_on_top():
 
     suggestions = suggest_matches(excise_item, dropdown)
 
-    assert suggestions[0]["item"]["itemCode"] == "A00002"
-    assert suggestions[0]["score"] > suggestions[1]["score"]
+    assert [suggestion["item"]["itemCode"] for suggestion in suggestions] == ["A00002"]
     assert all("item" in suggestion for suggestion in suggestions)
 
 
