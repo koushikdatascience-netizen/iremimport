@@ -278,7 +278,8 @@ def test_up_excise_transport_pass_qr_exact_url_and_table_shape(client, monkeypat
         headers=auth(session),
     ).json()["items"]
     assert len(items) == 2
-    raw = json.loads(items[0]["raw_data_json"])
+    royal_stag = next(item for item in items if item["raw_name"] == "ROYAL STAG PREMIER WHISKY")
+    raw = json.loads(royal_stag["raw_data_json"])
     assert raw["transportPassNo"] == "WHOLESALE1501-FL2-RETAIL995782-FL4C-LUCK-Jun26_00000674"
     assert raw["transportPassType"] == "FG"
     assert raw["transportPassYear"] == "2026"
