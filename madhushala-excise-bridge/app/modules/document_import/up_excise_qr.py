@@ -18,7 +18,7 @@ UP_TRANSPORT_PATH_SUFFIX = "/transport-pass-tracking"
 
 
 class _UpExciseHtmlParser(HTMLParser):
-    """Extract readable text and preserve HTML table boundaries."""
+    """Extract readable text while preserving the page's table boundaries."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -49,12 +49,14 @@ class _UpExciseHtmlParser(HTMLParser):
         if tag == "title":
             self._in_title = False
             return
+
         if tag in {"td", "th"} and self._current_cell is not None:
             value = " ".join("".join(self._current_cell).split())
             if self._current_row is not None:
                 self._current_row.append(value)
             self._current_cell = None
             return
+
         if tag == "tr" and self._current_row is not None:
             if any(self._current_row):
                 if self._current_table is not None:
@@ -63,6 +65,7 @@ class _UpExciseHtmlParser(HTMLParser):
                     self.loose_rows.append(self._current_row)
             self._current_row = None
             return
+
         if tag == "table" and self._current_table is not None:
             if self._current_table:
                 self.tables.append(self._current_table)
@@ -109,8 +112,7 @@ def _first_present(row: dict[str, Any], *aliases: str) -> Any:
 
 
 def _int_value(value: Any) -> int:
-    text = _clean(value).replace(",", "")
-    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    match = re.search(r"-?\d+(?:\.\d+)?", _clean(value).replace(",", ""))
     if not match:
         return 0
     try:
@@ -137,16 +139,27 @@ def _normalize_date(value: Any) -> str:
         return ""
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
         return text
+
     months = {
-        "jan": "01", "feb": "02", "mar": "03", "apr": "04",
-        "may": "05", "jun": "06", "jul": "07", "aug": "08",
-        "sep": "09", "oct": "10", "nov": "11", "dec": "12",
+        "jan": "01",
+        "feb": "02",
+        "mar": "03",
+        "apr": "04",
+        "may": "05",
+        "jun": "06",
+        "jul": "07",
+        "aug": "08",
+        "sep": "09",
+        "oct": "10",
+        "nov": "11",
+        "dec": "12",
     }
     named = re.fullmatch(r"(\d{1,2})[-/ ]([A-Za-z]{3,})[-/ ](\d{4})", text)
     if named:
         month = months.get(named.group(2)[:3].casefold())
         if month:
             return f"{named.group(3)}-{month}-{int(named.group(1)):02d}"
+
     numeric = re.fullmatch(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})", text)
     if numeric:
         return f"{numeric.group(3)}-{int(numeric.group(2)):02d}-{int(numeric.group(1)):02d}"
@@ -157,23 +170,22 @@ def _coerce_tables(raw_tables: Any) -> list[list[list[str]]]:
     if not isinstance(raw_tables, list) or not raw_tables:
         return []
 
-    # Backward compatibility with the previous parser which returned one flat
-    # list of rows rather than a list of tables.
-    flat_rows = all(
+    # Compatibility with the old parser, which returned one flat list of rows.
+    if all(
         isinstance(row, list) and not any(isinstance(cell, list) for cell in row)
         for row in raw_tables
-    )
-    if flat_rows:
+    ):
         return [[[_clean(cell) for cell in row] for row in raw_tables]]
 
     tables: list[list[list[str]]] = []
     for table in raw_tables:
         if not isinstance(table, list):
             continue
-        rows: list[list[str]] = []
-        for row in table:
-            if isinstance(row, list):
-                rows.append([_clean(cell) for cell in row])
+        rows = [
+            [_clean(cell) for cell in row]
+            for row in table
+            if isinstance(row, list)
+        ]
         if rows:
             tables.append(rows)
     return tables
@@ -197,6 +209,7 @@ def parse_up_transport_url(url: str) -> dict[str, str]:
     tpyear = first("tpyear")
     if not (tpnum and tptype and tpyear):
         return {}
+
     return {
         "transportPassNo": tpnum,
         "transportPassType": tptype.upper(),
@@ -208,26 +221,15 @@ def is_up_transport_pass_url(url: str) -> bool:
     return bool(parse_up_transport_url(url))
 
 
-def _meta_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+def _table_metadata(payload: dict[str, Any]) -> dict[str, str]:
+    """Read indent metadata from the structured Indent & Dispatch table."""
     meta: dict[str, str] = {}
-    text = _clean(payload.get("text"))
-    text_patterns = {
-        "indentNo": r"Indent\s*No\.?\s*[:\-]?\s*([A-Za-z0-9_./\-]+)",
-        "indentDate": r"Indent\s*Date\s*[:\-]?\s*(\d{1,2}[-/]\w{3,}[-/]\d{4}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}-\d{2}-\d{2})",
-        "invoiceNo": r"Invoice\s*No\.?\s*[:\-]?\s*([A-Za-z0-9_./\-]+)",
-        "invoiceDate": r"Dated\s*[:\-]?\s*(\d{1,2}[-/]\w{3,}[-/]\d{4}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}-\d{2}-\d{2})",
-    }
-    for name, pattern in text_patterns.items():
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            value = _clean(match.group(1))
-            meta[name] = _normalize_date(value) if name.endswith("Date") else value
-
     for table in _coerce_tables(payload.get("tables")):
         for row_index, row in enumerate(table):
             keys = [_key(cell) for cell in row]
             if "indentno" not in keys and "indentdate" not in keys:
                 continue
+
             data_row = next(
                 (
                     candidate
@@ -239,6 +241,7 @@ def _meta_from_payload(payload: dict[str, Any]) -> dict[str, str]:
             )
             if not data_row:
                 continue
+
             for column, header in enumerate(keys):
                 if column >= len(data_row):
                     continue
@@ -246,17 +249,44 @@ def _meta_from_payload(payload: dict[str, Any]) -> dict[str, str]:
                 if not value:
                     continue
                 if header in {"indentno", "indentnumber"}:
-                    meta.setdefault("indentNo", value)
+                    meta["indentNo"] = value
                 elif header in {"indentdate", "date"}:
-                    meta.setdefault("indentDate", _normalize_date(value))
-            if "indentNo" in meta or "indentDate" in meta:
-                break
+                    meta["indentDate"] = _normalize_date(value)
 
+            if meta:
+                return meta
     return meta
 
 
+def _text_metadata(payload: dict[str, Any]) -> dict[str, str]:
+    """Fallback only for pages that expose labelled values outside tables."""
+    text = _clean(payload.get("text"))
+    meta: dict[str, str] = {}
+    patterns = {
+        # Require a separator so a header sequence like
+        # "Indent No. Indent Date" cannot be mistaken for a value.
+        "indentNo": r"Indent\s*No\.?\s*[:\-]\s*([A-Za-z0-9_./\-]+)",
+        "indentDate": r"Indent\s*Date\s*[:\-]\s*(\d{1,2}[-/]\w{3,}[-/]\d{4}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}-\d{2}-\d{2})",
+        "invoiceNo": r"Invoice\s*No\.?\s*[:\-]\s*([A-Za-z0-9_./\-]+)",
+        "invoiceDate": r"Dated\s*[:\-]\s*(\d{1,2}[-/]\w{3,}[-/]\d{4}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}-\d{2}-\d{2})",
+    }
+    for name, pattern in patterns.items():
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        value = _clean(match.group(1))
+        meta[name] = _normalize_date(value) if name.endswith("Date") else value
+    return meta
+
+
+def _metadata(payload: dict[str, Any]) -> dict[str, str]:
+    structured = _table_metadata(payload)
+    fallback = _text_metadata(payload)
+    return {**fallback, **structured}
+
+
 def _product_rows(payload: dict[str, Any]) -> list[dict[str, str]]:
-    result: list[dict[str, str]] = []
+    rows: list[dict[str, str]] = []
     for table in _coerce_tables(payload.get("tables")):
         header: list[str] | None = None
         for raw_row in table:
@@ -269,35 +299,76 @@ def _product_rows(payload: dict[str, Any]) -> list[dict[str, str]]:
             has_product_shape = has_name and any(
                 token in key
                 for key in keys
-                for token in ("packagingsize", "packagingtype", "case", "bottle", "quantity", "amount", "rate", "mrp")
+                for token in (
+                    "packagingsize",
+                    "packagingtype",
+                    "case",
+                    "bottle",
+                    "quantity",
+                    "amount",
+                    "rate",
+                    "mrp",
+                )
             )
             if has_product_shape:
                 header = cells
                 continue
             if not header or len(cells) < 3:
                 continue
+
             values = cells[: len(header)]
-            if len(values) < len(header):
-                values.extend([""] * (len(header) - len(values)))
-            row = {header[index] or f"column{index + 1}": values[index] for index in range(len(header))}
-            name = _first_present(row, "Brand", "Description", "Description of Goods", "Item Name", "Product Name")
+            values.extend([""] * (len(header) - len(values)))
+            row = {
+                header[index] or f"column{index + 1}": values[index]
+                for index in range(len(header))
+            }
+            name = _first_present(
+                row,
+                "Brand",
+                "Description",
+                "Description of Goods",
+                "Item Name",
+                "Product Name",
+            )
             if not _clean(name):
                 continue
             if _key(name).startswith(("total", "tcspayable", "roundoff")):
                 continue
-            result.append(row)
-    return result
+            rows.append(row)
+    return rows
 
 
-def _document_from_payload(payload: dict[str, Any], transport_meta: dict[str, str]) -> ExtractedDocument:
-    meta = {**_meta_from_payload(payload), **transport_meta}
+def _document_from_payload(
+    payload: dict[str, Any],
+    transport_meta: dict[str, str],
+) -> ExtractedDocument:
+    meta = {**_metadata(payload), **transport_meta}
     items: list[ExtractedProduct] = []
 
     for index, row in enumerate(_product_rows(payload), start=1):
-        name = _clean(_first_present(row, "Brand", "Description", "Description of Goods", "Item Name", "Product Name"))
-        package_size = _first_present(row, "Packaging Size", "Packing Size", "Size", "ML", "Measure ML")
-        package_type = _clean(_first_present(row, "Packaging Type", "Package Type", "Packing Type"))
+        name = _clean(
+            _first_present(
+                row,
+                "Brand",
+                "Description",
+                "Description of Goods",
+                "Item Name",
+                "Product Name",
+            )
+        )
+        package_size = _first_present(
+            row,
+            "Packaging Size",
+            "Packing Size",
+            "Size",
+            "ML",
+            "Measure ML",
+        )
+        package_type = _clean(
+            _first_present(row, "Packaging Type", "Package Type", "Packing Type")
+        )
         ml = _parse_ml(package_size, name)
+
         boxes = _first_present(
             row,
             "No of Cases/ Monocartons Dispatched",
@@ -321,10 +392,20 @@ def _document_from_payload(payload: dict[str, Any], transport_meta: dict[str, st
         )
         box_count = _int_value(boxes)
         bottle_count = _int_value(bottles)
-        packing = bottle_count // box_count if box_count and bottle_count and bottle_count % box_count == 0 else None
-        bulk_litres = _first_present(row, "BULK LITRES", "Bulk Litres", "No of Bulk Litre", "Total Bulk Litres")
+        packing = (
+            bottle_count // box_count
+            if box_count and bottle_count and bottle_count % box_count == 0
+            else None
+        )
+        bulk_litres = _first_present(
+            row,
+            "BULK LITRES",
+            "Bulk Litres",
+            "No of Bulk Litre",
+            "Total Bulk Litres",
+        )
 
-        extra = {
+        raw = {
             **meta,
             **row,
             "packageType": package_type,
@@ -335,11 +416,22 @@ def _document_from_payload(payload: dict[str, Any], transport_meta: dict[str, st
             "qnty": bottle_count or bottles,
             "bulkLitres": _clean(bulk_litres),
             "liquorType": _clean(_first_present(row, "Liquor Type")),
-            "liquorSubType": _clean(_first_present(row, "Liquor Sub Type", "Liquor Subtype")),
+            "liquorSubType": _clean(
+                _first_present(row, "Liquor Sub Type", "Liquor Subtype")
+            ),
             "sourceRow": index,
         }
-        excluded = {"itemName", "brand", "ml", "packing", "quantity", "box", "confidence"}
-        extras = {key: value for key, value in extra.items() if key not in excluded}
+        excluded = {
+            "itemName",
+            "brand",
+            "ml",
+            "packing",
+            "quantity",
+            "box",
+            "confidence",
+        }
+        extras = {key: value for key, value in raw.items() if key not in excluded}
+
         items.append(
             ExtractedProduct(
                 itemName=name,
@@ -356,7 +448,11 @@ def _document_from_payload(payload: dict[str, Any], transport_meta: dict[str, st
     return ExtractedDocument(
         documentType="stock_list",
         supplierName=None,
-        invoiceNumber=meta.get("indentNo") or meta.get("invoiceNo") or meta.get("transportPassNo"),
+        invoiceNumber=(
+            meta.get("indentNo")
+            or meta.get("invoiceNo")
+            or meta.get("transportPassNo")
+        ),
         invoiceDate=meta.get("indentDate") or meta.get("invoiceDate"),
         transportPassNo=meta.get("transportPassNo"),
         transportPassType=meta.get("transportPassType"),
@@ -373,7 +469,10 @@ def _payload_from_html(html: str) -> dict[str, Any]:
 
 async def _fetch_up_transport_page(url: str) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        response = await client.get(url, headers={"accept": "text/html,application/json,*/*"})
+        response = await client.get(
+            url,
+            headers={"accept": "text/html,application/json,*/*"},
+        )
         response.raise_for_status()
         return {
             "text": response.text,
@@ -384,7 +483,7 @@ async def _fetch_up_transport_page(url: str) -> dict[str, Any]:
 
 
 async def _render_up_transport_page(url: str) -> tuple[str, str]:
-    """Render the page when UP Excise fills transport data client-side."""
+    """Render once when UP Excise populates the pass rows client-side."""
     from playwright.async_api import async_playwright
 
     async with async_playwright() as playwright:
@@ -403,14 +502,14 @@ async def _render_up_transport_page(url: str) -> tuple[str, str]:
                         if (rows.length < 2) return false;
                         const header = (rows[0]?.innerText || '').toLowerCase();
                         if (!header.includes('brand')) return false;
-                        return rows.slice(1).some(row => row.querySelectorAll('td').length >= 3 && row.innerText.trim());
+                        return rows.slice(1).some(row =>
+                            row.querySelectorAll('td').length >= 3 && row.innerText.trim()
+                        );
                     })
                     """,
                     timeout=15000,
                 )
             except Exception:
-                # We still parse the final DOM so the caller can return a useful
-                # 422 if the pass is invalid or the upstream page changed.
                 pass
             await page.wait_for_timeout(750)
             return await page.content(), page.url
@@ -418,11 +517,18 @@ async def _render_up_transport_page(url: str) -> tuple[str, str]:
             await browser.close()
 
 
-async def extract_up_transport_pass(service: Any, session: dict[str, Any], url: str) -> dict[str, Any]:
+async def extract_up_transport_pass(
+    service: Any,
+    session: dict[str, Any],
+    url: str,
+) -> dict[str, Any]:
     clean_url = str(url or "").strip()
     transport_meta = parse_up_transport_url(clean_url)
     if not transport_meta:
-        raise HTTPException(status_code=400, detail="QR is not a supported UP Excise transport-pass URL")
+        raise HTTPException(
+            status_code=400,
+            detail="QR is not a supported UP Excise transport-pass URL",
+        )
 
     job_id = service._create_job(session, "QR_HTML", clean_url[:240])
     rendered_with_browser = False
@@ -431,18 +537,22 @@ async def extract_up_transport_pass(service: Any, session: dict[str, Any], url: 
         service._update_job(job_id, status="FETCHING_QR_LINK")
         fetched = await _fetch_up_transport_page(clean_url)
     except httpx.HTTPStatusError as exc:
-        service._update_job(job_id, status="FAILED", error=exc.response.text[:500] or "UP Excise QR link request failed")
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text[:500] or "UP Excise QR link request failed") from exc
+        error = exc.response.text[:500] or "UP Excise QR link request failed"
+        service._update_job(job_id, status="FAILED", error=error)
+        raise HTTPException(status_code=exc.response.status_code, detail=error) from exc
     except httpx.HTTPError as exc:
         service._update_job(job_id, status="FAILED", error=str(exc))
-        raise HTTPException(status_code=502, detail=f"UP Excise QR link could not be opened: {exc}") from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"UP Excise QR link could not be opened: {exc}",
+        ) from exc
 
     body = _payload_from_html(fetched["text"])
     extracted = _document_from_payload(body, transport_meta)
 
-    # The public UP Excise page currently exposes the transport tables in its
-    # HTML shell and may populate the actual pass rows client-side. Render once
-    # with Chromium only when the static response has no product rows.
+    # The public UP Excise page exposes the transport table shell in static HTML,
+    # but may fill the actual pass rows with JavaScript. Only pay the browser cost
+    # if the deterministic HTML parse finds no products.
     if not extracted.items:
         service._update_job(job_id, status="RENDERING_QR_LINK")
         try:
@@ -455,8 +565,6 @@ async def extract_up_transport_pass(service: Any, session: dict[str, Any], url: 
                 fetched["finalUrl"] = rendered_url
                 rendered_with_browser = True
         except Exception as exc:
-            # Do not hide the deterministic parsing result behind a browser
-            # failure; the final no-items check below provides the public error.
             fetched["renderError"] = str(exc)
 
     service._update_job(
@@ -473,10 +581,18 @@ async def extract_up_transport_pass(service: Any, session: dict[str, Any], url: 
         raise HTTPException(status_code=422, detail=detail)
 
     service._persist_items(job_id, normalized)
-    service._update_job(job_id, status="CHECKING_MAPPING", extracted_count=len(normalized))
+    service._update_job(
+        job_id,
+        status="CHECKING_MAPPING",
+        extracted_count=len(normalized),
+    )
+
     try:
         await service.mapping_service.prepare_document_job(session, job_id)
-        workspace = await service.mapping_service.workspace_for_session(session, job_id=job_id)
+        workspace = await service.mapping_service.workspace_for_session(
+            session,
+            job_id=job_id,
+        )
     except MadhushalaApiError as exc:
         service._update_job(job_id, status="FAILED", error=str(exc))
         status_code = 401 if exc.status_code == 401 else 403 if exc.status_code == 403 else 502
@@ -484,7 +600,11 @@ async def extract_up_transport_pass(service: Any, session: dict[str, Any], url: 
 
     unmapped_count = len(workspace.get("unmappedItems", []))
     status = "MAPPING_REQUIRED" if unmapped_count else "READY"
-    service._update_job(job_id, status=status, mapped_count=len(normalized) - unmapped_count)
+    service._update_job(
+        job_id,
+        status=status,
+        mapped_count=len(normalized) - unmapped_count,
+    )
 
     return {
         "source": "QR_HTML",
