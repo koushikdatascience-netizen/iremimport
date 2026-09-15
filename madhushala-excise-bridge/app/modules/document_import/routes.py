@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from app.services.session_service import session_service
 from app.modules.document_import.service import DocumentImportService
-from app.modules.document_import.purchase_context import build_purchase_context
+from app.modules.document_import.purchase_context import build_purchase_context, up_supplier_hint
 from app.modules.document_import.qr_decoder import decode_qr_upload
 from app.modules.document_import.up_excise_qr import (
     extract_up_transport_pass,
@@ -50,7 +50,11 @@ def create_router(service: DocumentImportService) -> APIRouter:
     async def extract_qr_link(payload: QrExtractRequest, request: Request):
         session = session_service.from_request(request)
         if is_up_transport_pass_url(payload.url):
-            return await extract_up_transport_pass(service, session, payload.url)
+            result = await extract_up_transport_pass(service, session, payload.url)
+            supplier_name = up_supplier_hint(result.get("extracted"))
+            if supplier_name and isinstance(result.get("extractedDocument"), dict):
+                result["extractedDocument"]["supplierName"] = supplier_name
+            return result
         return await service.extract_qr_link(session, payload.url)
 
     @router.get("/purchase/context")
