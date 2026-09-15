@@ -79,6 +79,36 @@ def normalize_options(rows: Any, kind: str) -> list[dict[str, str]]:
     return result
 
 
+def up_supplier_hint(payload: Any) -> str:
+    """Read the consignor's unit/licensee name from UP Excise's paired party table."""
+    if not isinstance(payload, dict):
+        return ""
+    tables = payload.get("tables")
+    if not isinstance(tables, list):
+        return ""
+
+    fallback = ""
+    for table in tables:
+        if not isinstance(table, list):
+            continue
+        for raw_row in table:
+            if not isinstance(raw_row, list):
+                continue
+            row = [_text(cell) for cell in raw_row]
+            keys = [_key(cell) for cell in row]
+            # UP renders party rows as:
+            # Unit Name | <consignor> | Unit Name | <consignee>
+            for field in ("unitname", "licenseename"):
+                indexes = [index for index, key in enumerate(keys) if key == field]
+                if indexes:
+                    first = indexes[0]
+                    if first + 1 < len(row) and row[first + 1]:
+                        if field == "unitname":
+                            return row[first + 1]
+                        fallback = fallback or row[first + 1]
+    return fallback
+
+
 def _normalized_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", _text(value).casefold()).strip()
 
@@ -136,8 +166,9 @@ def _current_user_default(options: list[dict[str, str]], token: str) -> str:
         "email",
         "sub",
     }
+    normalized_claim_names = {_key(item) for item in preferred_claims}
     for key, value in claims.items():
-        if _key(key) in {_key(item) for item in preferred_claims} and isinstance(value, (str, int)):
+        if _key(key) in normalized_claim_names and isinstance(value, (str, int)):
             candidates.append(_text(value))
 
     for candidate in candidates:
