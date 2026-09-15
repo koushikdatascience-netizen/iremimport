@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.services.session_service import session_service
 from app.modules.document_import.service import DocumentImportService
+from app.modules.document_import.purchase_context import build_purchase_context
 from app.modules.document_import.qr_decoder import decode_qr_upload
 from app.modules.document_import.up_excise_qr import (
     extract_up_transport_pass,
@@ -51,6 +52,11 @@ def create_router(service: DocumentImportService) -> APIRouter:
         if is_up_transport_pass_url(payload.url):
             return await extract_up_transport_pass(service, session, payload.url)
         return await service.extract_qr_link(session, payload.url)
+
+    @router.get("/purchase/context")
+    async def get_purchase_context(request: Request, supplierName: str = ""):
+        session = session_service.from_request(request)
+        return await build_purchase_context(session, supplier_name=supplierName)
 
     @router.post("/jobs/{job_id}/purchase/save")
     async def save_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):
