@@ -80,7 +80,9 @@ jobs:
 
           REPO=/srv/projects/iremimport
           SERVICE_DIR=madhushala-excise-bridge
-          RELEASES=/srv/releases
+          RELEASES="$HOME/madhushala-releases"
+          DEPLOY_STATE="$HOME/.madhushala-deploy"
+          CONFIG_ENV="$DEPLOY_STATE/.env"
           BACKUPS=/srv/backups/madhushala
           LIVE_VOLUME=madhushala-automation-platform_madhushala_automation_data
           LIVE_CONTAINER=madhushala_automation_web
@@ -89,6 +91,7 @@ jobs:
           test -d "$REPO/.git"
           docker volume inspect "$LIVE_VOLUME" >/dev/null
           test -d "$BACKUPS"
+          mkdir -p "$RELEASES" "$DEPLOY_STATE"
 
           echo "== Fetch GitHub master =="
           git -C "$REPO" fetch origin master
@@ -111,7 +114,6 @@ jobs:
           git -C "$REPO" archive origin/master "$SERVICE_DIR" | tar -x -C "$RELEASE_ROOT"
 
           echo "== Restore server-only environment =="
-          CONFIG_ENV=/srv/config/madhushala-excise-bridge/.env
           if [ -f "$CONFIG_ENV" ]; then
             cp "$CONFIG_ENV" "$APP_DIR/.env"
           else
@@ -121,19 +123,19 @@ jobs:
             fi
             if [ -n "$CURRENT_DIR" ] && [ -f "$CURRENT_DIR/.env" ]; then
               cp "$CURRENT_DIR/.env" "$APP_DIR/.env"
-              mkdir -p /srv/config/madhushala-excise-bridge 2>/dev/null || true
-              cp "$CURRENT_DIR/.env" "$CONFIG_ENV" 2>/dev/null || true
+              cp "$CURRENT_DIR/.env" "$CONFIG_ENV"
             else
               echo "ERROR: production .env not found"
               exit 1
             fi
           fi
-          chmod 600 "$APP_DIR/.env" || true
+          chmod 600 "$APP_DIR/.env" "$CONFIG_ENV" || true
 
           echo "== Validate Compose uses the live volume =="
           cd "$APP_DIR"
           docker compose -f docker-compose.prod.yml config >/tmp/madhushala-compose-$SHORT_SHA.yml
           grep -q 'madhushala-automation-platform_madhushala_automation_data' /tmp/madhushala-compose-$SHORT_SHA.yml
+          grep -q 'container_name: madhushala_automation_web' /tmp/madhushala-compose-$SHORT_SHA.yml
 
           echo "== Build image =="
           docker compose -f docker-compose.prod.yml build web
@@ -163,10 +165,10 @@ jobs:
           docker compose -f docker-compose.prod.yml ps
 
           echo "== Record current release =="
-          ln -sfn "$RELEASE_ROOT" /srv/releases/madhushala-current 2>/dev/null || true
+          ln -sfn "$RELEASE_ROOT" "$DEPLOY_STATE/current"
           printf '%s\n' "$DEPLOY_SHA" > "$RELEASE_ROOT/DEPLOYED_GIT_SHA"
 
-          echo "== Remove old release directories, keep newest 5 =="
+          echo "== Remove old CI/CD releases, keep newest 5 =="
           find "$RELEASES" -maxdepth 1 -mindepth 1 -type d -name 'madhushala-20*' -printf '%T@ %p\n' \
             | sort -nr \
             | tail -n +6 \
