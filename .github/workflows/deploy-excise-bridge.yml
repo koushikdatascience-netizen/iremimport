@@ -52,30 +52,50 @@ jobs:
     environment: production
 
     steps:
-      - name: Configure SSH
+      - name: Deploy via existing server SSH
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+
+          if [ -z "${SERVER_HOST:-}" ] || [ -z "${SERVER_USER:-}" ] || [ -z "${SERVER_SSH_KEY:-}" ]; then
+            echo "SERVER_HOST, SERVER_USER, and SERVER_SSH_KEY secrets are required."
+            exit 1
+          fi
+
+          SSH_PORT="${SERVER_PORT:-22}"
+          TARGET_COMMIT="${GITHUB_SHA}"
+
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          PORT="${DEPLOY_PORT:-22}"
-          ssh-keyscan -p "$PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/madhushala_deploy_key
+          chmod 600 ~/.ssh/madhushala_deploy_key
+          ssh-keygen -y -f ~/.ssh/madhushala_deploy_key >/dev/null
 
-      - name: Backup data and deploy
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-        run: |
-          set -euo pipefail
-          PORT="${DEPLOY_PORT:-22}"
+          echo "Testing SSH connection to $SERVER_USER@$SERVER_HOST:$SSH_PORT..."
+          ssh \
+            -i ~/.ssh/madhushala_deploy_key \
+            -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=accept-new \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            "$SERVER_USER@$SERVER_HOST" \
+            'echo "SSH OK: $(hostname)"'
 
-          ssh -i ~/.ssh/deploy_key -p "$PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
+          ssh \
+            -i ~/.ssh/madhushala_deploy_key \
+            -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=accept-new \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            "$SERVER_USER@$SERVER_HOST" \
+            "TARGET_COMMIT=$TARGET_COMMIT GITHUB_TOKEN=$GITHUB_TOKEN bash -s" <<'REMOTE'
           set -euo pipefail
 
           REPO=/srv/projects/iremimport
@@ -93,9 +113,16 @@ jobs:
           test -d "$BACKUPS"
           mkdir -p "$RELEASES" "$DEPLOY_STATE"
 
-          echo "== Fetch GitHub master =="
-          git -C "$REPO" fetch origin master
-          DEPLOY_SHA="$(git -C "$REPO" rev-parse origin/master)"
+          echo "== Fetch exact GitHub commit =="
+          if git -C "$REPO" remote get-url origin | grep -q '^https://github.com/'; then
+            AUTH_HEADER=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w 0)
+            git -C "$REPO" -c "http.https://github.com/.extraheader=AUTHORIZATION: Basic $AUTH_HEADER" fetch origin master
+          else
+            git -C "$REPO" fetch origin master
+          fi
+          git -C "$REPO" cat-file -e "$TARGET_COMMIT^{commit}"
+
+          DEPLOY_SHA="$TARGET_COMMIT"
           SHORT_SHA="$(printf '%s' "$DEPLOY_SHA" | cut -c1-8)"
           STAMP="$(date +%Y%m%d-%H%M%S)"
           RELEASE_ROOT="$RELEASES/madhushala-$STAMP-$SHORT_SHA"
@@ -111,7 +138,7 @@ jobs:
 
           echo "== Create immutable release =="
           mkdir -p "$RELEASE_ROOT"
-          git -C "$REPO" archive origin/master "$SERVICE_DIR" | tar -x -C "$RELEASE_ROOT"
+          git -C "$REPO" archive "$DEPLOY_SHA" "$SERVICE_DIR" | tar -x -C "$RELEASE_ROOT"
 
           echo "== Restore server-only environment =="
           if [ -f "$CONFIG_ENV" ]; then
@@ -131,7 +158,7 @@ jobs:
           fi
           chmod 600 "$APP_DIR/.env" "$CONFIG_ENV" || true
 
-          echo "== Validate Compose uses the live volume =="
+          echo "== Validate Compose uses the live production identity =="
           cd "$APP_DIR"
           docker compose -f docker-compose.prod.yml config >/tmp/madhushala-compose-$SHORT_SHA.yml
           grep -q 'madhushala-automation-platform_madhushala_automation_data' /tmp/madhushala-compose-$SHORT_SHA.yml
