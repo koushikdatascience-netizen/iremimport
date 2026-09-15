@@ -7,6 +7,10 @@ from pydantic import BaseModel
 
 from app.services.session_service import session_service
 from app.modules.document_import.service import DocumentImportService
+from app.modules.document_import.up_excise_qr import (
+    extract_up_transport_pass,
+    is_up_transport_pass_url,
+)
 
 
 class QrExtractRequest(BaseModel):
@@ -39,6 +43,8 @@ def create_router(service: DocumentImportService) -> APIRouter:
     @router.post("/qr/extract")
     async def extract_qr_link(payload: QrExtractRequest, request: Request):
         session = session_service.from_request(request)
+        if is_up_transport_pass_url(payload.url):
+            return await extract_up_transport_pass(service, session, payload.url)
         return await service.extract_qr_link(session, payload.url)
 
     @router.post("/jobs/{job_id}/purchase/save")
