@@ -29,6 +29,24 @@ class MadhushalaClient:
             value = value[7:].strip()
         return value
 
+    @staticmethod
+    def _list_payload(data: Any, *keys: str) -> list[Any]:
+        if isinstance(data, list):
+            return data
+        if not isinstance(data, dict):
+            return []
+        for key in (*keys, "items", "data", "result", "results", "values", "rows"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+        # Some APIs wrap the real list one level deeper, e.g. {data: {items: [...]}}.
+        for value in data.values():
+            if isinstance(value, dict):
+                nested = MadhushalaClient._list_payload(value, *keys)
+                if nested:
+                    return nested
+        return []
+
     def _auth_headers(self, accept: str = "application/json") -> dict[str, str]:
         if not self.token:
             raise MadhushalaApiError("Madhushala token is not configured")
@@ -120,18 +138,7 @@ class MadhushalaClient:
             params={"shopCode": self.shop_code, "companyCode": safe_company_code, "billType": safe_bill_type},
             headers=self._auth_headers("*/*"),
         )
-        if isinstance(data, list):
-            items = data
-        elif isinstance(data, dict):
-            items = (
-                data.get("items")
-                or data.get("data")
-                or data.get("result")
-                or data.get("results")
-                or []
-            )
-        else:
-            items = []
+        items = self._list_payload(data, "products")
         if not isinstance(items, list):
             raise MadhushalaApiError("Madhushala dropdown response was not a list")
         logger.info(
@@ -143,6 +150,63 @@ class MadhushalaClient:
         )
         return items
 
+    async def _get_purchase_master(
+        self,
+        path: str,
+        company_code: str,
+        *response_keys: str,
+    ) -> list[Any]:
+        safe_company_code = str(company_code or "").strip()
+        data = await self._request(
+            "GET",
+            path,
+            params={"shopCode": self.shop_code, "companyCode": safe_company_code},
+            headers=self._auth_headers("*/*"),
+        )
+        rows = self._list_payload(data, *response_keys)
+        logger.info(
+            "Madhushala purchase master response path=%s shopCode=%s companyCode=%s rowCount=%s",
+            path,
+            self.shop_code,
+            safe_company_code,
+            len(rows),
+        )
+        return rows
+
+    async def get_purchase_suppliers(self, company_code: str) -> list[Any]:
+        return await self._get_purchase_master(
+            "/api/purchase/dropdown/suppliers",
+            company_code,
+            "suppliers",
+            "supplierList",
+        )
+
+    async def get_purchase_storages(self, company_code: str) -> list[Any]:
+        return await self._get_purchase_master(
+            "/api/purchase/dropdown/storages",
+            company_code,
+            "storages",
+            "stores",
+            "storageList",
+        )
+
+    async def get_purchase_accounts(self, company_code: str) -> list[Any]:
+        return await self._get_purchase_master(
+            "/api/purchase/dropdown/purchase-accounts",
+            company_code,
+            "accounts",
+            "purchaseAccounts",
+            "accountList",
+        )
+
+    async def get_purchase_users(self, company_code: str) -> list[Any]:
+        return await self._get_purchase_master(
+            "/api/counter-sales/users",
+            company_code,
+            "users",
+            "userList",
+        )
+
     async def calculate_purchase(self, payload: dict[str, Any]) -> Any:
         headers = self._auth_headers("application/json")
         headers["Content-Type"] = "application/json"
@@ -152,6 +216,7 @@ class MadhushalaClient:
             json_body=payload,
             headers=headers,
         )
+
     async def save_purchase(self, payload: dict[str, Any]) -> Any:
         headers = self._auth_headers("application/json")
         headers["Content-Type"] = "application/json"
