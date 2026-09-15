@@ -1864,6 +1864,22 @@ body.mapping-mode {
     }
 }
 
+
+/* Selected Excise row expands to show captured portal values. Keep normal rows compact. */
+.unmapped-item.selected {
+    height: auto !important;
+    min-height: 72px !important;
+    max-height: none !important;
+    align-items: start !important;
+    row-gap: 3px;
+    padding-top: 6px;
+    padding-bottom: 7px;
+    overflow: visible !important;
+}
+
+.unmapped-item.selected .excise-expanded {
+    display: grid !important;
+}
 </style>
 </head>
 <body>
@@ -3050,6 +3066,7 @@ document.addEventListener("DOMContentLoaded", () => {
 </script>
 </body>
 </html>
+
 
 
 
