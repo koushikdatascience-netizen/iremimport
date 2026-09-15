@@ -14,20 +14,31 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect public API metadata
+      - name: Inspect purchase master endpoint schemas
         shell: bash
         run: |
           set -euo pipefail
           BASE='https://reportapi.madhushalasoftware.com'
-          for path in /swagger/v1/swagger.json /swagger/index.html /openapi.json; do
-            echo "=== $path ==="
-            status=$(curl -k -sS -L -o /tmp/api.out -w '%{http_code}' "$BASE$path" || true)
-            ctype=$(file -b --mime-type /tmp/api.out 2>/dev/null || true)
-            echo "status=$status content-type=$ctype bytes=$(wc -c </tmp/api.out)"
-            if [ "$status" = "200" ] && python -m json.tool /tmp/api.out >/tmp/api.json 2>/dev/null; then
-              python -c 'import json; p=json.load(open("/tmp/api.json")); [print(x) for x in sorted((p.get("paths") or {})) if any(k in x.lower() for k in ("purchase","supplier","store","account","user"))]'
-            else
-              head -c 500 /tmp/api.out | tr '\n' ' '
-              echo
-            fi
-          done
+          curl -k -fsSL "$BASE/swagger/v1/swagger.json" -o /tmp/api.json
+          python - <<'PY'
+          import json
+          api = json.load(open('/tmp/api.json'))
+          wanted = [
+              '/api/purchase/dropdown/suppliers',
+              '/api/purchase/dropdown/storages',
+              '/api/purchase/dropdown/purchase-accounts',
+              '/api/counter-sales/users',
+              '/api/excise-import/supplier',
+              '/api/purchase/dropdown/company',
+          ]
+          for path in wanted:
+              print('\n===', path, '===')
+              print(json.dumps((api.get('paths') or {}).get(path), indent=2)[:12000])
+          print('\n=== Referenced component schemas ===')
+          text = json.dumps({p: (api.get('paths') or {}).get(p) for p in wanted})
+          schemas = api.get('components', {}).get('schemas', {})
+          for name, schema in schemas.items():
+              if f'#/components/schemas/{name}' in text:
+                  print('\n---', name, '---')
+                  print(json.dumps(schema, indent=2)[:12000])
+          PY
