@@ -26,6 +26,33 @@ let currentPreviewUrl = "";
 let currentUploadKind = "document";
 let mappingRefreshTimer = null;
 let mappingRefreshInFlight = false;
+const DEFAULT_EXCISE_LOGIN_URL = "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx";
+
+function portalSettingsFromForm() {
+    return {
+        exciseLoginUrl: document.getElementById("excise-login-url")?.value.trim() || DEFAULT_EXCISE_LOGIN_URL,
+        exciseUser: document.getElementById("excise-user")?.value.trim() || "",
+        excisePassword: document.getElementById("excise-password")?.value || "",
+    };
+}
+
+function applyPortalSettings(settings = {}) {
+    const url = document.getElementById("excise-login-url");
+    const user = document.getElementById("excise-user");
+    const password = document.getElementById("excise-password");
+    if (url) url.value = settings.exciseLoginUrl || DEFAULT_EXCISE_LOGIN_URL;
+    if (user) user.value = settings.exciseUser || "";
+    if (password) password.value = settings.excisePassword || "";
+}
+
+function missingPortalFields(settings = portalSettingsFromForm()) {
+    const missing = [];
+    if (!settings.exciseLoginUrl) missing.push("login URL");
+    if (!settings.exciseUser) missing.push("user ID");
+    if (!settings.excisePassword) missing.push("password");
+    return missing;
+}
+
 
 function purchaseHeaderStorageKey(jobId = currentDocumentJobId) {
     return `purchaseHeader:${sessionId || "session"}:${jobId || "latest"}`;
@@ -386,8 +413,10 @@ async function initLaunch() {
             mappingUrl,
         });
         const settings = await extensionRequest("GET_SETTINGS");
-        if (!settings.exciseUser || !settings.excisePassword) {
-            setStatus("Save WB Excise credentials once from the Chrome extension, then open the portal.", true);
+        applyPortalSettings(settings);
+        const missing = missingPortalFields(settings);
+        if (missing.length) {
+            setStatus(`Fill ${missing.join(", ")} once, then open the portal.`, true);
         } else {
             setStatus("Ready. Open Excise Portal and enter CAPTCHA manually.");
         }
@@ -397,13 +426,20 @@ async function initLaunch() {
 }
 
 async function openPortal() {
+    const portalSettings = portalSettingsFromForm();
+    const missing = missingPortalFields(portalSettings);
+    if (missing.length) {
+        setStatus(`Fill ${missing.join(", ")} before opening the portal.`, true);
+        return;
+    }
     try {
+        await extensionRequest("SAVE_SETTINGS", portalSettings);
         const result = await extensionRequest("OPEN_PORTAL", {}, 30000);
         if (result.status === "needs_credentials") {
-            setStatus("Save WB Excise credentials once from the Chrome extension, then click Open Excise Portal again.", true);
+            setStatus("Fill and save Excise portal details, then click Open Excise Portal again.", true);
             return;
         }
-        setStatus("WB Excise opened. Enter CAPTCHA, login, then prepare indent.");
+        setStatus("WB Excise opened with saved details. Enter CAPTCHA, login, then prepare indent.");
     } catch (error) {
         setStatus(error.message || "Could not open Excise portal.", true);
     }
@@ -846,9 +882,6 @@ async function initDocumentImport() {
 }
 
 document.getElementById("open-portal")?.addEventListener("click", openPortal);
-document.getElementById("reload-workspace")?.addEventListener("click", () => {
-    void loadWorkspace(currentDocumentJobId, {preserveState: true});
-});
 document.getElementById("madhushala-search")?.addEventListener("input", runSearch);
 document.getElementById("submit-mappings")?.addEventListener("click", saveMappings);
 document.getElementById("document-file")?.addEventListener("change", (event) => {
@@ -922,6 +955,7 @@ document.addEventListener("DOMContentLoaded", () => {
     else if (mappingMode) initMapping();
     else initLaunch();
 });
+
 
 
 

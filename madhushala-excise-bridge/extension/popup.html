@@ -14,9 +14,15 @@
     </header>
 
     <section class="panel">
-      <div id="status" class="status success">Extension connected.</div>
-      <button id="open-control-panel" type="button">Open Control Panel</button>
-      <button id="change-excise-login" class="secondary" type="button">Change Saved Excise Login</button>
+      <div id="status" class="status">Loading...</div>
+      <label for="excise-login-url">WB Excise Login URL</label>
+      <input id="excise-login-url" type="url" autocomplete="url">
+      <label for="excise-user">WB Excise User ID</label>
+      <input id="excise-user" autocomplete="username">
+      <label for="excise-password">WB Excise Password</label>
+      <input id="excise-password" type="password" autocomplete="current-password">
+      <button id="save-settings" type="button">Save Portal Details</button>
+      <p>Open Madhushala import from CRM, then use Open Excise Portal there.</p>
     </section>
   </main>
 

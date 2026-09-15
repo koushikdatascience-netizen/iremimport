@@ -931,6 +931,31 @@ dd {
 
 
 /* Current embedded / standalone launch page */
+
+.portal-settings {
+    display: grid;
+    gap: 10px;
+    width: min(460px, 100%);
+    margin-bottom: 14px;
+}
+
+.portal-settings label {
+    display: grid;
+    gap: 6px;
+    color: #52635a;
+    font-size: 13px;
+    font-weight: 700;
+    text-align: left;
+}
+
+.portal-settings input {
+    width: 100%;
+    min-height: 42px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0 12px;
+    font: inherit;
+}
 .launch-card {
     width: min(520px, calc(100% - 32px));
     margin: 24px auto;
@@ -1259,4 +1284,5 @@ body.mapping-mode {
         grid-template-columns: 1fr;
     }
 }
+
 

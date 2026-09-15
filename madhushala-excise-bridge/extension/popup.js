@@ -1,23 +1,47 @@
-const DEFAULT_BRIDGE_URL = "http://13.232.52.191/excise-import";
+const status = document.getElementById("status");
+const exciseLoginUrl = document.getElementById("excise-login-url");
+const exciseUser = document.getElementById("excise-user");
+const excisePassword = document.getElementById("excise-password");
 
-function normalizeBaseUrl(value) {
-  return String(value || DEFAULT_BRIDGE_URL).trim().replace(/\/+$/, "");
+function setStatus(message, type = "") {
+  status.textContent = message;
+  status.className = type ? `status ${type}` : "status";
 }
 
-async function openControlPanel() {
-  const data = await chrome.storage.local.get({
-    bridgeUrl: DEFAULT_BRIDGE_URL,
-    apiBaseUrl: DEFAULT_BRIDGE_URL,
+async function send(type, payload = {}) {
+  const response = await chrome.runtime.sendMessage({
+    source: "madhushala-popup",
+    type,
+    payload,
   });
-  const url = normalizeBaseUrl(data.bridgeUrl || data.apiBaseUrl);
-  await chrome.tabs.create({url: `${url}/`});
+  if (!response?.ok) throw new Error(response?.error || "Extension action failed");
+  return response.result || {};
 }
 
-async function changeExciseLogin() {
-  await chrome.storage.local.remove(["exciseUser", "excisePassword"]);
-  await openControlPanel();
-  window.close();
+async function loadSettings() {
+  try {
+    const settings = await send("GET_SETTINGS");
+    exciseLoginUrl.value = settings.exciseLoginUrl || "";
+    exciseUser.value = settings.exciseUser || "";
+    excisePassword.value = settings.excisePassword || "";
+    setStatus(settings.sessionToken ? "Ready for current CRM session." : "Save portal details, then open import from CRM.", "success");
+  } catch (error) {
+    setStatus(error.message || "Could not load settings.", "error");
+  }
 }
 
-document.getElementById("open-control-panel").addEventListener("click", openControlPanel);
-document.getElementById("change-excise-login").addEventListener("click", changeExciseLogin);
+async function saveCredentials() {
+  try {
+    await send("SAVE_SETTINGS", {
+      exciseLoginUrl: exciseLoginUrl.value.trim(),
+      exciseUser: exciseUser.value.trim(),
+      excisePassword: excisePassword.value,
+    });
+    setStatus("Portal details saved in this Chrome profile.", "success");
+  } catch (error) {
+    setStatus(error.message || "Could not save portal details.", "error");
+  }
+}
+
+document.getElementById("save-settings").addEventListener("click", saveCredentials);
+loadSettings();
