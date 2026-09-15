@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 import httpx
+
+
+logger = logging.getLogger("madhushala-excise-bridge")
 
 
 class MadhushalaApiError(RuntimeError):
@@ -102,9 +106,65 @@ class MadhushalaClient:
         )
 
     async def get_dropdown_items(self, company_code: str, bill_type: str) -> list[dict[str, Any]]:
-        return await self._request(
+        safe_company_code = str(company_code or "").strip()
+        safe_bill_type = str(bill_type or "").strip()
+        logger.info(
+            "Madhushala dropdown request shopCode=%s companyCode=%s billType=%s",
+            self.shop_code,
+            safe_company_code,
+            safe_bill_type,
+        )
+        data = await self._request(
             "GET",
             "/api/purchase/dropdown/items",
-            params={"shopCode": self.shop_code, "companyCode": company_code, "billType": bill_type},
+            params={"shopCode": self.shop_code, "companyCode": safe_company_code, "billType": safe_bill_type},
             headers=self._auth_headers("*/*"),
+        )
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            items = (
+                data.get("items")
+                or data.get("data")
+                or data.get("result")
+                or data.get("results")
+                or []
+            )
+        else:
+            items = []
+        if not isinstance(items, list):
+            raise MadhushalaApiError("Madhushala dropdown response was not a list")
+        logger.info(
+            "Madhushala dropdown response shopCode=%s companyCode=%s billType=%s itemCount=%s",
+            self.shop_code,
+            safe_company_code,
+            safe_bill_type,
+            len(items),
+        )
+        return items
+
+    async def calculate_purchase(self, payload: dict[str, Any]) -> Any:
+        headers = self._auth_headers("application/json")
+        headers["Content-Type"] = "application/json"
+        return await self._request(
+            "POST",
+            "/api/purchase/calculate",
+            json_body=payload,
+            headers=headers,
+        )
+    async def save_purchase(self, payload: dict[str, Any]) -> Any:
+        headers = self._auth_headers("application/json")
+        headers["Content-Type"] = "application/json"
+        logger.info(
+            "Madhushala purchase save request shopCode=%s companyCode=%s docNo=%s itemCount=%s",
+            payload.get("shopCode"),
+            payload.get("companyCode"),
+            payload.get("docNo"),
+            len(payload.get("items") or []),
+        )
+        return await self._request(
+            "POST",
+            "/api/purchase/save",
+            json_body=payload,
+            headers=headers,
         )

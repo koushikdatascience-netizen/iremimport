@@ -46,11 +46,35 @@ class Settings:
     MADHUSHALA_SHOP_CODE: str = os.getenv("MADHUSHALA_SHOP_CODE", "hedu_test3")
     MADHUSHALA_COMPANY_CODE: str = os.getenv("MADHUSHALA_COMPANY_CODE", "2")
     MADHUSHALA_BILL_TYPE: str = os.getenv("MADHUSHALA_BILL_TYPE", "AI")
-    ALLOW_RUNTIME_TOKEN_CONFIG: bool = _env_bool("ALLOW_RUNTIME_TOKEN_CONFIG", False)
+    DEFAULT_COMPANY_CODE: str = os.getenv("DEFAULT_COMPANY_CODE", os.getenv("MADHUSHALA_COMPANY_CODE", "2"))
+    DEFAULT_BILL_TYPE: str = os.getenv("DEFAULT_BILL_TYPE", os.getenv("MADHUSHALA_BILL_TYPE", "AI"))
+    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "https://integrations.madhushalasoftware.com/excise-import").rstrip("/")
+    APP_ENV: str = os.getenv("APP_ENV", "development")
+    DATABASE_PATH: str = os.getenv("DATABASE_PATH", "data/bridge.db")
+    SESSION_TTL_MINUTES: int = int(os.getenv("SESSION_TTL_MINUTES", "60"))
+    SESSION_ENCRYPTION_KEY: str = os.getenv("SESSION_ENCRYPTION_KEY", "")
+    CRM_INTEGRATION_KEY: str = os.getenv("CRM_INTEGRATION_KEY", "")
+    MADHUSHALA_SERVICE_TOKEN: str = os.getenv("MADHUSHALA_SERVICE_TOKEN", "")
+    VALIDATE_MADHUSHALA_TOKEN_ON_SESSION: bool = _env_bool("VALIDATE_MADHUSHALA_TOKEN_ON_SESSION", False)
+    LLAMA_CLOUD_API_KEY: str = os.getenv("LLAMA_CLOUD_API_KEY", "")
+    LLAMA_CLOUD_BASE_URL: str = os.getenv("LLAMA_CLOUD_BASE_URL", "https://api.cloud.llamaindex.ai").rstrip("/")
+    DOCUMENT_IMPORT_EXTRACTION_MODE: str = os.getenv("DOCUMENT_IMPORT_EXTRACTION_MODE", "FAST").strip().upper() or "FAST"
+    DOCUMENT_IMPORT_POLL_SECONDS: float = float(os.getenv("DOCUMENT_IMPORT_POLL_SECONDS", "1"))
+    DOCUMENT_IMPORT_MAX_MB: int = int(os.getenv("DOCUMENT_IMPORT_MAX_MB", "20"))
+    DOCUMENT_IMPORT_ALLOWED_TYPES: list[str] = field(
+        default_factory=lambda: _env_list("DOCUMENT_IMPORT_ALLOWED_TYPES", ["pdf", "jpg", "jpeg", "png"])
+    )
+    DOCUMENT_IMPORT_DEBUG: bool = _env_bool("DOCUMENT_IMPORT_DEBUG", False)
     CORS_ORIGINS: list[str] = field(
         default_factory=lambda: _env_list(
             "CORS_ORIGINS",
-            ["http://localhost:8091", "http://127.0.0.1:8091"],
+            [
+                "http://localhost:8091",
+                "http://127.0.0.1:8091",
+                "http://localhost:4200",
+                "http://127.0.0.1:4200",
+                "https://report.madhushalasoftware.com",
+            ],
         )
     )
     CORS_ORIGIN_REGEX: str | None = os.getenv("CORS_ORIGIN_REGEX", r"chrome-extension://.*")
@@ -67,4 +91,27 @@ class Settings:
     def EXCISE_PASSWORD(self) -> str:
         return os.getenv("EXCISE_PASSWORD", "")
 
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV.strip().casefold() in {"production", "prod"}
+
+    def validate_production(self) -> None:
+        if not self.is_production:
+            return
+        missing = []
+        if not self.APP_BASE_URL.startswith("https://"):
+            missing.append("APP_BASE_URL")
+        if len(self.CRM_INTEGRATION_KEY) < 32:
+            missing.append("CRM_INTEGRATION_KEY")
+        if not self.SESSION_ENCRYPTION_KEY:
+            missing.append("SESSION_ENCRYPTION_KEY")
+        if not self.LLAMA_CLOUD_API_KEY:
+            missing.append("LLAMA_CLOUD_API_KEY")
+        if self.CORS_ORIGINS == ["*"]:
+            missing.append("CORS_ORIGINS")
+        if missing:
+            raise RuntimeError(f"Missing production settings: {', '.join(missing)}")
+
 settings = Settings()
+
+

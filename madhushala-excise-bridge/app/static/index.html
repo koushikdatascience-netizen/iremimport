@@ -3,118 +3,1944 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Excise Import</title>
-    <link rel="stylesheet" href="static/style.css">
+    <title>Madhushala Excise Import</title>
+    <style>
+/* =========================================================
+   MADHUSHALA INLINE CSS
+   ========================================================= */
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap");
+
+* {
+    box-sizing: border-box;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+:root {
+    --font-pos-sans: "DM Sans", system-ui, sans-serif;
+    --font-pos-mono: "Space Mono", monospace;
+    --bg: #eceff1;
+    --surface: #ffffff;
+    --ink: #111111;
+    --heading: #3a3a3c;
+    --muted: #6e6e73;
+    --line: #e5e5ea;
+    --warm: #f7f3e8;
+    --brand: #ffd54a;
+    --brand-dark: #f5b800;
+    --brand-soft: #fff9e5;
+    --brand-border: #f3e2a6;
+    --charcoal: #212121;
+    --success: #10b981;
+    --success-soft: #e9fbf0;
+    --info: #3b82f6;
+    --info-soft: #dbeafe;
+    --warning: #f59e0b;
+    --warning-soft: #fef3c7;
+    --danger: #ef4444;
+    --danger-soft: #fee2e2;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-pos-sans);
+}
+
+body.modal-open {
+    overflow: hidden;
+}
+
+.app-shell {
+    width: min(1120px, calc(100% - 32px));
+    margin: 24px auto;
+    display: grid;
+    gap: 16px;
+}
+
+.app-header,
+.status-strip,
+.token-panel,
+.action-card,
+.control-panel,
+.panel-section,
+.modal-panel,
+.guardrail-panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+
+.app-header {
+    min-height: 88px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 20px;
+    border-top: 4px solid var(--brand);
+}
+
+.app-kicker {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+    margin: 0;
+}
+
+h1 {
+    color: var(--heading);
+    font-size: 28px;
+    line-height: 1.1;
+}
+
+h2 {
+    color: var(--heading);
+    font-size: 19px;
+    line-height: 1.25;
+}
+
+h3 {
+    font-size: 15px;
+    margin-bottom: 10px;
+}
+
+p,
+small,
+dd {
+    color: var(--muted);
+}
+
+.status-pill,
+.map-badge,
+.score {
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.status-pill {
+    border: 1px solid var(--line);
+    background: var(--warm);
+    color: var(--muted);
+}
+
+.status-pill.ready,
+.map-badge.done {
+    border-color: #9edab2;
+    background: var(--success-soft);
+    color: var(--success);
+}
+
+.status-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1px;
+    overflow: hidden;
+}
+
+.status-strip > div {
+    min-height: 48px;
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    background: #fbfbfc;
+    font-weight: 800;
+}
+
+.status-active {
+    color: var(--success);
+}
+
+.status-waiting {
+    color: var(--muted);
+}
+
+.error {
+    color: var(--danger);
+    font-weight: 800;
+}
+
+.action-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.control-panel {
+    display: grid;
+    grid-template-columns: minmax(320px, 1.1fr) minmax(280px, 0.9fr) minmax(260px, 0.8fr);
+    gap: 1px;
+    overflow: hidden;
+}
+
+.panel-section {
+    min-height: 250px;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.settings-grid {
+    display: grid;
+    gap: 12px;
+}
+
+.workflow-section {
+    background: linear-gradient(180deg, #ffffff 0%, var(--brand-soft) 100%);
+}
+
+.workflow-buttons {
+    display: grid;
+    gap: 12px;
+    margin-top: auto;
+}
+
+.workflow-buttons button,
+.settings-grid button {
+    width: 100%;
+}
+
+.status-section p {
+    line-height: 1.45;
+}
+
+.action-card {
+    min-height: 250px;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 18px;
+}
+
+.action-primary {
+    border-color: var(--brand-border);
+    background: linear-gradient(180deg, #ffffff 0%, var(--brand-soft) 100%);
+}
+
+.step-number {
+    display: inline-flex;
+    width: 30px;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 12px;
+    border-radius: 999px;
+    background: var(--brand);
+    color: var(--ink);
+    font-weight: 900;
+}
+
+.action-card h2 {
+    margin-bottom: 8px;
+}
+
+form,
+.form-row,
+.token-row,
+.search-block {
+    display: grid;
+    gap: 9px;
+}
+
+.token-panel {
+    padding: 14px 18px;
+}
+
+.token-row {
+    grid-template-columns: minmax(110px, 150px) 1fr auto;
+    align-items: end;
+}
+
+label {
+    color: var(--heading);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+input {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 9px 11px;
+    color: var(--ink);
+    font-size: 15px;
+}
+
+input:focus {
+    border-color: var(--brand-dark);
+    outline: 3px solid rgba(255, 213, 74, 0.28);
+}
+
+button {
+    width: fit-content;
+    min-height: 44px;
+    border: 0;
+    border-radius: 6px;
+    padding: 0 16px;
+    background: var(--ink);
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 900;
+    cursor: pointer;
+}
+
+button:hover {
+    background: var(--charcoal);
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+button.secondary {
+    border: 1px solid var(--line);
+    background: #ffffff;
+    color: var(--ink);
+}
+
+button.secondary:hover {
+    border-color: var(--brand-border);
+    background: var(--brand-soft);
+}
+
+.action-card button {
+    width: 100%;
+}
+
+.capture-button {
+    min-height: 54px;
+    font-size: 16px;
+}
+
+.modal {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+}
+
+.modal[hidden] {
+    display: none;
+}
+
+.modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(13, 30, 38, 0.54);
+}
+
+.modal-panel,
+.guardrail-panel {
+    position: relative;
+    width: min(1160px, calc(100% - 28px));
+    max-height: calc(100vh - 36px);
+    margin: 18px auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 22px 60px rgba(18, 39, 50, 0.28);
+}
+
+.guardrail-panel {
+    width: min(520px, calc(100% - 28px));
+    margin-top: 12vh;
+}
+
+.modal-header,
+.modal-toolbar,
+.mapping-footer,
+.guardrail-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+}
+
+.mapping-footer,
+.guardrail-actions {
+    border-top: 1px solid var(--line);
+    border-bottom: 0;
+    font-weight: 900;
+}
+
+.icon-button {
+    width: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0;
+    background: var(--warm);
+    color: var(--ink);
+}
+
+.view-switch {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.view-switch button {
+    border: 1px solid var(--line);
+    background: #ffffff;
+    color: var(--ink);
+}
+
+.view-switch button.selected {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: var(--brand);
+}
+
+.mapping-layout {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(280px, 0.78fr) minmax(430px, 1.22fr);
+    gap: 14px;
+    padding: 14px;
+    overflow: hidden;
+}
+
+.unmapped-list,
+.mapper {
+    min-height: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.list-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--warm);
+    font-weight: 900;
+}
+
+.list-body,
+.candidate-list {
+    display: grid;
+    gap: 8px;
+    padding: 10px;
+    max-height: min(520px, calc(100vh - 300px));
+    overflow: auto;
+}
+
+.list-body.empty,
+.candidate-list.empty,
+.selected-empty {
+    color: var(--muted);
+    padding: 16px;
+}
+
+.unmapped-item,
+.candidate {
+    width: 100%;
+    min-height: auto;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 10px;
+    align-items: center;
+    border: 1px solid var(--line);
+    background: #ffffff;
+    color: var(--ink);
+    text-align: left;
+    padding: 11px;
+}
+
+.candidate {
+    grid-template-columns: 1fr auto;
+}
+
+.unmapped-item:hover,
+.unmapped-item.selected,
+.candidate:hover {
+    border-color: var(--brand-dark);
+    background: var(--brand-soft);
+}
+
+.item-code {
+    color: var(--charcoal);
+    font-weight: 900;
+}
+
+.item-name {
+    overflow-wrap: anywhere;
+}
+
+.map-badge {
+    border: 1px solid var(--line);
+    background: var(--warm);
+    color: var(--muted);
+}
+
+.mapper {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    overflow: auto;
+}
+
+.selected-excise {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px;
+    background: var(--warm);
+}
+
+.selected-excise h3 {
+    margin: 4px 0 12px;
+    font-size: 18px;
+    line-height: 1.35;
+}
+
+.eyebrow {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+dl {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0;
+}
+
+dt {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 900;
+}
+
+dd {
+    margin: 2px 0 0;
+    overflow-wrap: anywhere;
+}
+
+.best-match-card {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 10px;
+    align-items: center;
+    border: 1px solid #bde8cd;
+    border-radius: 8px;
+    padding: 14px;
+    background: var(--success-soft);
+}
+
+.best-match-card h3 {
+    margin: 4px 0;
+    font-size: 17px;
+}
+
+.best-match-card p {
+    color: var(--success);
+    font-weight: 900;
+}
+
+.candidate strong,
+.candidate small {
+    display: block;
+    line-height: 1.35;
+}
+
+.score {
+    background: var(--success-soft);
+    color: var(--success);
+}
+
+.mapping-alert {
+    color: var(--muted);
+    font-weight: 900;
+}
+
+.mapping-alert.mapping_required,
+.mapping-alert.needs_token {
+    color: var(--warning);
+}
+
+.mapping-alert.complete {
+    color: var(--success);
+}
+
+.mapping-alert.error {
+    color: var(--danger);
+}
+
+.guardrail-body {
+    padding: 16px;
+}
+
+.guardrail-body p {
+    margin-bottom: 12px;
+    color: var(--ink);
+    font-weight: 900;
+}
+
+.guardrail-body ul {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--warning);
+    font-weight: 800;
+}
+
+.guardrail-actions {
+    background: var(--warning-soft);
+}
+
+.toast {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    max-width: min(380px, calc(100% - 36px));
+    z-index: 40;
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: var(--charcoal);
+    color: #ffffff;
+    box-shadow: 0 12px 30px rgba(18, 39, 50, 0.24);
+}
+
+.toast.success {
+    background: var(--success);
+}
+
+.toast.error {
+    background: var(--danger);
+}
+
+.document-shell {
+    width: min(980px, calc(100% - 32px));
+    margin: 24px auto;
+    display: grid;
+    gap: 16px;
+}
+
+.document-card {
+    display: grid;
+    gap: 16px;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+}
+
+.document-intro {
+    display: grid;
+    gap: 6px;
+}
+
+.document-intro h2 {
+    font-size: 22px;
+}
+
+.document-dropzone {
+    min-height: 240px;
+    display: grid;
+    place-items: center;
+    gap: 8px;
+    padding: 24px;
+    border: 2px dashed var(--brand-border);
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 12px 30px rgba(18, 39, 50, 0.05);
+    cursor: pointer;
+    text-align: center;
+}
+
+.document-dropzone.dragover {
+    border-color: var(--brand-dark);
+    background: var(--warm);
+}
+
+.document-dropzone input {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.document-dropzone strong {
+    color: var(--heading);
+    font-size: 22px;
+}
+
+.document-dropzone span,
+.document-processing span,
+.document-summary span {
+    color: var(--muted);
+    font-weight: 800;
+}
+
+.upload-mark {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    background: var(--brand);
+    color: var(--ink) !important;
+    font-size: 28px;
+    font-weight: 900;
+}
+
+.document-processing,
+.document-summary {
+    display: grid;
+    gap: 10px;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fbfbfc;
+}
+
+.document-processing strong,
+.document-summary strong {
+    color: var(--heading);
+    font-size: 18px;
+}
+
+.document-processing {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+}
+
+.document-spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--line);
+    border-top-color: var(--brand-dark);
+    border-radius: 999px;
+    animation: spin 0.8s linear infinite;
+}
+
+.document-stages {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.document-stages li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.document-stages li::before {
+    content: "";
+    width: 9px;
+    height: 9px;
+    border: 2px solid var(--line);
+    border-radius: 999px;
+}
+
+.document-stages li.active {
+    color: var(--heading);
+}
+
+.document-stages li.active::before,
+.document-stages li.done::before {
+    border-color: var(--brand-dark);
+    background: var(--brand);
+}
+
+.document-review {
+    display: grid;
+    grid-template-columns: minmax(320px, 0.45fr) minmax(420px, 0.55fr);
+    gap: 16px;
+}
+
+.document-preview-card,
+.document-data-card {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    box-shadow: 0 12px 30px rgba(18, 39, 50, 0.06);
+}
+
+.document-preview-card header,
+.document-data-card header,
+.document-action-bar,
+.document-action-bar > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.document-preview {
+    height: min(68vh, 680px);
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #f8fafb;
+}
+
+.document-preview iframe,
+.document-preview object,
+.document-preview embed,
+.document-preview img {
+    width: 100%;
+    height: 100%;
+    border: 0;
+}
+
+.document-preview img {
+    object-fit: contain;
+}
+
+.document-file-meta,
+.document-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.document-file-meta div,
+.document-metrics div {
+    min-width: 0;
+    padding: 11px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fbfbfc;
+}
+
+.document-metrics span {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.document-metrics strong {
+    display: block;
+    margin-top: 3px;
+    color: var(--heading);
+    font-size: 24px;
+}
+
+.document-json {
+    min-height: 360px;
+    max-height: min(58vh, 620px);
+    margin: 0;
+    padding: 14px;
+    overflow: auto;
+    border-radius: 8px;
+    background: #111827;
+    color: #e5e7eb;
+    font: 13px/1.55 var(--font-pos-mono);
+    white-space: pre;
+}
+
+.document-action-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 4;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 -10px 28px rgba(18, 39, 50, 0.08);
+    font-weight: 900;
+}
+
+.document-success,
+.document-error {
+    align-content: start;
+}
+
+.document-error-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+    .control-panel,
+    .status-strip,
+    .action-grid,
+    .mapping-layout,
+    .token-row {
+        grid-template-columns: 1fr;
+    }
+
+    .app-header,
+    .modal-header,
+    .modal-toolbar,
+    .mapping-footer {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .best-match-card {
+        grid-template-columns: 1fr;
+    }
+
+    dl {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 820px) {
+    .document-review,
+    .document-file-meta,
+    .document-metrics {
+        grid-template-columns: 1fr;
+    }
+
+    .document-action-bar,
+    .document-action-bar > div,
+    .document-preview-card header,
+    .document-data-card header {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .document-action-bar button,
+    .document-preview-card button,
+    .document-data-card button {
+        width: 100%;
+    }
+}
+
+
+/* Current embedded / standalone launch page */
+.launch-card {
+    width: min(520px, calc(100% - 32px));
+    margin: 24px auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+}
+
+.launch-card .status-message {
+    flex: 1 1 auto;
+}
+
+.page-toolbar,
+.mapping-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+}
+
+.mapping-toolbar {
+    justify-content: flex-end;
+    padding: 10px 14px;
+    border-radius: 0;
+    border-width: 0 0 1px;
+}
+
+/* Mapping page fills the available iframe / browser viewport. */
+body.mapping-mode {
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    background: #f5f7f8;
+}
+
+.mapping-shell {
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #f5f7f8;
+}
+
+.mapping-layout {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    display: grid;
+    grid-template-columns: minmax(320px, 0.82fr) minmax(460px, 1.18fr);
+    gap: 14px;
+    padding: 14px;
+    overflow: hidden;
+}
+
+.unmapped-list,
+.mapper {
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    overflow: hidden;
+}
+
+.unmapped-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.list-title,
+.mapper-title {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 48px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--warm);
+    color: var(--heading);
+    font-size: 14px;
+    font-weight: 900;
+}
+
+.list-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    padding: 10px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.mapper {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 0 14px 14px;
+}
+
+.mapper-title {
+    margin: 0 -14px;
+}
+
+.selected-excise,
+.selected-empty,
+.best-match-card,
+.search-block {
+    flex: 0 0 auto;
+}
+
+.selected-excise,
+.selected-empty {
+    margin-top: 2px;
+}
+
+.results-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.results-title {
+    flex: 0 0 auto;
+    margin: 2px 0 8px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.candidate-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    padding: 0 2px 0 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.mapping-footer {
+    flex: 0 0 auto;
+    background: var(--surface);
+}
+
+/* Keep both columns visually aligned and usable on smaller screens. */
+@media (max-width: 900px) {
+    body.mapping-mode {
+        height: auto;
+        min-height: 100vh;
+        overflow: auto;
+    }
+
+    .mapping-shell {
+        height: auto;
+        min-height: 100vh;
+        overflow: visible;
+    }
+
+    .mapping-layout {
+        grid-template-columns: 1fr;
+        overflow: visible;
+    }
+
+    .unmapped-list,
+    .mapper {
+        height: auto;
+        min-height: 420px;
+    }
+
+    .list-body,
+    .candidate-list {
+        max-height: 46vh;
+    }
+
+    .page-toolbar,
+    .mapping-footer {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .page-toolbar button,
+    .mapping-footer button {
+        width: 100%;
+    }
+}
+
+
+/* Compact mapping right panel: keep search visible and remove duplicated selected Excise details. */
+#selected-excise,
+.selected-excise,
+.selected-empty {
+    display: none !important;
+}
+
+.mapper {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.mapper-title,
+.search-block,
+.best-match-card {
+    flex: 0 0 auto;
+}
+
+.search-block {
+    display: grid;
+    gap: 7px;
+    padding: 10px 0 2px;
+    background: var(--surface);
+}
+
+.search-block label {
+    display: block;
+    margin: 0;
+    font-weight: 800;
+}
+
+#madhushala-search {
+    width: 100%;
+    min-height: 42px;
+    box-sizing: border-box;
+}
+
+.results-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.candidate-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+
+/* =========================================================
+   PROFESSIONAL COMPACT SHEET-STYLE PRODUCT MAPPING
+   ========================================================= */
+
+.mapping-toolbar {
+    min-height: 42px;
+    padding: 5px 12px;
+    background: #fff;
+}
+
+.mapping-toolbar button {
+    min-height: 32px;
+    height: 32px;
+    padding: 0 12px;
+    font-size: 12px;
+}
+
+.mapping-layout {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(330px, 0.9fr) minmax(480px, 1.1fr);
+    gap: 12px;
+    padding: 12px 14px;
+    overflow: hidden;
+}
+
+/* Both columns always same height */
+.unmapped-list,
+.mapper {
+    height: 100%;
+    min-height: 0;
+    border: 1px solid #e2e5e9;
+    border-radius: 7px;
+    background: #fff;
+    overflow: hidden;
+}
+
+/* LEFT COLUMN */
+.unmapped-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.list-title,
+.mapper-title {
+    flex: 0 0 40px;
+    min-height: 40px;
+    height: 40px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    background: #f8f5ec;
+    border-bottom: 1px solid #e2e5e9;
+
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.list-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none !important;
+    overflow-y: auto !important;
+    overflow-x: hidden;
+    padding: 6px;
+    gap: 4px;
+}
+
+/* Sheet-like excise rows */
+.unmapped-item {
+    min-height: 44px;
+    padding: 6px 8px;
+    gap: 7px;
+
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    align-items: center;
+
+    border: 1px solid #e5e7eb;
+    border-radius: 5px;
+    background: #fff;
+}
+
+.unmapped-item.selected {
+    background: #fff9e5;
+    border-color: #f5b800;
+}
+
+.item-code {
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.item-name {
+    font-size: 12px;
+    line-height: 1.2;
+    font-weight: 700;
+}
+
+.map-badge {
+    padding: 3px 7px;
+    font-size: 10px;
+}
+
+
+/* =========================================================
+   RIGHT COLUMN
+   ========================================================= */
+
+.mapper {
+    display: grid !important;
+    grid-template-rows:
+        40px
+        auto
+        auto
+        minmax(0, 1fr);
+
+    gap: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
+
+.mapper-title {
+    margin: 0 !important;
+}
+
+/* Never show duplicate selected Excise details */
+#selected-excise {
+    display: none !important;
+}
+
+
+/* SEARCH - always visible */
+.search-block {
+    flex: none;
+    display: grid;
+    gap: 4px;
+
+    padding: 7px 10px;
+    margin: 0 !important;
+
+    border-bottom: 1px solid #eceef1;
+    background: #fff;
+}
+
+.search-block label {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.1;
+    font-weight: 700;
+}
+
+#madhushala-search {
+    width: 100%;
+    min-height: 34px;
+    height: 34px;
+
+    padding: 5px 9px;
+
+    border: 1px solid #d7dbe0;
+    border-radius: 5px;
+
+    font-size: 12px;
+}
+
+#madhushala-search:focus {
+    border-color: #f5b800;
+    outline: 2px solid rgba(245, 184, 0, .14);
+}
+
+
+/* BEST MATCH - compact sheet row instead of huge card */
+.best-match-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 7px;
+    align-items: center;
+
+    min-height: 48px;
+    padding: 6px 10px;
+
+    border: 0;
+    border-bottom: 1px solid #d8eadf;
+    border-radius: 0;
+
+    background: #effaf3;
+}
+
+.best-match-card .eyebrow {
+    display: inline;
+    margin-right: 6px;
+    font-size: 9px;
+}
+
+.best-match-card h3 {
+    display: inline;
+    margin: 0;
+
+    font-size: 12px;
+    line-height: 1.15;
+}
+
+.best-match-card p {
+    margin: 3px 0 0;
+    font-size: 10px;
+    line-height: 1;
+}
+
+.best-match-card button {
+    min-height: 30px;
+    height: 30px;
+    padding: 0 10px;
+
+    border-radius: 4px;
+
+    font-size: 10px;
+}
+
+
+/* =========================================================
+   RESULTS AREA GETS ALL REMAINING HEIGHT
+   ========================================================= */
+
+.results-panel {
+    min-height: 0 !important;
+    overflow: hidden !important;
+
+    display: flex !important;
+    flex-direction: column;
+}
+
+.results-title {
+    flex: 0 0 auto;
+
+    margin: 0;
+    padding: 5px 10px;
+
+    border-bottom: 1px solid #eceef1;
+
+    color: #6e6e73;
+    background: #fafafa;
+
+    font-size: 10px;
+    line-height: 1.2;
+    font-weight: 800;
+}
+
+.candidate-list {
+    flex: 1 1 auto !important;
+
+    min-height: 0 !important;
+    max-height: none !important;
+
+    overflow-y: auto !important;
+    overflow-x: hidden;
+
+    display: block !important;
+
+    padding: 4px !important;
+}
+
+
+/* Search result = spreadsheet row */
+.candidate {
+    width: 100%;
+    min-height: 39px;
+
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 7px;
+
+    margin: 0 0 3px;
+    padding: 5px 7px;
+
+    border: 1px solid #e8eaed;
+    border-radius: 4px;
+
+    background: #fff;
+    text-align: left;
+}
+
+.candidate:hover {
+    background: #fff9e5;
+    border-color: #f5b800;
+}
+
+.candidate strong {
+    display: block;
+    font-size: 11px;
+    line-height: 1.15;
+}
+
+.candidate small {
+    display: block;
+    margin-top: 2px;
+
+    color: #777;
+
+    font-size: 9px;
+    line-height: 1.1;
+}
+
+.score {
+    padding: 3px 6px;
+    font-size: 9px;
+}
+
+
+/* Thin scrollbar */
+.list-body,
+.candidate-list {
+    scrollbar-width: thin;
+    scrollbar-color: #9ca3af #f3f4f6;
+}
+
+.list-body::-webkit-scrollbar,
+.candidate-list::-webkit-scrollbar {
+    width: 7px;
+}
+
+.list-body::-webkit-scrollbar-thumb,
+.candidate-list::-webkit-scrollbar-thumb {
+    border-radius: 8px;
+    background: #9ca3af;
+}
+
+.list-body::-webkit-scrollbar-track,
+.candidate-list::-webkit-scrollbar-track {
+    background: #f3f4f6;
+}
+
+
+/* Footer should not consume iframe space */
+.mapping-footer {
+    flex: 0 0 48px;
+    min-height: 48px;
+
+    padding: 6px 14px;
+
+    background: #fff;
+    font-size: 12px;
+}
+
+.mapping-footer button {
+    min-height: 32px;
+    height: 32px;
+    padding: 0 14px;
+    font-size: 11px;
+}
+
+
+
+/* =========================================================
+   FIXED 10-ROW MAPPING SHEETS
+   ========================================================= */
+
+:root {
+    --mapping-row-height: 42px;
+    --mapping-visible-rows: 10;
+    --mapping-list-height:
+        calc(var(--mapping-row-height) * var(--mapping-visible-rows));
+}
+
+
+/* Both columns same visual height */
+.mapping-layout {
+    align-items: start;
+}
+
+.unmapped-list,
+.mapper {
+    min-height: 0;
+    height: auto;
+}
+
+
+/* LEFT LIST */
+.list-body {
+    height: var(--mapping-list-height) !important;
+    min-height: var(--mapping-list-height) !important;
+    max-height: var(--mapping-list-height) !important;
+
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+
+    display: block !important;
+    padding: 4px !important;
+}
+
+
+/* Left rows */
+.unmapped-item {
+    width: 100%;
+    height: var(--mapping-row-height);
+    min-height: var(--mapping-row-height);
+    max-height: var(--mapping-row-height);
+
+    margin-bottom: 3px;
+    padding: 4px 7px;
+
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    align-items: center;
+
+    overflow: hidden;
+}
+
+.unmapped-item:last-child {
+    margin-bottom: 0;
+}
+
+.item-name {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+
+    font-size: 11px;
+    line-height: 1.1;
+}
+
+
+/* =========================================================
+   RIGHT SIDE
+   ========================================================= */
+
+/*
+   Header + search + best match stay above.
+   Product list itself gets same 10-row height as left.
+*/
+.results-panel {
+    min-height: 0 !important;
+    overflow: hidden !important;
+}
+
+.candidate-list {
+    height: var(--mapping-list-height) !important;
+    min-height: var(--mapping-list-height) !important;
+    max-height: var(--mapping-list-height) !important;
+
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+
+    display: block !important;
+    padding: 4px !important;
+}
+
+
+/* Right rows */
+.candidate {
+    width: 100%;
+    height: var(--mapping-row-height);
+    min-height: var(--mapping-row-height);
+    max-height: var(--mapping-row-height);
+
+    margin-bottom: 3px;
+    padding: 4px 7px;
+
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+
+    overflow: hidden;
+}
+
+.candidate:last-child {
+    margin-bottom: 0;
+}
+
+.candidate strong {
+    font-size: 11px;
+    line-height: 1.1;
+
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.candidate small {
+    margin-top: 1px;
+
+    font-size: 9px;
+    line-height: 1;
+
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+
+/* Same scrollbar appearance */
+.list-body,
+.candidate-list {
+    scrollbar-width: thin;
+    scrollbar-color: #9ca3af #f3f4f6;
+}
+
+.list-body::-webkit-scrollbar,
+.candidate-list::-webkit-scrollbar {
+    width: 7px;
+}
+
+.list-body::-webkit-scrollbar-thumb,
+.candidate-list::-webkit-scrollbar-thumb {
+    background: #9ca3af;
+    border-radius: 8px;
+}
+
+.list-body::-webkit-scrollbar-track,
+.candidate-list::-webkit-scrollbar-track {
+    background: #f3f4f6;
+}
+
+
+
+
+.upload-choice-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.qr-link-panel {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.qr-link-panel input {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 11px 12px;
+    font-size: 13px;
+}
+
+.qr-link-panel button {
+    white-space: nowrap;
+}
+.qr-dropzone .upload-mark {
+    font-size: 18px;
+}
+
+.purchase-form {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fbfbfc;
+}
+
+.purchase-form label {
+    display: grid;
+    gap: 5px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.purchase-form input,
+.purchase-form select {
+    min-width: 0;
+    height: 34px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 0 9px;
+    font: inherit;
+    background: #fff;
+}
+
+.purchase-form .wide {
+    grid-column: 1 / -1;
+}
+
+@media (max-width: 820px) {
+    .upload-choice-grid,
+    .purchase-form {
+        grid-template-columns: 1fr;
+    }
+}
+
+</style>
 </head>
 <body>
-    <main class="app-shell">
-        <header class="app-header">
-            <div>
-                <span class="app-kicker">Madhushala</span>
-                <h1>Excise Import</h1>
-            </div>
-            <div class="status-pill" id="api-token-pill">Checking service</div>
-        </header>
-
-        <p id="last-error" class="error" hidden></p>
-
-        <section class="operator-card" aria-label="Excise import">
-            <div class="operator-copy">
-                <span class="app-kicker">Prepare Indent</span>
-                <h2>Import Excise products</h2>
-                <p id="instruction-message">Open the portal, enter the CAPTCHA, and update case quantities. Product mapping opens automatically when required.</p>
-            </div>
-            <button id="open-excise" class="portal-button" type="button">
-                <span>Open Excise Portal</span>
-                <span aria-hidden="true">→</span>
-            </button>
-            <div class="operator-status" aria-live="polite">
-                <span id="extension-status">Checking browser extension…</span>
-                <span id="capture-status">No items captured yet</span>
-                <span id="mapping-alert" class="mapping-alert idle">Waiting</span>
-            </div>
-        </section>
+    <main id="launch-view" class="launch-card">
+        <button id="open-portal" type="button">Open Excise Portal</button>
+        <p id="status-message" class="status-message"></p>
     </main>
 
-    <div id="credentials-modal" class="modal" hidden>
-        <div class="modal-backdrop"></div>
-        <section class="credential-panel" role="dialog" aria-modal="true" aria-labelledby="credentials-title">
-            <header class="modal-header">
-                <div>
-                    <span class="app-kicker">One-time setup</span>
-                    <h2 id="credentials-title">Excise portal credentials</h2>
-                </div>
-                <button id="close-credentials" type="button" class="icon-button" aria-label="Close">X</button>
-            </header>
-            <p class="credential-help">These are your BEVCO/WB Excise credentials, not your CRM login. They are stored only in this Chrome profile.</p>
-            <form id="credentials-form" class="credentials-form" autocomplete="off">
-                <div class="form-row">
-                    <label for="username">Excise User ID</label>
-                    <input id="username" name="username" type="text" autocomplete="username" required autofocus>
-                </div>
-                <div class="form-row">
-                    <label for="password">Excise Password</label>
-                    <input id="password" name="password" type="password" autocomplete="current-password" required>
-                </div>
-                <div class="credential-actions">
-                    <button id="cancel-credentials" type="button" class="secondary">Cancel</button>
-                    <button type="submit">Save &amp; Open Portal</button>
-                </div>
-            </form>
+    <main id="document-import-view" class="document-shell" hidden>
+        <header class="page-toolbar">
+            <h1>Import Purchase Document</h1>
+            <button id="document-refresh" type="button" class="secondary">Upload Another</button>
+        </header>
+
+        <section id="document-upload-panel" class="document-card">
+            <div class="document-intro">
+                <h2>Import Products</h2>
+                <p>Use the document importer for invoices. Use the QR importer for pass/authentication QR images so they do not go through Llama unless needed.</p>
+            </div>
+            <div class="upload-choice-grid">
+                <label id="document-dropzone" class="document-dropzone">
+                    <input id="document-file" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
+                    <span class="upload-mark" aria-hidden="true">+</span>
+                    <strong>Purchase PDF / Image</strong>
+                    <span>Invoice or product document, up to 20 MB</span>
+                </label>
+                <label id="qr-dropzone" class="document-dropzone qr-dropzone">
+                    <input id="qr-file" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png">
+                    <span class="upload-mark" aria-hidden="true">QR</span>
+                    <strong>QR Image</strong>
+                    <span>Scan QR locally, open the link, extract web data</span>
+                </label>
+            </div>
+            <div class="qr-link-panel">
+                <input id="qr-link-input" type="url" placeholder="Paste QR link manually">
+                <button id="qr-link-submit" type="button" class="secondary">Extract QR Link</button>
+            </div>
+            <p id="document-status" class="status-message"></p>
         </section>
-    </div>
 
-    <div id="mapping-modal" class="modal" hidden>
-        <div class="modal-backdrop" data-close-modal></div>
-        <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="mapping-title">
-            <header class="modal-header">
-                <div>
-                    <span class="app-kicker">Excise → Madhushala</span>
-                    <h2 id="mapping-title">Product Mapping</h2>
-                </div>
-                <button id="close-mapping" type="button" class="icon-button" aria-label="Close mapping">X</button>
-            </header>
+        <section id="document-processing-panel" class="document-card document-processing" hidden>
+            <span class="document-spinner" aria-hidden="true"></span>
+            <div>
+                <strong id="document-progress-title">Uploading document</strong>
+                <p id="document-progress-detail">Preparing the document for extraction.</p>
+            </div>
+            <ol class="document-stages">
+                <li data-stage="uploading">Uploading document</li>
+                <li data-stage="extracting">Extracting products</li>
+                <li data-stage="normalizing">Normalizing product data</li>
+                <li data-stage="checking">Checking Madhushala mappings</li>
+            </ol>
+        </section>
 
-            <div class="modal-toolbar">
-                <div class="view-switch" aria-label="Mapping list view">
-                    <button id="show-latest-unmapped" class="selected" type="button">Latest Items</button>
-                    <button id="show-all-unmapped" type="button">All Unmapped</button>
-                </div>
-                <button id="refresh-workspace" type="button" class="secondary">Reload</button>
+        <section id="document-review-panel" class="document-review" hidden>
+            <div class="document-preview-card">
+                <header>
+                    <h2>Uploaded Document</h2>
+                    <button id="replace-document" type="button" class="secondary">Replace Document</button>
+                </header>
+                <div id="document-preview" class="document-preview"></div>
+                <dl class="document-file-meta">
+                    <div><dt>Filename</dt><dd id="review-filename">-</dd></div>
+                    <div><dt>Type</dt><dd id="review-filetype">-</dd></div>
+                    <div><dt>Size</dt><dd id="review-filesize">-</dd></div>
+                </dl>
             </div>
 
-            <div class="mapping-layout">
-                <aside class="unmapped-list" aria-label="Unmapped excise items">
-                    <div class="list-title">
-                        <span>Unmapped Excise Items</span>
-                        <span id="unmapped-count">0</span>
-                    </div>
-                    <div id="unmapped-items" class="list-body empty">No items</div>
-                </aside>
-
-                <section class="mapper">
-                    <div id="selected-excise" class="selected-empty">Choose an item.</div>
-
-                    <div id="best-match-card" class="best-match-card" hidden></div>
-
-                    <div class="search-block">
-                        <label for="madhushala-search">Search Madhushala Item</label>
-                        <input id="madhushala-search" type="search" placeholder="Search name, code, barcode or ML" autocomplete="off">
-                    </div>
-
-                    <div>
-                        <h3 class="results-title">Suggested / Search Results</h3>
-                        <div id="suggestions" class="candidate-list empty">Select an Excise item to see matches</div>
-                    </div>
-                </section>
+            <div class="document-data-card">
+                <header>
+                    <h2>Extracted Data</h2>
+                    <button id="copy-document-json" type="button" class="secondary">Copy JSON</button>
+                </header>
+                <div class="document-metrics">
+                    <div><span>Products Detected</span><strong id="metric-detected">0</strong></div>
+                    <div><span>Recognized</span><strong id="metric-recognized">0</strong></div>
+                    <div><span>Require Mapping</span><strong id="metric-unmapped">0</strong></div>
+                </div>
+                <form id="purchase-form" class="purchase-form">
+                    <label>Year Code<input id="purchase-year-code" name="yearCode" required placeholder="2026-27"></label>
+                    <label>TRN Date<input id="purchase-trn-date" name="trnDate" type="date" required></label>
+                    <label>Doc Date<input id="purchase-doc-date" name="docDate" type="date" required></label>
+                    <label>Invoice No<input id="purchase-doc-no" name="docNo" required></label>
+                    <label>TP Pass No<input id="purchase-tp-pass-no" name="tpPassNo"></label>
+                    <label>Supplier Code<input id="purchase-supplier-code" name="supplierCode" required></label>
+                    <label>Store Code<input id="purchase-store-code" name="storeCode" required></label>
+                    <label>Purchase A/c<input id="purchase-acc-code" name="purchaseAccCode" required></label>
+                    <label>User Code<input id="purchase-user-code" name="userCode" required></label>
+                    <label>Tax Mode<select id="purchase-tax-mode" name="taxMode"><option value="ITEMWISE">ITEMWISE</option><option value="BILLWISE">BILLWISE</option></select></label>
+                    <label class="wide">Narration<input id="purchase-narration" name="narration" value="PDF import"></label>
+                </form>
+                <pre id="document-json" class="document-json">{}</pre>
             </div>
-
-            <footer class="mapping-footer">
-                <div id="mapping-summary">Selected: 0</div>
-                <button id="submit-mappings" type="button" disabled>Save All</button>
-            </footer>
         </section>
-    </div>
+
+        <section id="document-success-panel" class="document-card document-success" hidden>
+            <h2>All extracted products are already mapped.</h2>
+            <p>No mapping review is required for this document.</p>
+            <button id="success-upload-another" type="button">Upload Another</button>
+        </section>
+
+        <section id="document-error-panel" class="document-card document-error" hidden>
+            <h2>Document import failed</h2>
+            <p id="document-error-message">Please try again.</p>
+            <div class="document-error-actions">
+                <button id="retry-document" type="button">Retry</button>
+                <button id="choose-another-document" type="button" class="secondary">Choose Another</button>
+            </div>
+        </section>
+
+        <footer id="document-action-bar" class="document-action-bar" hidden>
+            <span id="document-action-summary">0 products extracted</span>
+            <div>
+                <button id="document-upload-another" type="button" class="secondary">Upload Another</button>
+                <button id="save-purchase" type="button" class="secondary" hidden>Save Purchase</button>
+                <button id="continue-document-mapping" type="button">Continue to Mapping</button>
+            </div>
+        </footer>
+    </main>
+
+    <main id="mapping-view" class="mapping-shell" hidden>
+        <div class="mapping-layout">
+            <aside class="unmapped-list" aria-label="Unmapped excise items">
+                <div class="list-title">
+                    <span>Unmapped Excise Items</span>
+                    <span id="unmapped-count">0</span>
+                </div>
+                <div id="unmapped-items" class="list-body empty">No items</div>
+            </aside>
+
+            <section class="mapper" aria-label="Madhushala product mapping">
+                <div class="mapper-title">Madhushala Item</div>
+                <div id="best-match-card" class="best-match-card" hidden></div>
+                <div class="search-block">
+                    <label for="madhushala-search">Search Madhushala Item</label>
+                    <input id="madhushala-search" type="search" placeholder="Search name, code, barcode or ML" autocomplete="off">
+                </div>
+                <div class="results-panel">
+                    <h3 class="results-title">Suggested / Search Results</h3>
+                    <div id="suggestions" class="candidate-list empty">Select an Excise item to see matches</div>
+                </div>
+            </section>
+        </div>
+
+        <footer class="mapping-footer">
+            <div id="mapping-summary">Selected: 0</div>
+            <button id="save-purchase-from-mapping" type="button" class="secondary" hidden>Save Purchase</button>
+            <button id="submit-mappings" type="button" disabled>Save Mapping</button>
+        </footer>
+    </main>
 
     <div id="guardrail-modal" class="modal" hidden>
         <div class="modal-backdrop"></div>
@@ -133,6 +1959,937 @@
         </section>
     </div>
 
-    <script src="static/app.js"></script>
+    <script>
+const pageParams = new URLSearchParams(window.location.search);
+const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, "?"));
+const sessionId = pageParams.get("sessionId") || "";
+const sessionToken = hashParams.get("session") || sessionStorage.getItem("exciseSession") || "";
+const mappingMode = pageParams.get("view") === "mapping";
+const documentMode = window.location.pathname.endsWith("/document-import");
+const activeJobId = sanitizeJobId(pageParams.get("jobId")) || "";
+const basePath = window.location.pathname.startsWith("/excise-import/") ? "/excise-import" : "";
+
+document.body.classList.toggle("mapping-mode", mappingMode);
+
+if (sessionToken) {
+    sessionStorage.setItem("exciseSession", sessionToken);
+}
+
+let extensionConnected = false;
+const extensionRequests = new Map();
+let workspace = {unmappedItems: [], madhushalaItems: []};
+let selectedExciseCode = null;
+const selectedMappings = new Map();
+let pendingGuardrailAction = null;
+let currentDocumentJobId = activeJobId;
+let currentDocumentFile = null;
+let currentDocumentResult = null;
+let currentPreviewUrl = "";
+let currentUploadKind = "document";
+let mappingRefreshTimer = null;
+let mappingRefreshInFlight = false;
+
+function purchaseHeaderStorageKey(jobId = currentDocumentJobId) {
+    return `purchaseHeader:${sessionId || "session"}:${jobId || "latest"}`;
+}
+
+function todayIso() {
+    return new Date().toISOString().slice(0, 10);
+}
+
+function defaultYearCode() {
+    const now = new Date();
+    const year = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    return `${year}-${String((year + 1) % 100).padStart(2, "0")}`;
+}
+
+function setInputValue(id, value) {
+    const input = document.getElementById(id);
+    if (input && !input.value && value) input.value = value;
+}
+
+function collectPurchaseHeader() {
+    return {
+        yearCode: document.getElementById("purchase-year-code")?.value.trim() || "",
+        trnDate: document.getElementById("purchase-trn-date")?.value || "",
+        docDate: document.getElementById("purchase-doc-date")?.value || "",
+        docNo: document.getElementById("purchase-doc-no")?.value.trim() || "",
+        tpPassNo: document.getElementById("purchase-tp-pass-no")?.value.trim() || "",
+        supplierCode: document.getElementById("purchase-supplier-code")?.value.trim() || "",
+        storeCode: document.getElementById("purchase-store-code")?.value.trim() || "",
+        purchaseAccCode: document.getElementById("purchase-acc-code")?.value.trim() || "",
+        userCode: document.getElementById("purchase-user-code")?.value.trim() || "",
+        taxMode: document.getElementById("purchase-tax-mode")?.value || "ITEMWISE",
+        narration: document.getElementById("purchase-narration")?.value.trim() || "PDF import",
+    };
+}
+
+function applyPurchaseHeader(header = {}) {
+    const today = todayIso();
+    const pairs = {
+        "purchase-year-code": header.yearCode || defaultYearCode(),
+        "purchase-trn-date": header.trnDate || today,
+        "purchase-doc-date": header.docDate || today,
+        "purchase-doc-no": header.docNo || currentDocumentResult?.extractedDocument?.invoiceNumber || "",
+        "purchase-tp-pass-no": header.tpPassNo || "",
+        "purchase-supplier-code": header.supplierCode || "",
+        "purchase-store-code": header.storeCode || "",
+        "purchase-acc-code": header.purchaseAccCode || "",
+        "purchase-user-code": header.userCode || "",
+        "purchase-narration": header.narration || "PDF import",
+    };
+    Object.entries(pairs).forEach(([id, value]) => setInputValue(id, value));
+    const taxMode = document.getElementById("purchase-tax-mode");
+    if (taxMode && header.taxMode) taxMode.value = header.taxMode;
+}
+
+function persistPurchaseHeader() {
+    const jobId = sanitizeJobId(currentDocumentJobId);
+    if (!jobId) return;
+    sessionStorage.setItem(purchaseHeaderStorageKey(jobId), JSON.stringify(collectPurchaseHeader()));
+}
+
+function loadPurchaseHeader(jobId = currentDocumentJobId) {
+    try {
+        return JSON.parse(sessionStorage.getItem(purchaseHeaderStorageKey(jobId)) || "{}");
+    } catch {
+        return {};
+    }
+}
+
+function validatePurchaseHeader(header) {
+    const required = ["yearCode", "trnDate", "docDate", "docNo", "supplierCode", "storeCode", "purchaseAccCode", "userCode"];
+    return required.filter((key) => !String(header[key] || "").trim());
+}
+
+function purchaseResponseText(payload) {
+    const response = payload?.madhushalaResponse || {};
+    const trnNo = response.trnNo || response.trnNumber || response.data?.trnNo || "";
+    const message = response.message || payload?.message || "Purchase saved successfully.";
+    const itemCount = payload?.purchasePayload?.items?.length || 0;
+    return {trnNo, message, itemCount};
+}
+
+function renderPurchaseSuccess(payload, source = "review") {
+    const {trnNo, message, itemCount} = purchaseResponseText(payload);
+    const title = source === "mapping" ? "Mapping saved and purchase created." : "Purchase saved successfully.";
+    const detail = `${message}${trnNo ? ` TRN No: ${trnNo}.` : ""}${itemCount ? ` Items saved: ${itemCount}.` : ""}`;
+
+    const success = document.getElementById("document-success-panel");
+    if (success) {
+        const heading = success.querySelector("h2");
+        const paragraph = success.querySelector("p");
+        if (heading) heading.textContent = title;
+        if (paragraph) paragraph.textContent = detail;
+    }
+    setText(document.getElementById("document-action-summary"), detail);
+    setText(document.getElementById("document-json"), JSON.stringify(payload, null, 2));
+
+    if (source === "mapping") {
+        stopMappingAutoRefresh();
+        const mappingView = document.getElementById("mapping-view");
+        if (mappingView) {
+            mappingView.innerHTML = `
+                <section class="document-card document-success mapping-success">
+                    <h2>${title}</h2>
+                    <p>${detail}</p>
+                    <button id="mapping-success-upload" type="button">Import Another Document</button>
+                </section>
+            `;
+            document.getElementById("mapping-success-upload")?.addEventListener("click", () => {
+                window.location.href = `${basePath}/document-import?sessionId=${encodeURIComponent(sessionId)}#session=${encodeURIComponent(sessionToken)}`;
+            });
+        }
+    } else {
+        setDocumentImportState("complete", detail);
+    }
+    showToast(detail, "success");
+}
+
+async function savePurchaseFromJob(source = "review") {
+    const jobId = sanitizeJobId(currentDocumentJobId || activeJobId);
+    if (!jobId) {
+        showToast("No document job is ready for purchase save", "error");
+        return;
+    }
+    let header = source === "mapping" ? loadPurchaseHeader(jobId) : collectPurchaseHeader();
+    const missing = validatePurchaseHeader(header);
+    if (missing.length) {
+        showToast(`Fill purchase fields first: ${missing.join(", ")}`, "error");
+        return;
+    }
+    persistPurchaseHeader();
+    const button = source === "mapping" ? document.getElementById("save-purchase-from-mapping") : document.getElementById("save-purchase");
+    if (button) button.disabled = true;
+    try {
+        const payload = await api(`/api/v1/document-import/jobs/${encodeURIComponent(jobId)}/purchase/save`, {
+            method: "POST",
+            body: JSON.stringify({header}),
+        });
+        renderPurchaseSuccess(payload, source);
+    } catch (error) {
+        showToast(error.message || "Purchase save failed", "error");
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function decodeQrFromImage(file) {
+    if (!("BarcodeDetector" in window)) {
+        throw new Error("QR scanning is not supported in this browser. Paste the QR link below after scanning externally.");
+    }
+    const bitmap = await createImageBitmap(file);
+    try {
+        const detector = new BarcodeDetector({formats: ["qr_code"]});
+        const codes = await detector.detect(bitmap);
+        const value = codes?.[0]?.rawValue || "";
+        if (!value) throw new Error("No QR code detected in this image. Paste the QR link below if the code is readable on your phone.");
+        return value;
+    } finally {
+        bitmap.close?.();
+    }
+}
+
+async function extractQrUrl(qrUrl) {
+    const cleanUrl = String(qrUrl || "").trim();
+    if (!cleanUrl) throw new Error("Paste a QR link first.");
+    const payload = await api("/api/v1/document-import/qr/extract", {
+        method: "POST",
+        body: JSON.stringify({url: cleanUrl}),
+    });
+    renderQrReview(payload);
+}
+
+function renderQrReview(payload) {
+    currentUploadKind = "qr";
+    currentDocumentResult = payload;
+    currentDocumentJobId = "";
+    setText(document.getElementById("metric-detected"), "1");
+    setText(document.getElementById("metric-recognized"), "0");
+    setText(document.getElementById("metric-unmapped"), "0");
+    setText(document.getElementById("document-action-summary"), `QR link opened: ${payload.finalUrl || payload.url || "extracted"}`);
+    setHidden(document.getElementById("purchase-form"), true);
+    setHidden(document.getElementById("save-purchase"), true);
+    setHidden(document.getElementById("continue-document-mapping"), true);
+    setText(document.getElementById("document-json"), JSON.stringify(payload, null, 2));
+    setDocumentImportState("review");
+}
+
+async function uploadQr(file) {
+    if (!sessionToken) {
+        setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
+        setText(documentElements().errorMessage, "Missing or expired CRM session.");
+        return;
+    }
+    currentUploadKind = "qr";
+    currentDocumentFile = file;
+    renderDocumentPreview(file);
+    setDocumentImportState("uploading");
+    const elements = documentElements();
+    setText(elements.progressTitle, "Scanning QR image");
+    setText(elements.progressDetail, "Reading the QR locally before opening the linked page. This does not use Llama credits.");
+    try {
+        const qrUrl = await decodeQrFromImage(file);
+        setDocumentImportState("extracting");
+        const latestElements = documentElements();
+        setText(latestElements.progressTitle, "Opening QR link");
+        setText(latestElements.progressDetail, "Fetching the linked page and extracting visible data.");
+        await extractQrUrl(qrUrl);
+    } catch (error) {
+        setText(documentElements().errorMessage, error.message || "QR extraction failed.");
+        setDocumentImportState("error");
+    }
+}
+
+async function submitQrLink() {
+    if (!sessionToken) {
+        setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
+        setText(documentElements().errorMessage, "Missing or expired CRM session.");
+        return;
+    }
+    const input = document.getElementById("qr-link-input");
+    const button = document.getElementById("qr-link-submit");
+    if (button) button.disabled = true;
+    setDocumentImportState("extracting");
+    const elements = documentElements();
+    setText(elements.progressTitle, "Opening QR link");
+    setText(elements.progressDetail, "Fetching the linked page and extracting visible data. This does not use Llama credits.");
+    try {
+        await extractQrUrl(input?.value || "");
+    } catch (error) {
+        setText(documentElements().errorMessage, error.message || "QR link extraction failed.");
+        setDocumentImportState("error");
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+function apiUrl(path) {
+    return `${basePath}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function sanitizeJobId(value) {
+    if (!value || typeof value !== "string") return "";
+    const trimmed = value.trim();
+    if (!trimmed || /^\[object\s+\w+Event\]$/i.test(trimmed)) return "";
+    if (trimmed === "[object PointerEvent]" || trimmed === "[object Event]" || trimmed === "[object MouseEvent]") return "";
+    return /^[a-zA-Z0-9_-]{8,128}$/.test(trimmed) ? trimmed : "";
+}
+
+function isEventLike(value) {
+    return value && typeof value === "object" && ("type" in value || "target" in value || "currentTarget" in value);
+}
+
+function setHidden(element, hidden) {
+    if (element) element.hidden = hidden;
+}
+
+function setText(element, text) {
+    if (element) element.textContent = text;
+}
+
+async function api(path, options = {}) {
+    const response = await fetch(apiUrl(path), {
+        ...options,
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${sessionToken}`,
+            ...(options.headers || {}),
+        },
+    });
+    const text = await response.text();
+    let data = null;
+    if (text) {
+        try {
+            data = JSON.parse(text);
+        } catch {
+            data = {detail: text};
+        }
+    }
+    if (!response.ok) {
+        throw new Error(data?.detail || data?.error || `HTTP ${response.status}`);
+    }
+    return data;
+}
+
+function extensionRequest(type, payload = {}, timeoutMs = 15000) {
+    return new Promise((resolve, reject) => {
+        if (!extensionConnected) {
+            reject(new Error("Madhushala Excise Chrome extension is not installed or not reloaded."));
+            return;
+        }
+
+        const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const timeout = setTimeout(() => {
+            extensionRequests.delete(requestId);
+            reject(new Error("Extension did not respond."));
+        }, timeoutMs);
+        extensionRequests.set(requestId, {resolve, reject, timeout});
+        window.postMessage({source: "madhushala-web", requestId, type, payload}, window.location.origin);
+    });
+}
+
+window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    const message = event.data || {};
+    if (message.source !== "madhushala-extension") return;
+
+    if (message.type === "READY") {
+        extensionConnected = true;
+        return;
+    }
+
+    const pending = extensionRequests.get(message.requestId);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    extensionRequests.delete(message.requestId);
+    const response = message.response || {};
+    if (message.ok && response.ok !== false) {
+        pending.resolve(response.result ?? response);
+    } else {
+        pending.reject(new Error(response.error || message.error || "Extension action failed"));
+    }
+});
+window.postMessage({source: "madhushala-web", type: "DISCOVER"}, window.location.origin);
+
+function setStatus(message, isError = false) {
+    const element = document.getElementById("status-message");
+    if (!element) return;
+    element.textContent = message;
+    element.className = isError ? "status-message error" : "status-message ok";
+}
+
+function showToast(message, type = "info") {
+    const toast = document.createElement("div");
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3500);
+}
+
+async function initLaunch() {
+    if (!sessionToken || !sessionId) {
+        setStatus("Open this page from the Madhushala CRM Import button.", true);
+        return;
+    }
+
+    try {
+        const session = await api("/session/status");
+        const sessionInfo = document.getElementById("session-info");
+        if (sessionInfo) {
+            sessionInfo.textContent = `Shop ${session.shopCode} | Session expires ${new Date(session.expiresAt).toLocaleString()}`;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        const mappingUrl = `${window.location.origin}${basePath}/?view=mapping&sessionId=${encodeURIComponent(sessionId)}#session=${encodeURIComponent(sessionToken)}`;
+        await extensionRequest("SET_SESSION", {
+            bridgeUrl: `${window.location.origin}${basePath}`,
+            sessionId,
+            sessionToken,
+            mappingUrl,
+        });
+        const settings = await extensionRequest("GET_SETTINGS");
+        if (!settings.exciseUser || !settings.excisePassword) {
+            setStatus("Save WB Excise credentials once from the Chrome extension, then open the portal.", true);
+        } else {
+            setStatus("Ready. Open Excise Portal and enter CAPTCHA manually.");
+        }
+    } catch (error) {
+        setStatus(error.message || "CRM session could not be opened.", true);
+    }
+}
+
+async function openPortal() {
+    try {
+        const result = await extensionRequest("OPEN_PORTAL", {}, 30000);
+        if (result.status === "needs_credentials") {
+            setStatus("Save WB Excise credentials once from the Chrome extension, then click Open Excise Portal again.", true);
+            return;
+        }
+        setStatus("WB Excise opened. Enter CAPTCHA, login, then prepare indent.");
+    } catch (error) {
+        setStatus(error.message || "Could not open Excise portal.", true);
+    }
+}
+
+function itemLabel(item) {
+    return `${item.itemCode} - ${item.itemName}`;
+}
+
+function parseNumber(value) {
+    const match = String(value || "").match(/\d+/);
+    return match ? Number(match[0]) : 0;
+}
+
+function findMadhushalaItem(itemCode) {
+    return workspace.madhushalaItems.find((item) => String(item.itemCode) === String(itemCode));
+}
+
+function guardrailIssues(exciseItem, madhushalaItem, score = null) {
+    const issues = [];
+    const leftMl = parseNumber(exciseItem?.capturedItem?.measureMl || exciseItem?.itemName);
+    const rightMl = parseNumber(madhushalaItem?.ml || madhushalaItem?.itemName);
+    const leftPack = parseNumber(exciseItem?.capturedItem?.bottlesPerCase);
+    const rightPack = parseNumber(madhushalaItem?.packing);
+
+    if (leftMl && rightMl && leftMl !== rightMl) issues.push(`ML mismatch: Excise ${leftMl} ML, Madhushala ${rightMl} ML`);
+    if (leftPack && rightPack && leftPack !== rightPack) issues.push(`Pack mismatch: Excise ${leftPack}, Madhushala ${rightPack}`);
+    if (score !== null && Number(score) > 0 && Number(score) < 55) issues.push(`Low match confidence: ${Math.round(score)}%`);
+    return issues;
+}
+
+function showGuardrailModal(issues, onConfirm) {
+    pendingGuardrailAction = onConfirm;
+    const modal = document.getElementById("guardrail-modal");
+    const body = document.getElementById("guardrail-body");
+    if (!modal || !body) return;
+    body.innerHTML = `<p>This match looks risky. Please check before saving.</p><ul>${issues.map((issue) => `<li>${issue}</li>`).join("")}</ul>`;
+    modal.hidden = false;
+}
+
+function closeGuardrailModal() {
+    setHidden(document.getElementById("guardrail-modal"), true);
+    pendingGuardrailAction = null;
+}
+
+function currentExciseItem() {
+    return workspace.unmappedItems.find((item) => String(item.exciseItemCode) === String(selectedExciseCode));
+}
+
+function renderWorkspace() {
+    const list = document.getElementById("unmapped-items");
+    if (!list) return;
+    setText(document.getElementById("unmapped-count"), String(workspace.unmappedItems.length));
+
+    if (!workspace.unmappedItems.length) {
+        list.className = "list-body empty";
+        list.textContent = "No unmapped items";
+        renderSelectedExcise(null);
+        updateSummary();
+        return;
+    }
+
+    list.className = "list-body";
+    list.innerHTML = workspace.unmappedItems.map((item) => {
+        const code = String(item.exciseItemCode);
+        const mapped = selectedMappings.get(code) || item.selectedItemCode;
+        return `
+            <button class="unmapped-item ${code === String(selectedExciseCode) ? "selected" : ""}" data-excise="${code}" type="button">
+                <span class="item-code">${code}</span>
+                <span class="item-name">${item.itemName}</span>
+                <span class="${mapped ? "map-badge done" : "map-badge"}">${mapped ? "Selected" : "Pending"}</span>
+            </button>`;
+    }).join("");
+
+    list.querySelectorAll("[data-excise]").forEach((button) => {
+        button.addEventListener("click", () => {
+            selectedExciseCode = button.dataset.excise;
+            const search = document.getElementById("madhushala-search");
+            if (search) search.value = "";
+            renderWorkspace();
+        });
+    });
+
+    if (!selectedExciseCode && workspace.unmappedItems[0]) {
+        selectedExciseCode = String(workspace.unmappedItems[0].exciseItemCode);
+        renderWorkspace();
+        return;
+    }
+    if (selectedExciseCode && !currentExciseItem()) {
+        selectedExciseCode = workspace.unmappedItems[0] ? String(workspace.unmappedItems[0].exciseItemCode) : null;
+    }
+
+    renderSelectedExcise(currentExciseItem());
+    updateSummary();
+}
+
+function renderSelectedExcise(item) {
+    const card = document.getElementById("best-match-card");
+
+    if (!item) {
+        renderCandidates([]);
+        setHidden(card, true);
+        return;
+    }
+
+    const best = item.suggestions?.[0];
+    if (best) {
+        if (!card) return;
+        card.hidden = false;
+        card.innerHTML = `
+            <div>
+                <span class="eyebrow">Best Match</span>
+                <h3>${itemLabel(best.item)}</h3>
+                <p>ML ${best.item.ml || "-"} | ${Math.round(best.score)}%</p>
+            </div>
+            <button type="button" id="confirm-best-match">Correct</button>
+            <button type="button" id="choose-another" class="secondary">Change</button>`;
+        document.getElementById("confirm-best-match")?.addEventListener("click", () => selectMadhushalaItem(best.item.itemCode, best.score));
+        document.getElementById("choose-another")?.addEventListener("click", () => document.getElementById("madhushala-search")?.focus());
+    } else {
+        setHidden(card, true);
+    }
+
+    renderCandidates(item.suggestions || []);
+}
+
+function renderCandidates(entries) {
+    const container = document.getElementById("suggestions");
+    if (!container) return;
+    if (!entries.length) {
+        container.className = "candidate-list empty";
+        container.textContent = "No results";
+        return;
+    }
+    container.className = "candidate-list";
+    container.innerHTML = entries.map((entry) => {
+        const item = entry.item || entry;
+        const score = entry.score ? `<span class="score">${Math.round(entry.score)}%</span>` : "";
+        return `
+            <button class="candidate" data-code="${item.itemCode}" data-score="${entry.score || 0}" type="button">
+                <span><strong>${itemLabel(item)}</strong><small>ML ${item.ml || "-"} | Pack ${item.packing || "-"}</small></span>
+                ${score}
+            </button>`;
+    }).join("");
+    container.querySelectorAll("[data-code]").forEach((button) => {
+        button.addEventListener("click", () => selectMadhushalaItem(button.dataset.code, button.dataset.score));
+    });
+}
+
+function selectMadhushalaItem(itemCode, score = null) {
+    const exciseItem = currentExciseItem();
+    const madhushalaItem = findMadhushalaItem(itemCode);
+    const issues = guardrailIssues(exciseItem, madhushalaItem, score);
+    const apply = () => {
+        selectedMappings.set(String(selectedExciseCode), String(itemCode));
+        showToast("Selected", "success");
+        renderWorkspace();
+    };
+    if (issues.length) showGuardrailModal(issues, apply);
+    else apply();
+}
+
+function normalizeSearchText(value) {
+    return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function itemInitials(itemName) {
+    return normalizeSearchText(itemName).split(" ").filter(Boolean).map((word) => word[0]).join("");
+}
+
+function scoreSearch(item, query) {
+    const clean = normalizeSearchText(query);
+    if (!clean) return 0;
+    const name = normalizeSearchText(item.itemName);
+    const compact = name.replace(/\s/g, "");
+    const code = normalizeSearchText(item.itemCode);
+    let score = 0;
+    if (code === clean) score += 120;
+    if (code.startsWith(clean)) score += 85;
+    if (name.startsWith(clean)) score += 100;
+    if (compact.startsWith(clean.replace(/\s/g, ""))) score += 80;
+    if (itemInitials(item.itemName).startsWith(clean.replace(/\s/g, ""))) score += 90;
+    if (clean.length >= 3 && name.includes(clean)) score += 45;
+    return score;
+}
+
+function runSearch() {
+    const query = document.getElementById("madhushala-search")?.value || "";
+    if (!query.trim()) {
+        renderSelectedExcise(currentExciseItem());
+        return;
+    }
+    const results = workspace.madhushalaItems
+        .map((item) => ({item, score: scoreSearch(item, query)}))
+        .filter((entry) => entry.score > 0)
+        .sort((left, right) => right.score - left.score)
+        .slice(0, 50);
+    renderCandidates(results);
+}
+
+function updateSummary() {
+    const left = workspace.unmappedItems.filter((item) => !selectedMappings.get(String(item.exciseItemCode)) && !item.selectedItemCode).length;
+    setText(document.getElementById("mapping-summary"), `Selected: ${selectedMappings.size} | Left: ${left}`);
+    const submit = document.getElementById("submit-mappings");
+    if (submit) submit.disabled = selectedMappings.size === 0;
+}
+
+async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
+    const normalizedJobId = sanitizeJobId(isEventLike(jobId) ? "" : jobId || currentDocumentJobId);
+    const preserveState = options.preserveState !== false;
+    const previousSelected = preserveState ? selectedExciseCode : null;
+    const search = document.getElementById("madhushala-search");
+    const previousSearch = preserveState ? search?.value || "" : "";
+    try {
+        const query = normalizedJobId ? `?jobId=${encodeURIComponent(normalizedJobId)}` : "?latestOnly=true";
+        workspace = await api(`/mapping/workspace${query}`);
+        currentDocumentJobId = normalizedJobId || currentDocumentJobId;
+        const codes = new Set((workspace.unmappedItems || []).map((item) => String(item.exciseItemCode)));
+        selectedExciseCode = previousSelected && codes.has(String(previousSelected)) ? previousSelected : null;
+        if (search) search.value = previousSearch;
+        renderWorkspace();
+        if (previousSearch) runSearch();
+    } catch (error) {
+        if (!options.quiet) showToast(error.message || "Could not load mapping", "error");
+    }
+}
+
+function startMappingAutoRefresh() {
+    if (mappingRefreshTimer) return;
+    mappingRefreshTimer = window.setInterval(async () => {
+        if (mappingRefreshInFlight || document.getElementById("mapping-view")?.hidden) return;
+        mappingRefreshInFlight = true;
+        try {
+            await loadWorkspace(currentDocumentJobId, {quiet: true, preserveState: true});
+        } finally {
+            mappingRefreshInFlight = false;
+        }
+    }, 3000);
+}
+
+function stopMappingAutoRefresh() {
+    if (mappingRefreshTimer) window.clearInterval(mappingRefreshTimer);
+    mappingRefreshTimer = null;
+    mappingRefreshInFlight = false;
+}
+
+async function saveMappings() {
+    const mappings = Array.from(selectedMappings.entries()).map(([exciseItemCode, itemCode]) => ({
+        exciseItemCode: Number(exciseItemCode),
+        itemCode,
+    }));
+    try {
+        const result = await api("/mapping/submit", {method: "POST", body: JSON.stringify({mappings, jobId: currentDocumentJobId || null})});
+        selectedMappings.clear();
+        showToast(`Saved ${result.mappedCount}`, "success");
+        await loadWorkspace();
+        if (sanitizeJobId(currentDocumentJobId)) {
+            setHidden(document.getElementById("save-purchase-from-mapping"), false);
+        }
+    } catch (error) {
+        showToast(error.message || "Could not save mapping", "error");
+    }
+}
+
+function initMapping() {
+    stopMappingAutoRefresh();
+    setHidden(document.getElementById("launch-view"), true);
+    setHidden(document.getElementById("document-import-view"), true);
+    setHidden(document.getElementById("mapping-view"), false);
+    setHidden(document.getElementById("save-purchase-from-mapping"), !sanitizeJobId(currentDocumentJobId));
+    if (!sessionToken) {
+        showToast("Invalid or missing CRM session.", "error");
+        return;
+    }
+    void loadWorkspace(currentDocumentJobId, {preserveState: false});
+    startMappingAutoRefresh();
+}
+
+function documentElements() {
+    return {
+        upload: document.getElementById("document-upload-panel"),
+        processing: document.getElementById("document-processing-panel"),
+        review: document.getElementById("document-review-panel"),
+        success: document.getElementById("document-success-panel"),
+        error: document.getElementById("document-error-panel"),
+        action: document.getElementById("document-action-bar"),
+        file: document.getElementById("document-file"),
+        status: document.getElementById("document-status"),
+        errorMessage: document.getElementById("document-error-message"),
+        progressTitle: document.getElementById("document-progress-title"),
+        progressDetail: document.getElementById("document-progress-detail"),
+    };
+}
+
+function setDocumentImportState(state, message = "") {
+    const elements = documentElements();
+    setHidden(elements.upload, state !== "idle" && state !== "selected");
+    setHidden(elements.processing, state !== "uploading" && state !== "extracting" && state !== "normalizing" && state !== "checking");
+    setHidden(elements.review, state !== "review");
+    setHidden(elements.success, state !== "complete");
+    setHidden(elements.error, state !== "error");
+    setHidden(elements.action, state !== "review");
+    if (elements.file) elements.file.disabled = state === "uploading" || state === "extracting" || state === "normalizing" || state === "checking";
+
+    if (elements.status) {
+        elements.status.textContent = message;
+        elements.status.className = state === "error" ? "status-message error" : "status-message ok";
+    }
+
+    const stages = document.querySelectorAll(".document-stages li");
+    const stageOrder = ["uploading", "extracting", "normalizing", "checking"];
+    const activeIndex = stageOrder.indexOf(state);
+    stages.forEach((stage) => {
+        const active = stage.dataset.stage === state;
+        stage.classList.toggle("active", active);
+        stage.classList.toggle("done", activeIndex > -1 && stageOrder.indexOf(stage.dataset.stage) < activeIndex);
+    });
+}
+
+function formatBytes(bytes) {
+    if (!bytes) return "0 B";
+    const units = ["B", "KB", "MB", "GB"];
+    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function revokeDocumentPreview() {
+    if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl);
+    currentPreviewUrl = "";
+}
+
+function renderDocumentPreview(file) {
+    revokeDocumentPreview();
+    currentPreviewUrl = URL.createObjectURL(file);
+    const preview = document.getElementById("document-preview");
+    if (!preview) return;
+    if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+        preview.innerHTML = `<iframe title="Uploaded PDF preview" src="${currentPreviewUrl}"></iframe>`;
+    } else {
+        preview.innerHTML = `<img alt="Uploaded document preview" src="${currentPreviewUrl}">`;
+    }
+    setText(document.getElementById("review-filename"), file.name);
+    setText(document.getElementById("review-filetype"), file.type || file.name.split(".").pop().toUpperCase());
+    setText(document.getElementById("review-filesize"), formatBytes(file.size));
+}
+
+function renderDocumentReview(payload) {
+    const summary = payload.summary || {};
+    const job = payload.job || {};
+    currentDocumentResult = payload;
+    currentUploadKind = "document";
+    currentDocumentJobId = job.id || currentDocumentJobId;
+    const detected = summary.detected || job.extracted_count || 0;
+    const recognized = summary.recognized || job.mapped_count || 0;
+    const needMapping = summary.needMapping || 0;
+    setText(document.getElementById("metric-detected"), String(detected));
+    setText(document.getElementById("metric-recognized"), String(recognized));
+    setText(document.getElementById("metric-unmapped"), String(needMapping));
+    setText(document.getElementById("document-action-summary"), `${detected} products extracted | ${recognized} recognized | ${needMapping} require mapping`);
+    setText(document.getElementById("continue-document-mapping"), "Continue to Mapping");
+    setHidden(document.getElementById("purchase-form"), false);
+    setHidden(document.getElementById("save-purchase"), Boolean(needMapping));
+    setHidden(document.getElementById("continue-document-mapping"), !needMapping);
+    applyPurchaseHeader(loadPurchaseHeader(job.id));
+    if (payload.extractedDocument?.invoiceDate) setInputValue("purchase-doc-date", payload.extractedDocument.invoiceDate);
+    setText(document.getElementById("document-json"), JSON.stringify(payload, null, 2));
+}
+
+function resetDocumentImport() {
+    revokeDocumentPreview();
+    currentDocumentFile = null;
+    currentDocumentResult = null;
+    currentDocumentJobId = "";
+    currentUploadKind = "document";
+    const input = document.getElementById("document-file");
+    if (input) input.value = "";
+    const qrInput = document.getElementById("qr-file");
+    if (qrInput) qrInput.value = "";
+    setHidden(document.getElementById("purchase-form"), false);
+    setHidden(document.getElementById("save-purchase"), true);
+    setHidden(document.getElementById("continue-document-mapping"), false);
+    setDocumentImportState("idle", "Ready. Select a purchase document or QR image.");
+}
+
+async function uploadDocument(file) {
+    if (!sessionToken) {
+        setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
+        setText(documentElements().errorMessage, "Missing or expired CRM session.");
+        return;
+    }
+    currentDocumentFile = file;
+    renderDocumentPreview(file);
+    const form = new FormData();
+    form.append("file", file);
+    setDocumentImportState("uploading");
+    const elements = documentElements();
+    setText(elements.progressTitle, "Uploading document");
+    setText(elements.progressDetail, "Sending the selected document securely to the bridge.");
+    try {
+        window.setTimeout(() => {
+            if (document.getElementById("document-processing-panel")?.hidden) return;
+            setDocumentImportState("extracting");
+            const latestElements = documentElements();
+            setText(latestElements.progressTitle, "Extracting products");
+            setText(latestElements.progressDetail, "Reading product rows and checking Madhushala mappings.");
+        }, 500);
+        const response = await fetch(apiUrl("/api/v1/document-import/upload"), {
+            method: "POST",
+            headers: {"Authorization": `Bearer ${sessionToken}`},
+            body: form,
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || payload.error || "Document import failed");
+        renderDocumentReview(payload);
+        setDocumentImportState("review");
+    } catch (error) {
+        setText(documentElements().errorMessage, error.message || "Document import failed.");
+        setDocumentImportState("error");
+    }
+}
+
+async function initDocumentImport() {
+    stopMappingAutoRefresh();
+    setHidden(document.getElementById("launch-view"), true);
+    setHidden(document.getElementById("mapping-view"), true);
+    setHidden(document.getElementById("document-import-view"), false);
+    setDocumentImportState("idle", "Ready. Select a purchase document or QR image.");
+    if (!sessionToken) {
+        setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
+        setText(documentElements().errorMessage, "Missing or expired CRM session.");
+        return;
+    }
+    try {
+        const session = await api("/session/status");
+        setText(document.getElementById("document-session-info"), `Shop ${session.shopCode}`);
+    } catch (error) {
+        setText(documentElements().errorMessage, error.message || "CRM session could not be opened.");
+        setDocumentImportState("error");
+    }
+}
+
+document.getElementById("open-portal")?.addEventListener("click", openPortal);
+document.getElementById("reload-workspace")?.addEventListener("click", () => {
+    void loadWorkspace(currentDocumentJobId, {preserveState: true});
+});
+document.getElementById("madhushala-search")?.addEventListener("input", runSearch);
+document.getElementById("submit-mappings")?.addEventListener("click", saveMappings);
+document.getElementById("document-file")?.addEventListener("change", (event) => {
+    const [file] = event.target.files || [];
+    if (file) uploadDocument(file);
+});
+document.getElementById("qr-file")?.addEventListener("change", (event) => {
+    const [file] = event.target.files || [];
+    if (file) uploadQr(file);
+});
+document.getElementById("qr-link-submit")?.addEventListener("click", () => {
+    void submitQrLink();
+});
+document.getElementById("qr-link-input")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        event.preventDefault();
+        void submitQrLink();
+    }
+});
+function bindDropzone(id, handler) {
+    const zone = document.getElementById(id);
+    zone?.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        zone.classList.add("dragover");
+    });
+    zone?.addEventListener("dragleave", () => zone.classList.remove("dragover"));
+    zone?.addEventListener("drop", (event) => {
+        event.preventDefault();
+        zone.classList.remove("dragover");
+        const [file] = event.dataTransfer.files || [];
+        if (file) handler(file);
+    });
+}
+bindDropzone("document-dropzone", uploadDocument);
+bindDropzone("qr-dropzone", uploadQr);
+document.getElementById("document-refresh")?.addEventListener("click", resetDocumentImport);
+document.getElementById("replace-document")?.addEventListener("click", resetDocumentImport);
+document.getElementById("document-upload-another")?.addEventListener("click", resetDocumentImport);
+document.getElementById("success-upload-another")?.addEventListener("click", resetDocumentImport);
+document.getElementById("choose-another-document")?.addEventListener("click", resetDocumentImport);
+document.getElementById("retry-document")?.addEventListener("click", () => {
+    if (currentDocumentFile) uploadDocument(currentDocumentFile);
+    else resetDocumentImport();
+});
+document.getElementById("copy-document-json")?.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(document.getElementById("document-json")?.textContent || "");
+    showToast("JSON copied", "success");
+});
+document.getElementById("purchase-form")?.addEventListener("input", persistPurchaseHeader);
+document.getElementById("save-purchase")?.addEventListener("click", () => {
+    void savePurchaseFromJob("review");
+});
+document.getElementById("save-purchase-from-mapping")?.addEventListener("click", () => {
+    void savePurchaseFromJob("mapping");
+});
+document.getElementById("continue-document-mapping")?.addEventListener("click", () => {
+    const jobId = sanitizeJobId(currentDocumentJobId);
+    if (!jobId) return;
+    persistPurchaseHeader();
+    window.location.href = `${basePath}/?view=mapping&jobId=${encodeURIComponent(jobId)}&sessionId=${encodeURIComponent(sessionId)}#session=${encodeURIComponent(sessionToken)}`;
+});
+document.getElementById("cancel-guardrail")?.addEventListener("click", closeGuardrailModal);
+document.getElementById("confirm-guardrail")?.addEventListener("click", () => {
+    const action = pendingGuardrailAction;
+    closeGuardrailModal();
+    if (action) action();
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+    if (documentMode) initDocumentImport();
+    else if (mappingMode) initMapping();
+    else initLaunch();
+});
+
+</script>
 </body>
 </html>
+
+
+
+
+

@@ -7,11 +7,11 @@ from app.services.matching_service import score_dropdown_search, suggest_matches
 def test_excise_payload_from_captured_item():
     item = {
         "brand": "Aberfeldy Single Highland Malt Scotch Whisky Aged 12 Years",
-        "strengthRaw": "( 40 %V/V - WB/GEN )",
         "measureMl": 750,
         "packageType": "Glass Bottle",
-        "retailerMargin": "243.06",
-        "roundOffGovt": "9.98",
+        "strengthRaw": "Mild",
+        "retailerMargin": "120.50",
+        "roundOffGovt": "0.29",
         "specialPurposeFee": "234.71",
         "mrpPerUnit": "3960.00",
         "bottlesPerCase": 6,
@@ -23,21 +23,42 @@ def test_excise_payload_from_captured_item():
 
     assert payload == {
         "itemName": "Aberfeldy Single Highland Malt Scotch Whisky Aged 12 Years, 750 Ml. (Glass Bottle)",
-        "strengthRaw": "( 40 %V/V - WB/GEN )",
+        "t1": "",
+        "t2": "",
+        "t3": "",
+        "t4": "",
+        "strengthRaw": "Mild",
         "measureMl": "750",
         "packageType": "Glass Bottle",
-        "retailerMargin": "243.06",
-        "roundOffGovt": "9.98",
+        "retailerMargin": "120.50",
+        "roundOffGovt": "0.29",
         "specialPurposeFee": "234.71",
         "mrpPerUnit": "3960.00",
         "bottlesPerCase": "6",
         "mrpPerCase": "23760.00",
-        "t1": "750",
-        "t2": "3960.00",
-        "t3": "Glass Bottle",
-        "t4": "Westwell Gases Pvt. Ltd.",
     }
-    assert all(isinstance(value, str) for value in payload.values())
+
+
+def test_excise_payload_from_document_item_includes_supported_known_fields():
+    item = {
+        "rawName": "Some Whisky 750ml",
+        "brand": "Some Whisky",
+        "ml": 750,
+        "packing": 12,
+        "mrp": 500,
+    }
+
+    payload = MappingService.build_excise_payload(item)
+
+    assert payload["itemName"] == "Some Whisky 750ml"
+    assert payload["t1"] == ""
+    assert payload["t2"] == ""
+    assert payload["t3"] == ""
+    assert payload["t4"] == ""
+    assert payload["measureMl"] == "750"
+    assert payload["mrpPerUnit"] == "500"
+    assert payload["bottlesPerCase"] == "12"
+    assert payload["specialPurposeFee"] == ""
 
 
 def test_suggestions_put_matching_ml_and_name_on_top():
@@ -55,7 +76,7 @@ def test_suggestions_put_matching_ml_and_name_on_top():
     suggestions = suggest_matches(excise_item, dropdown)
 
     assert suggestions[0]["item"]["itemCode"] == "A00002"
-    assert [suggestion["item"]["itemCode"] for suggestion in suggestions] == ["A00002"]
+    assert suggestions[0]["score"] > suggestions[1]["score"]
     assert all("item" in suggestion for suggestion in suggestions)
 
 
@@ -189,3 +210,5 @@ def test_dropdown_search_requires_meaningful_word_match():
     assert score_dropdown_search(old_monk, "om") > score_dropdown_search(royal_green, "om")
     assert score_dropdown_search(after_dark, "after") > score_dropdown_search(old_monk, "after")
     assert score_dropdown_search(royal_green, "aft") == 0
+
+

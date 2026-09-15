@@ -1,78 +1,298 @@
-let lastSeenBatchId = null;
-let lastMappingKey = null;
+const pageParams = new URLSearchParams(window.location.search);
+const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, "?"));
+const sessionId = pageParams.get("sessionId") || "";
+const sessionToken = hashParams.get("session") || sessionStorage.getItem("exciseSession") || "";
+const mappingMode = pageParams.get("view") === "mapping";
+const documentMode = window.location.pathname.endsWith("/document-import");
+const activeJobId = sanitizeJobId(pageParams.get("jobId")) || "";
+const basePath = window.location.pathname.startsWith("/excise-import/") ? "/excise-import" : "";
+
+document.body.classList.toggle("mapping-mode", mappingMode);
+
+if (sessionToken) {
+    sessionStorage.setItem("exciseSession", sessionToken);
+}
+
+let extensionConnected = false;
+const extensionRequests = new Map();
 let workspace = {unmappedItems: [], madhushalaItems: []};
 let selectedExciseCode = null;
 const selectedMappings = new Map();
-let appConfig = {tokenConfigured: false, exciseCredentialsConfigured: false};
-let workspaceMode = 'latest';
 let pendingGuardrailAction = null;
-const basePath = window.location.pathname.startsWith('/excise-import/') ? '/excise-import' : '';
-const pageParams = new URLSearchParams(window.location.search);
-const mappingOnlyMode = pageParams.get('view') === 'mapping';
-let extensionConnected = false;
-let extensionSettings = {bridgeUrl: '', exciseUser: '', excisePassword: ''};
-const extensionRequests = new Map();
+let currentDocumentJobId = activeJobId;
+let currentDocumentFile = null;
+let currentDocumentResult = null;
+let currentPreviewUrl = "";
+let currentUploadKind = "document";
+let mappingRefreshTimer = null;
+let mappingRefreshInFlight = false;
 
-function discoverExtension() {
-    window.postMessage({source: 'madhushala-web', type: 'DISCOVER'}, window.location.origin);
+function purchaseHeaderStorageKey(jobId = currentDocumentJobId) {
+    return `purchaseHeader:${sessionId || "session"}:${jobId || "latest"}`;
 }
 
-function extensionRequest(type, payload = {}, timeoutMs = 15000) {
-    return new Promise((resolve, reject) => {
-        if (!extensionConnected) {
-            reject(new Error('Extension not connected. Reload the Madhushala Excise Capture extension.'));
-            return;
+function todayIso() {
+    return new Date().toISOString().slice(0, 10);
+}
+
+function defaultYearCode() {
+    const now = new Date();
+    const year = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    return `${year}-${String((year + 1) % 100).padStart(2, "0")}`;
+}
+
+function setInputValue(id, value) {
+    const input = document.getElementById(id);
+    if (input && !input.value && value) input.value = value;
+}
+
+function collectPurchaseHeader() {
+    return {
+        yearCode: document.getElementById("purchase-year-code")?.value.trim() || "",
+        trnDate: document.getElementById("purchase-trn-date")?.value || "",
+        docDate: document.getElementById("purchase-doc-date")?.value || "",
+        docNo: document.getElementById("purchase-doc-no")?.value.trim() || "",
+        tpPassNo: document.getElementById("purchase-tp-pass-no")?.value.trim() || "",
+        supplierCode: document.getElementById("purchase-supplier-code")?.value.trim() || "",
+        storeCode: document.getElementById("purchase-store-code")?.value.trim() || "",
+        purchaseAccCode: document.getElementById("purchase-acc-code")?.value.trim() || "",
+        userCode: document.getElementById("purchase-user-code")?.value.trim() || "",
+        taxMode: document.getElementById("purchase-tax-mode")?.value || "ITEMWISE",
+        narration: document.getElementById("purchase-narration")?.value.trim() || "PDF import",
+    };
+}
+
+function applyPurchaseHeader(header = {}) {
+    const today = todayIso();
+    const pairs = {
+        "purchase-year-code": header.yearCode || defaultYearCode(),
+        "purchase-trn-date": header.trnDate || today,
+        "purchase-doc-date": header.docDate || today,
+        "purchase-doc-no": header.docNo || currentDocumentResult?.extractedDocument?.invoiceNumber || "",
+        "purchase-tp-pass-no": header.tpPassNo || "",
+        "purchase-supplier-code": header.supplierCode || "",
+        "purchase-store-code": header.storeCode || "",
+        "purchase-acc-code": header.purchaseAccCode || "",
+        "purchase-user-code": header.userCode || "",
+        "purchase-narration": header.narration || "PDF import",
+    };
+    Object.entries(pairs).forEach(([id, value]) => setInputValue(id, value));
+    const taxMode = document.getElementById("purchase-tax-mode");
+    if (taxMode && header.taxMode) taxMode.value = header.taxMode;
+}
+
+function persistPurchaseHeader() {
+    const jobId = sanitizeJobId(currentDocumentJobId);
+    if (!jobId) return;
+    sessionStorage.setItem(purchaseHeaderStorageKey(jobId), JSON.stringify(collectPurchaseHeader()));
+}
+
+function loadPurchaseHeader(jobId = currentDocumentJobId) {
+    try {
+        return JSON.parse(sessionStorage.getItem(purchaseHeaderStorageKey(jobId)) || "{}");
+    } catch {
+        return {};
+    }
+}
+
+function validatePurchaseHeader(header) {
+    const required = ["yearCode", "trnDate", "docDate", "docNo", "supplierCode", "storeCode", "purchaseAccCode", "userCode"];
+    return required.filter((key) => !String(header[key] || "").trim());
+}
+
+function purchaseResponseText(payload) {
+    const response = payload?.madhushalaResponse || {};
+    const trnNo = response.trnNo || response.trnNumber || response.data?.trnNo || "";
+    const message = response.message || payload?.message || "Purchase saved successfully.";
+    const itemCount = payload?.purchasePayload?.items?.length || 0;
+    return {trnNo, message, itemCount};
+}
+
+function renderPurchaseSuccess(payload, source = "review") {
+    const {trnNo, message, itemCount} = purchaseResponseText(payload);
+    const title = source === "mapping" ? "Mapping saved and purchase created." : "Purchase saved successfully.";
+    const detail = `${message}${trnNo ? ` TRN No: ${trnNo}.` : ""}${itemCount ? ` Items saved: ${itemCount}.` : ""}`;
+
+    const success = document.getElementById("document-success-panel");
+    if (success) {
+        const heading = success.querySelector("h2");
+        const paragraph = success.querySelector("p");
+        if (heading) heading.textContent = title;
+        if (paragraph) paragraph.textContent = detail;
+    }
+    setText(document.getElementById("document-action-summary"), detail);
+    setText(document.getElementById("document-json"), JSON.stringify(payload, null, 2));
+
+    if (source === "mapping") {
+        stopMappingAutoRefresh();
+        const mappingView = document.getElementById("mapping-view");
+        if (mappingView) {
+            mappingView.innerHTML = `
+                <section class="document-card document-success mapping-success">
+                    <h2>${title}</h2>
+                    <p>${detail}</p>
+                    <button id="mapping-success-upload" type="button">Import Another Document</button>
+                </section>
+            `;
+            document.getElementById("mapping-success-upload")?.addEventListener("click", () => {
+                window.location.href = `${basePath}/document-import?sessionId=${encodeURIComponent(sessionId)}#session=${encodeURIComponent(sessionToken)}`;
+            });
         }
-
-        const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        const timeout = setTimeout(() => {
-            extensionRequests.delete(requestId);
-            reject(new Error('Extension did not respond. Reload the extension and try again.'));
-        }, timeoutMs);
-
-        extensionRequests.set(requestId, {resolve, reject, timeout});
-        window.postMessage({
-            source: 'madhushala-web',
-            requestId,
-            type,
-            payload,
-        }, window.location.origin);
-    });
+    } else {
+        setDocumentImportState("complete", detail);
+    }
+    showToast(detail, "success");
 }
 
-window.addEventListener('message', (event) => {
-    if (event.source !== window) return;
-    const message = event.data || {};
-    if (message.source !== 'madhushala-extension') return;
-
-    if (message.type === 'READY') {
-        extensionConnected = true;
-        setText('extension-status', 'Browser extension connected', 'status-active');
-        loadExtensionSettings();
+async function savePurchaseFromJob(source = "review") {
+    const jobId = sanitizeJobId(currentDocumentJobId || activeJobId);
+    if (!jobId) {
+        showToast("No document job is ready for purchase save", "error");
         return;
     }
-
-    const pending = extensionRequests.get(message.requestId);
-    if (!pending) return;
-    clearTimeout(pending.timeout);
-    extensionRequests.delete(message.requestId);
-
-    if (message.ok) {
-        const response = message.response || {};
-        if (response.ok === false) pending.reject(new Error(response.error || 'Extension action failed'));
-        else pending.resolve(response.result ?? response);
-    } else {
-        pending.reject(new Error(message.error || 'Extension action failed'));
+    let header = source === "mapping" ? loadPurchaseHeader(jobId) : collectPurchaseHeader();
+    const missing = validatePurchaseHeader(header);
+    if (missing.length) {
+        showToast(`Fill purchase fields first: ${missing.join(", ")}`, "error");
+        return;
     }
-});
+    persistPurchaseHeader();
+    const button = source === "mapping" ? document.getElementById("save-purchase-from-mapping") : document.getElementById("save-purchase");
+    if (button) button.disabled = true;
+    try {
+        const payload = await api(`/api/v1/document-import/jobs/${encodeURIComponent(jobId)}/purchase/save`, {
+            method: "POST",
+            body: JSON.stringify({header}),
+        });
+        renderPurchaseSuccess(payload, source);
+    } catch (error) {
+        showToast(error.message || "Purchase save failed", "error");
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function decodeQrFromImage(file) {
+    if (!("BarcodeDetector" in window)) {
+        throw new Error("QR scanning is not supported in this browser. Paste the QR link below after scanning externally.");
+    }
+    const bitmap = await createImageBitmap(file);
+    try {
+        const detector = new BarcodeDetector({formats: ["qr_code"]});
+        const codes = await detector.detect(bitmap);
+        const value = codes?.[0]?.rawValue || "";
+        if (!value) throw new Error("No QR code detected in this image. Paste the QR link below if the code is readable on your phone.");
+        return value;
+    } finally {
+        bitmap.close?.();
+    }
+}
+
+async function extractQrUrl(qrUrl) {
+    const cleanUrl = String(qrUrl || "").trim();
+    if (!cleanUrl) throw new Error("Paste a QR link first.");
+    const payload = await api("/api/v1/document-import/qr/extract", {
+        method: "POST",
+        body: JSON.stringify({url: cleanUrl}),
+    });
+    renderQrReview(payload);
+}
+
+function renderQrReview(payload) {
+    currentUploadKind = "qr";
+    currentDocumentResult = payload;
+    currentDocumentJobId = "";
+    setText(document.getElementById("metric-detected"), "1");
+    setText(document.getElementById("metric-recognized"), "0");
+    setText(document.getElementById("metric-unmapped"), "0");
+    setText(document.getElementById("document-action-summary"), `QR link opened: ${payload.finalUrl || payload.url || "extracted"}`);
+    setHidden(document.getElementById("purchase-form"), true);
+    setHidden(document.getElementById("save-purchase"), true);
+    setHidden(document.getElementById("continue-document-mapping"), true);
+    setText(document.getElementById("document-json"), JSON.stringify(payload, null, 2));
+    setDocumentImportState("review");
+}
+
+async function uploadQr(file) {
+    if (!sessionToken) {
+        setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
+        setText(documentElements().errorMessage, "Missing or expired CRM session.");
+        return;
+    }
+    currentUploadKind = "qr";
+    currentDocumentFile = file;
+    renderDocumentPreview(file);
+    setDocumentImportState("uploading");
+    const elements = documentElements();
+    setText(elements.progressTitle, "Scanning QR image");
+    setText(elements.progressDetail, "Reading the QR locally before opening the linked page. This does not use Llama credits.");
+    try {
+        const qrUrl = await decodeQrFromImage(file);
+        setDocumentImportState("extracting");
+        const latestElements = documentElements();
+        setText(latestElements.progressTitle, "Opening QR link");
+        setText(latestElements.progressDetail, "Fetching the linked page and extracting visible data.");
+        await extractQrUrl(qrUrl);
+    } catch (error) {
+        setText(documentElements().errorMessage, error.message || "QR extraction failed.");
+        setDocumentImportState("error");
+    }
+}
+
+async function submitQrLink() {
+    if (!sessionToken) {
+        setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
+        setText(documentElements().errorMessage, "Missing or expired CRM session.");
+        return;
+    }
+    const input = document.getElementById("qr-link-input");
+    const button = document.getElementById("qr-link-submit");
+    if (button) button.disabled = true;
+    setDocumentImportState("extracting");
+    const elements = documentElements();
+    setText(elements.progressTitle, "Opening QR link");
+    setText(elements.progressDetail, "Fetching the linked page and extracting visible data. This does not use Llama credits.");
+    try {
+        await extractQrUrl(input?.value || "");
+    } catch (error) {
+        setText(documentElements().errorMessage, error.message || "QR link extraction failed.");
+        setDocumentImportState("error");
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+function apiUrl(path) {
+    return `${basePath}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function sanitizeJobId(value) {
+    if (!value || typeof value !== "string") return "";
+    const trimmed = value.trim();
+    if (!trimmed || /^\[object\s+\w+Event\]$/i.test(trimmed)) return "";
+    if (trimmed === "[object PointerEvent]" || trimmed === "[object Event]" || trimmed === "[object MouseEvent]") return "";
+    return /^[a-zA-Z0-9_-]{8,128}$/.test(trimmed) ? trimmed : "";
+}
+
+function isEventLike(value) {
+    return value && typeof value === "object" && ("type" in value || "target" in value || "currentTarget" in value);
+}
+
+function setHidden(element, hidden) {
+    if (element) element.hidden = hidden;
+}
+
+function setText(element, text) {
+    if (element) element.textContent = text;
+}
 
 async function api(path, options = {}) {
-    const response = await fetch(`${basePath}${path}`, {
+    const response = await fetch(apiUrl(path), {
         ...options,
         headers: {
-            'Content-Type': 'application/json',
-            ...(options.headers || {})
-        }
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${sessionToken}`,
+            ...(options.headers || {}),
+        },
     });
     const text = await response.text();
     let data = null;
@@ -84,188 +304,109 @@ async function api(path, options = {}) {
         }
     }
     if (!response.ok) {
-        const detail = data?.detail || data?.error || `Request failed (HTTP ${response.status})`;
-        throw new Error(detail);
+        throw new Error(data?.detail || data?.error || `HTTP ${response.status}`);
     }
     return data;
 }
 
-async function pollStatus() {
-    try {
-        const status = await api('/automation/status');
-        updateStatusUI(status);
-    } catch (error) {
-        showNotification('Could not reach local server', 'error');
-    } finally {
-        setTimeout(pollStatus, 1500);
-    }
+function extensionRequest(type, payload = {}, timeoutMs = 15000) {
+    return new Promise((resolve, reject) => {
+        if (!extensionConnected) {
+            reject(new Error("Madhushala Excise Chrome extension is not installed or not reloaded."));
+            return;
+        }
+
+        const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const timeout = setTimeout(() => {
+            extensionRequests.delete(requestId);
+            reject(new Error("Extension did not respond."));
+        }, timeoutMs);
+        extensionRequests.set(requestId, {resolve, reject, timeout});
+        window.postMessage({source: "madhushala-web", requestId, type, payload}, window.location.origin);
+    });
 }
 
-async function loadApiStatus() {
-    try {
-        const status = await api('/madhushala/status');
-        appConfig = status;
-        setText(
-            'api-token-pill',
-            status.tokenConfigured ? 'Service ready' : 'Service setup required',
-            status.tokenConfigured ? 'status-pill ready' : 'status-pill'
-        );
-    } catch (error) {
-        setText('api-token-pill', 'Service unavailable', 'status-pill');
-    }
-}
+window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    const message = event.data || {};
+    if (message.source !== "madhushala-extension") return;
 
-async function loadExtensionSettings() {
-    try {
-        const settings = await extensionRequest('GET_SETTINGS', {}, 5000);
-        extensionSettings = settings;
-        return settings;
-    } catch (error) {
-        setText('extension-status', 'Browser extension not connected', 'status-waiting');
-        return null;
-    }
-}
-
-function currentCredentialPayload() {
-    return {
-        bridgeUrl: window.location.origin + basePath,
-        exciseUser: document.getElementById('username')?.value.trim() || '',
-        excisePassword: document.getElementById('password')?.value || '',
-    };
-}
-
-async function saveCredentialsAndOpen() {
-    const payload = currentCredentialPayload();
-    if (!payload.exciseUser || !payload.excisePassword) throw new Error('Enter both Excise credentials.');
-    await extensionRequest('SAVE_SETTINGS', payload);
-    extensionSettings = {...extensionSettings, ...payload};
-    closeCredentialsModal();
-    await extensionRequest('OPEN_PORTAL', {}, 30000);
-    setText('instruction-message', 'Enter the CAPTCHA, log in, then update case quantities. Mapping will open automatically if required.');
-    showNotification('Excise portal opened', 'success');
-}
-
-function openCredentialsModal(settings = extensionSettings) {
-    const modal = document.getElementById('credentials-modal');
-    if (!modal) return;
-    document.getElementById('username').value = settings?.exciseUser || '';
-    document.getElementById('password').value = settings?.excisePassword || '';
-    modal.hidden = false;
-    document.body.classList.add('modal-open');
-    setTimeout(() => document.getElementById('username')?.focus(), 0);
-}
-
-function closeCredentialsModal() {
-    const modal = document.getElementById('credentials-modal');
-    if (modal) modal.hidden = true;
-    if (document.getElementById('mapping-modal')?.hidden !== false) {
-        document.body.classList.remove('modal-open');
-    }
-}
-
-function setText(id, value, className) {
-    const element = document.getElementById(id);
-    if (!element) return;
-    element.textContent = value;
-    element.className = className || '';
-}
-
-function updateStatusUI(status) {
-    setText(
-        'browser-status',
-        status.browserRunning ? 'Browser: Open' : 'Browser: Closed',
-        status.browserRunning ? 'status-active' : 'status-waiting'
-    );
-
-    const loginText = status.loginPageDetected
-        ? 'Login: CAPTCHA'
-        : status.browserRunning
-            ? 'Login: Done'
-            : 'Login: Waiting';
-    setText('login-status', loginText, status.browserRunning ? 'status-active' : 'status-waiting');
-
-    setText(
-        'prepare-indent-status',
-        status.prepareIndentDetected ? 'Prepare: Ready' : 'Prepare: Waiting',
-        status.prepareIndentDetected ? 'status-active' : 'status-waiting'
-    );
-
-    const batch = status.lastCapturedBatch;
-    setText(
-        'capture-status',
-        batch ? `${batch.itemCount} item${batch.itemCount === 1 ? '' : 's'} saved` : 'No items captured yet',
-        batch ? 'status-active' : 'status-waiting'
-    );
-
-    const errorEl = document.getElementById('last-error');
-    if (errorEl) {
-        errorEl.hidden = !status.lastError;
-        errorEl.textContent = status.lastError || '';
+    if (message.type === "READY") {
+        extensionConnected = true;
+        return;
     }
 
-    if (batch && batch.batchId !== lastSeenBatchId) {
-        lastSeenBatchId = batch.batchId;
-        showNotification(`Captured ${batch.itemCount} items`, 'success');
-    }
-
-    updateMappingAlert(status.mappingStatus);
-    updateInstructions(status);
-}
-
-async function updateMappingAlert(mappingStatus) {
-    const alert = document.getElementById('mapping-alert');
-    if (!alert || !mappingStatus) return;
-
-    alert.className = `mapping-alert ${mappingStatus.state || 'idle'}`;
-    alert.textContent = mappingStatusLabel(mappingStatus);
-
-    const mappingKey = `${mappingStatus.state || 'idle'}|${mappingStatus.updatedAt || ''}`;
-    if (
-        mappingStatus.mappingRequired &&
-        mappingKey !== lastMappingKey
-    ) {
-        lastMappingKey = mappingKey;
-        await refreshWorkspace(false);
-        openMappingModal();
-        showNotification('Match items', 'info');
-    } else if (mappingKey !== lastMappingKey) {
-        lastMappingKey = mappingKey;
-    }
-}
-
-function mappingStatusLabel(mappingStatus) {
-    const state = mappingStatus?.state || 'idle';
-    const count = Number(mappingStatus?.unmappedCount || 0);
-    const labels = {
-        idle: 'Waiting',
-        needs_token: 'Service setup required',
-        processing: 'Checking...',
-        mapping_required: count === 1 ? '1 item needs match' : `${count} items need match`,
-        complete: 'All items matched',
-        error: 'Could not check'
-    };
-    return labels[state] || 'Waiting';
-}
-
-function updateInstructions(status) {
-    const instructionEl = document.getElementById('instruction-message');
-    if (!instructionEl) return;
-
-    if (status.mappingStatus?.mappingRequired) {
-        instructionEl.textContent = 'Product mapping is ready for review.';
-    } else if (status.lastCapturedBatch) {
-        instructionEl.textContent = 'Items saved. Continue updating case quantities in the Excise portal.';
+    const pending = extensionRequests.get(message.requestId);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    extensionRequests.delete(message.requestId);
+    const response = message.response || {};
+    if (message.ok && response.ok !== false) {
+        pending.resolve(response.result ?? response);
     } else {
-        instructionEl.textContent = 'Open the portal, enter the CAPTCHA, and update case quantities. Product mapping opens automatically when required.';
+        pending.reject(new Error(response.error || message.error || "Extension action failed"));
     }
+});
+window.postMessage({source: "madhushala-web", type: "DISCOVER"}, window.location.origin);
+
+function setStatus(message, isError = false) {
+    const element = document.getElementById("status-message");
+    if (!element) return;
+    element.textContent = message;
+    element.className = isError ? "status-message error" : "status-message ok";
 }
 
-function showNotification(message, type = 'info') {
-    const toast = document.createElement('div');
+function showToast(message, type = "info") {
+    const toast = document.createElement("div");
     toast.className = `toast ${type}`;
     toast.textContent = message;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 3500);
+}
+
+async function initLaunch() {
+    if (!sessionToken || !sessionId) {
+        setStatus("Open this page from the Madhushala CRM Import button.", true);
+        return;
+    }
+
+    try {
+        const session = await api("/session/status");
+        const sessionInfo = document.getElementById("session-info");
+        if (sessionInfo) {
+            sessionInfo.textContent = `Shop ${session.shopCode} | Session expires ${new Date(session.expiresAt).toLocaleString()}`;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        const mappingUrl = `${window.location.origin}${basePath}/?view=mapping&sessionId=${encodeURIComponent(sessionId)}#session=${encodeURIComponent(sessionToken)}`;
+        await extensionRequest("SET_SESSION", {
+            bridgeUrl: `${window.location.origin}${basePath}`,
+            sessionId,
+            sessionToken,
+            mappingUrl,
+        });
+        const settings = await extensionRequest("GET_SETTINGS");
+        if (!settings.exciseUser || !settings.excisePassword) {
+            setStatus("Save WB Excise credentials once from the Chrome extension, then open the portal.", true);
+        } else {
+            setStatus("Ready. Open Excise Portal and enter CAPTCHA manually.");
+        }
+    } catch (error) {
+        setStatus(error.message || "CRM session could not be opened.", true);
+    }
+}
+
+async function openPortal() {
+    try {
+        const result = await extensionRequest("OPEN_PORTAL", {}, 30000);
+        if (result.status === "needs_credentials") {
+            setStatus("Save WB Excise credentials once from the Chrome extension, then click Open Excise Portal again.", true);
+            return;
+        }
+        setStatus("WB Excise opened. Enter CAPTCHA, login, then prepare indent.");
+    } catch (error) {
+        setStatus(error.message || "Could not open Excise portal.", true);
+    }
 }
 
 function itemLabel(item) {
@@ -273,26 +414,8 @@ function itemLabel(item) {
 }
 
 function parseNumber(value) {
-    const match = String(value || '').match(/\d+/);
+    const match = String(value || "").match(/\d+/);
     return match ? Number(match[0]) : 0;
-}
-
-function exciseMl(item) {
-    const captured = item?.capturedItem || {};
-    return parseNumber(captured.measureMl || item?.measureMl || item?.itemName);
-}
-
-function excisePack(item) {
-    const captured = item?.capturedItem || {};
-    return parseNumber(captured.bottlesPerCase || item?.bottlesPerCase);
-}
-
-function madhushalaMl(item) {
-    return parseNumber(item?.ml || item?.itemName);
-}
-
-function madhushalaPack(item) {
-    return parseNumber(item?.packing);
 }
 
 function findMadhushalaItem(itemCode) {
@@ -301,482 +424,504 @@ function findMadhushalaItem(itemCode) {
 
 function guardrailIssues(exciseItem, madhushalaItem, score = null) {
     const issues = [];
-    const leftMl = exciseMl(exciseItem);
-    const rightMl = madhushalaMl(madhushalaItem);
-    const leftPack = excisePack(exciseItem);
-    const rightPack = madhushalaPack(madhushalaItem);
+    const leftMl = parseNumber(exciseItem?.capturedItem?.measureMl || exciseItem?.itemName);
+    const rightMl = parseNumber(madhushalaItem?.ml || madhushalaItem?.itemName);
+    const leftPack = parseNumber(exciseItem?.capturedItem?.bottlesPerCase);
+    const rightPack = parseNumber(madhushalaItem?.packing);
 
-    if (leftMl && rightMl && leftMl !== rightMl) {
-        issues.push(`ML mismatch: Excise ${leftMl} ML, Madhushala ${rightMl} ML`);
-    }
-    if (leftPack && rightPack && leftPack !== rightPack) {
-        issues.push(`Pack mismatch: Excise ${leftPack}, Madhushala ${rightPack}`);
-    }
-    if (score !== null && Number(score) > 0 && Number(score) < 55) {
-        issues.push(`Low match confidence: ${Math.round(score)}%`);
-    }
-
+    if (leftMl && rightMl && leftMl !== rightMl) issues.push(`ML mismatch: Excise ${leftMl} ML, Madhushala ${rightMl} ML`);
+    if (leftPack && rightPack && leftPack !== rightPack) issues.push(`Pack mismatch: Excise ${leftPack}, Madhushala ${rightPack}`);
+    if (score !== null && Number(score) > 0 && Number(score) < 55) issues.push(`Low match confidence: ${Math.round(score)}%`);
     return issues;
 }
 
-function duplicateMappingIssue(itemCode, currentExciseCode = selectedExciseCode) {
-    const duplicate = Array.from(selectedMappings.entries()).find(([exciseCode, mappedCode]) => (
-        String(exciseCode) !== String(currentExciseCode) && String(mappedCode) === String(itemCode)
-    ));
-    if (!duplicate) return null;
-    const duplicateItem = workspace.unmappedItems.find((item) => String(item.exciseItemCode) === String(duplicate[0]));
-    return `Same Madhushala item already selected for ${duplicateItem?.itemName || `Excise ${duplicate[0]}`}`;
-}
-
-function openMappingModal() {
-    const modal = document.getElementById('mapping-modal');
-    if (!modal) return;
-    modal.hidden = false;
-    document.body.classList.add('modal-open');
-}
-
-function closeMappingModal() {
-    const modal = document.getElementById('mapping-modal');
-    if (!modal) return;
-    modal.hidden = true;
-    document.body.classList.remove('modal-open');
-}
-
 function showGuardrailModal(issues, onConfirm) {
-    const modal = document.getElementById('guardrail-modal');
-    const body = document.getElementById('guardrail-body');
-    if (!modal || !body) return;
-
     pendingGuardrailAction = onConfirm;
-    body.innerHTML = `
-        <p>This match looks risky. Please check before saving.</p>
-        <ul>${issues.map((issue) => `<li>${issue}</li>`).join('')}</ul>
-    `;
+    const modal = document.getElementById("guardrail-modal");
+    const body = document.getElementById("guardrail-body");
+    if (!modal || !body) return;
+    body.innerHTML = `<p>This match looks risky. Please check before saving.</p><ul>${issues.map((issue) => `<li>${issue}</li>`).join("")}</ul>`;
     modal.hidden = false;
-    document.body.classList.add('modal-open');
 }
 
 function closeGuardrailModal() {
-    const modal = document.getElementById('guardrail-modal');
-    if (!modal) return;
-    modal.hidden = true;
+    setHidden(document.getElementById("guardrail-modal"), true);
     pendingGuardrailAction = null;
-    if (document.getElementById('mapping-modal')?.hidden !== false) {
-        document.body.classList.remove('modal-open');
-    }
-}
-
-function normalizeSearchText(value) {
-    return String(value || '')
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-function itemInitials(itemName) {
-    return normalizeSearchText(itemName)
-        .split(' ')
-        .filter(Boolean)
-        .map((word) => word[0])
-        .join('');
-}
-
-function searchTokens(query) {
-    return normalizeSearchText(query).split(' ').filter(Boolean);
-}
-
-function scoreMadhushalaSearch(item, query) {
-    const cleanQuery = normalizeSearchText(query);
-    if (!cleanQuery) return 0;
-
-    const name = normalizeSearchText(item.itemName);
-    const code = normalizeSearchText(item.itemCode);
-    const barcode = normalizeSearchText(item.barcode);
-    const barcode2 = normalizeSearchText(item.barcode2);
-    const barcode3 = normalizeSearchText(item.barcode3);
-    const shortCode = normalizeSearchText(item.shortCode);
-    const initials = itemInitials(item.itemName);
-    const compactName = name.replace(/\s/g, '');
-    const compactQuery = cleanQuery.replace(/\s/g, '');
-    const tokens = searchTokens(query);
-    const words = name.split(' ').filter(Boolean);
-    const isShortQuery = compactQuery.length <= 1;
-    const allTokensMatch = tokens.every((token) => (
-        words.some((word) => word.startsWith(token) || (token.length >= 3 && word.includes(token)))
-    ));
-
-    let score = 0;
-    let directMatch = false;
-
-    if (code === cleanQuery) {
-        score += 120;
-        directMatch = true;
-    }
-    if (code.startsWith(cleanQuery)) {
-        score += 80;
-        directMatch = true;
-    }
-    if (shortCode && shortCode.startsWith(cleanQuery)) {
-        score += 75;
-        directMatch = true;
-    }
-    if (barcode && barcode.startsWith(cleanQuery)) {
-        score += 70;
-        directMatch = true;
-    }
-    if (barcode2 && barcode2.startsWith(cleanQuery)) {
-        score += 65;
-        directMatch = true;
-    }
-    if (barcode3 && barcode3.startsWith(cleanQuery)) {
-        score += 65;
-        directMatch = true;
-    }
-    if (name.startsWith(cleanQuery)) {
-        score += 100;
-        directMatch = true;
-    }
-    if (compactName.startsWith(compactQuery)) {
-        score += 85;
-        directMatch = true;
-    }
-    if (initials.startsWith(compactQuery)) {
-        score += 90;
-        directMatch = true;
-    }
-    if (!isShortQuery && cleanQuery.length >= 3 && name.includes(cleanQuery)) {
-        score += 45;
-        directMatch = true;
-    }
-
-    if (!directMatch && !allTokensMatch) return 0;
-
-    for (const token of tokens) {
-        if (words.some((word) => word.startsWith(token))) score += 25;
-        else if (token.length >= 3 && words.some((word) => word.includes(token))) score += 12;
-    }
-
-    if (String(item.ml || '') === cleanQuery) score += 10;
-    return score;
-}
-
-function renderWorkspace() {
-    const list = document.getElementById('unmapped-items');
-    setText('unmapped-count', String(workspace.unmappedItems.length));
-    updateWorkspaceModeButtons();
-
-    if (!list) return;
-    if (!workspace.unmappedItems.length) {
-        list.className = 'list-body empty';
-        list.textContent = 'No items';
-        renderSelectedExcise(null);
-        return;
-    }
-
-    list.className = 'list-body';
-    list.innerHTML = workspace.unmappedItems.map((item) => {
-        const code = String(item.exciseItemCode);
-        const mapped = selectedMappings.get(code) || item.selectedItemCode;
-        return `
-            <button class="unmapped-item ${code === String(selectedExciseCode) ? 'selected' : ''}" data-excise="${code}" type="button">
-                <span class="item-code">${code}</span>
-                <span class="item-name">${item.itemName}</span>
-                <span class="${mapped ? 'map-badge done' : 'map-badge'}">${mapped ? 'Selected' : 'Pending'}</span>
-            </button>
-        `;
-    }).join('');
-
-    list.querySelectorAll('[data-excise]').forEach((button) => {
-        button.addEventListener('click', () => {
-            selectedExciseCode = button.dataset.excise;
-            const searchInput = document.getElementById('madhushala-search');
-            if (searchInput) searchInput.value = '';
-            renderWorkspace();
-            renderSelectedExcise(currentExciseItem());
-        });
-    });
-
-    if (!selectedExciseCode && workspace.unmappedItems.length) {
-        selectedExciseCode = String(workspace.unmappedItems[0].exciseItemCode);
-        renderWorkspace();
-        return;
-    }
-
-    renderSelectedExcise(currentExciseItem());
-    updateMappingSummary();
 }
 
 function currentExciseItem() {
     return workspace.unmappedItems.find((item) => String(item.exciseItemCode) === String(selectedExciseCode));
 }
 
+function renderWorkspace() {
+    const list = document.getElementById("unmapped-items");
+    if (!list) return;
+    setText(document.getElementById("unmapped-count"), String(workspace.unmappedItems.length));
+
+    if (!workspace.unmappedItems.length) {
+        list.className = "list-body empty";
+        list.textContent = "No unmapped items";
+        renderSelectedExcise(null);
+        updateSummary();
+        return;
+    }
+
+    list.className = "list-body";
+    list.innerHTML = workspace.unmappedItems.map((item) => {
+        const code = String(item.exciseItemCode);
+        const mapped = selectedMappings.get(code) || item.selectedItemCode;
+        return `
+            <button class="unmapped-item ${code === String(selectedExciseCode) ? "selected" : ""}" data-excise="${code}" type="button">
+                <span class="item-code">${code}</span>
+                <span class="item-name">${item.itemName}</span>
+                <span class="${mapped ? "map-badge done" : "map-badge"}">${mapped ? "Selected" : "Pending"}</span>
+            </button>`;
+    }).join("");
+
+    list.querySelectorAll("[data-excise]").forEach((button) => {
+        button.addEventListener("click", () => {
+            selectedExciseCode = button.dataset.excise;
+            const search = document.getElementById("madhushala-search");
+            if (search) search.value = "";
+            renderWorkspace();
+        });
+    });
+
+    if (!selectedExciseCode && workspace.unmappedItems[0]) {
+        selectedExciseCode = String(workspace.unmappedItems[0].exciseItemCode);
+        renderWorkspace();
+        return;
+    }
+    if (selectedExciseCode && !currentExciseItem()) {
+        selectedExciseCode = workspace.unmappedItems[0] ? String(workspace.unmappedItems[0].exciseItemCode) : null;
+    }
+
+    renderSelectedExcise(currentExciseItem());
+    updateSummary();
+}
+
 function renderSelectedExcise(item) {
-    const panel = document.getElementById('selected-excise');
-    if (!panel) return;
+    const card = document.getElementById("best-match-card");
 
     if (!item) {
-        panel.className = 'selected-empty';
-        panel.textContent = 'Choose an item.';
-        renderCandidates('suggestions', []);
-        renderBestMatch(null);
-        const searchInput = document.getElementById('madhushala-search');
-        if (searchInput) searchInput.value = '';
+        renderCandidates([]);
+        setHidden(card, true);
         return;
     }
 
-    const captured = item.capturedItem || {};
-    panel.className = 'selected-excise';
-    panel.innerHTML = `
-        <div>
-            <span class="eyebrow">Code ${item.exciseItemCode}</span>
-            <h3>${item.itemName}</h3>
-        </div>
-        <dl>
-            <div><dt>ML</dt><dd>${captured.measureMl || '-'}</dd></div>
-            <div><dt>Pack</dt><dd>${captured.packageType || '-'}</dd></div>
-            <div><dt>MRP</dt><dd>${captured.mrpPerUnit || '-'}</dd></div>
-        </dl>
-    `;
-
-    renderBestMatch(item);
-    runSearch();
-}
-
-function renderBestMatch(item) {
-    const card = document.getElementById('best-match-card');
-    if (!card) return;
-
-    const suggestion = item?.suggestions?.[0];
-    if (!item || !suggestion) {
-        card.hidden = true;
-        card.innerHTML = '';
-        return;
+    const best = item.suggestions?.[0];
+    if (best) {
+        if (!card) return;
+        card.hidden = false;
+        card.innerHTML = `
+            <div>
+                <span class="eyebrow">Best Match</span>
+                <h3>${itemLabel(best.item)}</h3>
+                <p>ML ${best.item.ml || "-"} | ${Math.round(best.score)}%</p>
+            </div>
+            <button type="button" id="confirm-best-match">Correct</button>
+            <button type="button" id="choose-another" class="secondary">Change</button>`;
+        document.getElementById("confirm-best-match")?.addEventListener("click", () => selectMadhushalaItem(best.item.itemCode, best.score));
+        document.getElementById("choose-another")?.addEventListener("click", () => document.getElementById("madhushala-search")?.focus());
+    } else {
+        setHidden(card, true);
     }
 
-    const match = suggestion.item;
-    card.hidden = false;
-    card.innerHTML = `
-        <div>
-            <span class="eyebrow">Best Match</span>
-            <h3>${itemLabel(match)}</h3>
-            <p>ML ${match.ml || '-'} · ${Math.round(suggestion.score)}%</p>
-        </div>
-        <button type="button" id="confirm-best-match">Correct</button>
-        <button type="button" id="choose-another" class="secondary">Change</button>
-    `;
-
-    document.getElementById('confirm-best-match')?.addEventListener('click', () => {
-        selectMadhushalaItem(match.itemCode, suggestion.score);
-    });
-    document.getElementById('choose-another')?.addEventListener('click', () => {
-        document.getElementById('madhushala-search')?.focus();
-    });
+    renderCandidates(item.suggestions || []);
 }
 
-function renderCandidates(containerId, entries, fromSuggestion = false) {
-    const container = document.getElementById(containerId);
+function renderCandidates(entries) {
+    const container = document.getElementById("suggestions");
     if (!container) return;
-
     if (!entries.length) {
-        container.className = 'candidate-list empty';
-        container.textContent = fromSuggestion ? 'No suggestions' : 'No results';
+        container.className = "candidate-list empty";
+        container.textContent = "No results";
         return;
     }
-
-    container.className = 'candidate-list';
+    container.className = "candidate-list";
     container.innerHTML = entries.map((entry) => {
         const item = entry.item || entry;
-        const rawScore = entry.score || 0;
-        const score = rawScore ? `<span class="score">${Math.round(rawScore)}%</span>` : '';
+        const score = entry.score ? `<span class="score">${Math.round(entry.score)}%</span>` : "";
         return `
-            <button class="candidate" data-code="${item.itemCode}" data-score="${rawScore}" type="button">
-                <span>
-                    <strong>${itemLabel(item)}</strong>
-                    <small>ML ${item.ml || '-'} · Pack ${item.packing || '-'}</small>
-                </span>
+            <button class="candidate" data-code="${item.itemCode}" data-score="${entry.score || 0}" type="button">
+                <span><strong>${itemLabel(item)}</strong><small>ML ${item.ml || "-"} | Pack ${item.packing || "-"}</small></span>
                 ${score}
-            </button>
-        `;
-    }).join('');
-
-    container.querySelectorAll('[data-code]').forEach((button) => {
-        button.addEventListener('click', () => selectMadhushalaItem(button.dataset.code, button.dataset.score));
+            </button>`;
+    }).join("");
+    container.querySelectorAll("[data-code]").forEach((button) => {
+        button.addEventListener("click", () => selectMadhushalaItem(button.dataset.code, button.dataset.score));
     });
-}
-
-function applyMadhushalaSelection(itemCode) {
-    if (!selectedExciseCode) return;
-    selectedMappings.set(String(selectedExciseCode), itemCode);
-    showNotification('Selected', 'success');
-    renderWorkspace();
 }
 
 function selectMadhushalaItem(itemCode, score = null) {
-    if (!selectedExciseCode) return;
     const exciseItem = currentExciseItem();
     const madhushalaItem = findMadhushalaItem(itemCode);
     const issues = guardrailIssues(exciseItem, madhushalaItem, score);
-    const duplicateIssue = duplicateMappingIssue(itemCode);
-    if (duplicateIssue) issues.push(duplicateIssue);
+    const apply = () => {
+        selectedMappings.set(String(selectedExciseCode), String(itemCode));
+        showToast("Selected", "success");
+        renderWorkspace();
+    };
+    if (issues.length) showGuardrailModal(issues, apply);
+    else apply();
+}
 
-    if (issues.length) {
-        showGuardrailModal(issues, () => applyMadhushalaSelection(itemCode));
-        return;
-    }
+function normalizeSearchText(value) {
+    return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
 
-    applyMadhushalaSelection(itemCode);
+function itemInitials(itemName) {
+    return normalizeSearchText(itemName).split(" ").filter(Boolean).map((word) => word[0]).join("");
+}
+
+function scoreSearch(item, query) {
+    const clean = normalizeSearchText(query);
+    if (!clean) return 0;
+    const name = normalizeSearchText(item.itemName);
+    const compact = name.replace(/\s/g, "");
+    const code = normalizeSearchText(item.itemCode);
+    let score = 0;
+    if (code === clean) score += 120;
+    if (code.startsWith(clean)) score += 85;
+    if (name.startsWith(clean)) score += 100;
+    if (compact.startsWith(clean.replace(/\s/g, ""))) score += 80;
+    if (itemInitials(item.itemName).startsWith(clean.replace(/\s/g, ""))) score += 90;
+    if (clean.length >= 3 && name.includes(clean)) score += 45;
+    return score;
 }
 
 function runSearch() {
-    const query = document.getElementById('madhushala-search')?.value || '';
-    const selectedItem = currentExciseItem();
+    const query = document.getElementById("madhushala-search")?.value || "";
     if (!query.trim()) {
-        renderCandidates('suggestions', selectedItem?.suggestions || [], true);
+        renderSelectedExcise(currentExciseItem());
         return;
     }
-
     const results = workspace.madhushalaItems
-        .map((item) => ({item, score: scoreMadhushalaSearch(item, query)}))
+        .map((item) => ({item, score: scoreSearch(item, query)}))
         .filter((entry) => entry.score > 0)
-        .sort((left, right) => right.score - left.score || String(left.item.itemName).localeCompare(String(right.item.itemName)))
+        .sort((left, right) => right.score - left.score)
         .slice(0, 50);
-    renderCandidates('suggestions', results);
+    renderCandidates(results);
 }
 
-function updateMappingSummary() {
-    const pendingCount = workspace.unmappedItems.filter((item) => !selectedMappings.get(String(item.exciseItemCode)) && !item.selectedItemCode).length;
-    const selectedCount = selectedMappings.size;
-    setText('mapping-summary', `Selected: ${selectedCount} | Left: ${pendingCount}`);
-    const submit = document.getElementById('submit-mappings');
+function updateSummary() {
+    const left = workspace.unmappedItems.filter((item) => !selectedMappings.get(String(item.exciseItemCode)) && !item.selectedItemCode).length;
+    setText(document.getElementById("mapping-summary"), `Selected: ${selectedMappings.size} | Left: ${left}`);
+    const submit = document.getElementById("submit-mappings");
     if (submit) submit.disabled = selectedMappings.size === 0;
 }
 
-function updateWorkspaceModeButtons() {
-    document.getElementById('show-latest-unmapped')?.classList.toggle('selected', workspaceMode === 'latest');
-    document.getElementById('show-all-unmapped')?.classList.toggle('selected', workspaceMode === 'all');
-}
-
-async function refreshWorkspace(showToast = true) {
+async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
+    const normalizedJobId = sanitizeJobId(isEventLike(jobId) ? "" : jobId || currentDocumentJobId);
+    const preserveState = options.preserveState !== false;
+    const previousSelected = preserveState ? selectedExciseCode : null;
+    const search = document.getElementById("madhushala-search");
+    const previousSearch = preserveState ? search?.value || "" : "";
     try {
-        const latestOnly = workspaceMode === 'latest';
-        workspace = await api(`/mapping/workspace?latestOnly=${latestOnly}`);
-        selectedMappings.clear();
-        selectedExciseCode = null;
+        const query = normalizedJobId ? `?jobId=${encodeURIComponent(normalizedJobId)}` : "?latestOnly=true";
+        workspace = await api(`/mapping/workspace${query}`);
+        currentDocumentJobId = normalizedJobId || currentDocumentJobId;
+        const codes = new Set((workspace.unmappedItems || []).map((item) => String(item.exciseItemCode)));
+        selectedExciseCode = previousSelected && codes.has(String(previousSelected)) ? previousSelected : null;
+        if (search) search.value = previousSearch;
         renderWorkspace();
-        if (showToast) showNotification(`Loaded ${workspace.unmappedItems.length}`, 'success');
+        if (previousSearch) runSearch();
     } catch (error) {
-        showNotification(error.message, 'error');
+        if (!options.quiet) showToast(error.message || "Could not load mapping", "error");
     }
 }
 
-async function switchWorkspaceMode(mode) {
-    if (workspaceMode === mode) return;
-    workspaceMode = mode;
-    updateWorkspaceModeButtons();
-    await refreshWorkspace(true);
-}
-
-document.getElementById('open-excise')?.addEventListener('click', async () => {
-    try {
-        const settings = await loadExtensionSettings();
-        if (!settings) throw new Error('Install or reload the Madhushala Excise Capture extension.');
-        if (!settings.exciseUser || !settings.excisePassword) {
-            openCredentialsModal(settings);
-            return;
+function startMappingAutoRefresh() {
+    if (mappingRefreshTimer) return;
+    mappingRefreshTimer = window.setInterval(async () => {
+        if (mappingRefreshInFlight || document.getElementById("mapping-view")?.hidden) return;
+        mappingRefreshInFlight = true;
+        try {
+            await loadWorkspace(currentDocumentJobId, {quiet: true, preserveState: true});
+        } finally {
+            mappingRefreshInFlight = false;
         }
-        await extensionRequest('SAVE_SETTINGS', {bridgeUrl: window.location.origin + basePath});
-        await extensionRequest('OPEN_PORTAL', {}, 30000);
-        setText('instruction-message', 'Enter the CAPTCHA, log in, then update case quantities. Mapping will open automatically if required.');
-        showNotification('Excise portal opened', 'success');
-    } catch (error) {
-        showNotification(error.message || 'Could not open portal', 'error');
-    }
-});
+    }, 3000);
+}
 
-document.getElementById('credentials-form')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
+function stopMappingAutoRefresh() {
+    if (mappingRefreshTimer) window.clearInterval(mappingRefreshTimer);
+    mappingRefreshTimer = null;
+    mappingRefreshInFlight = false;
+}
+
+async function saveMappings() {
+    const mappings = Array.from(selectedMappings.entries()).map(([exciseItemCode, itemCode]) => ({
+        exciseItemCode: Number(exciseItemCode),
+        itemCode,
+    }));
     try {
-        await saveCredentialsAndOpen();
+        const result = await api("/mapping/submit", {method: "POST", body: JSON.stringify({mappings, jobId: currentDocumentJobId || null})});
+        selectedMappings.clear();
+        showToast(`Saved ${result.mappedCount}`, "success");
+        await loadWorkspace();
+        if (sanitizeJobId(currentDocumentJobId)) {
+            setHidden(document.getElementById("save-purchase-from-mapping"), false);
+        }
     } catch (error) {
-        showNotification(error.message || 'Could not save Excise credentials', 'error');
+        showToast(error.message || "Could not save mapping", "error");
+    }
+}
+
+function initMapping() {
+    stopMappingAutoRefresh();
+    setHidden(document.getElementById("launch-view"), true);
+    setHidden(document.getElementById("document-import-view"), true);
+    setHidden(document.getElementById("mapping-view"), false);
+    setHidden(document.getElementById("save-purchase-from-mapping"), !sanitizeJobId(currentDocumentJobId));
+    if (!sessionToken) {
+        showToast("Invalid or missing CRM session.", "error");
+        return;
+    }
+    void loadWorkspace(currentDocumentJobId, {preserveState: false});
+    startMappingAutoRefresh();
+}
+
+function documentElements() {
+    return {
+        upload: document.getElementById("document-upload-panel"),
+        processing: document.getElementById("document-processing-panel"),
+        review: document.getElementById("document-review-panel"),
+        success: document.getElementById("document-success-panel"),
+        error: document.getElementById("document-error-panel"),
+        action: document.getElementById("document-action-bar"),
+        file: document.getElementById("document-file"),
+        status: document.getElementById("document-status"),
+        errorMessage: document.getElementById("document-error-message"),
+        progressTitle: document.getElementById("document-progress-title"),
+        progressDetail: document.getElementById("document-progress-detail"),
+    };
+}
+
+function setDocumentImportState(state, message = "") {
+    const elements = documentElements();
+    setHidden(elements.upload, state !== "idle" && state !== "selected");
+    setHidden(elements.processing, state !== "uploading" && state !== "extracting" && state !== "normalizing" && state !== "checking");
+    setHidden(elements.review, state !== "review");
+    setHidden(elements.success, state !== "complete");
+    setHidden(elements.error, state !== "error");
+    setHidden(elements.action, state !== "review");
+    if (elements.file) elements.file.disabled = state === "uploading" || state === "extracting" || state === "normalizing" || state === "checking";
+
+    if (elements.status) {
+        elements.status.textContent = message;
+        elements.status.className = state === "error" ? "status-message error" : "status-message ok";
+    }
+
+    const stages = document.querySelectorAll(".document-stages li");
+    const stageOrder = ["uploading", "extracting", "normalizing", "checking"];
+    const activeIndex = stageOrder.indexOf(state);
+    stages.forEach((stage) => {
+        const active = stage.dataset.stage === state;
+        stage.classList.toggle("active", active);
+        stage.classList.toggle("done", activeIndex > -1 && stageOrder.indexOf(stage.dataset.stage) < activeIndex);
+    });
+}
+
+function formatBytes(bytes) {
+    if (!bytes) return "0 B";
+    const units = ["B", "KB", "MB", "GB"];
+    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function revokeDocumentPreview() {
+    if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl);
+    currentPreviewUrl = "";
+}
+
+function renderDocumentPreview(file) {
+    revokeDocumentPreview();
+    currentPreviewUrl = URL.createObjectURL(file);
+    const preview = document.getElementById("document-preview");
+    if (!preview) return;
+    if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+        preview.innerHTML = `<iframe title="Uploaded PDF preview" src="${currentPreviewUrl}"></iframe>`;
+    } else {
+        preview.innerHTML = `<img alt="Uploaded document preview" src="${currentPreviewUrl}">`;
+    }
+    setText(document.getElementById("review-filename"), file.name);
+    setText(document.getElementById("review-filetype"), file.type || file.name.split(".").pop().toUpperCase());
+    setText(document.getElementById("review-filesize"), formatBytes(file.size));
+}
+
+function renderDocumentReview(payload) {
+    const summary = payload.summary || {};
+    const job = payload.job || {};
+    currentDocumentResult = payload;
+    currentUploadKind = "document";
+    currentDocumentJobId = job.id || currentDocumentJobId;
+    const detected = summary.detected || job.extracted_count || 0;
+    const recognized = summary.recognized || job.mapped_count || 0;
+    const needMapping = summary.needMapping || 0;
+    setText(document.getElementById("metric-detected"), String(detected));
+    setText(document.getElementById("metric-recognized"), String(recognized));
+    setText(document.getElementById("metric-unmapped"), String(needMapping));
+    setText(document.getElementById("document-action-summary"), `${detected} products extracted | ${recognized} recognized | ${needMapping} require mapping`);
+    setText(document.getElementById("continue-document-mapping"), "Continue to Mapping");
+    setHidden(document.getElementById("purchase-form"), false);
+    setHidden(document.getElementById("save-purchase"), Boolean(needMapping));
+    setHidden(document.getElementById("continue-document-mapping"), !needMapping);
+    applyPurchaseHeader(loadPurchaseHeader(job.id));
+    if (payload.extractedDocument?.invoiceDate) setInputValue("purchase-doc-date", payload.extractedDocument.invoiceDate);
+    setText(document.getElementById("document-json"), JSON.stringify(payload, null, 2));
+}
+
+function resetDocumentImport() {
+    revokeDocumentPreview();
+    currentDocumentFile = null;
+    currentDocumentResult = null;
+    currentDocumentJobId = "";
+    currentUploadKind = "document";
+    const input = document.getElementById("document-file");
+    if (input) input.value = "";
+    const qrInput = document.getElementById("qr-file");
+    if (qrInput) qrInput.value = "";
+    setHidden(document.getElementById("purchase-form"), false);
+    setHidden(document.getElementById("save-purchase"), true);
+    setHidden(document.getElementById("continue-document-mapping"), false);
+    setDocumentImportState("idle", "Ready. Select a purchase document or QR image.");
+}
+
+async function uploadDocument(file) {
+    if (!sessionToken) {
+        setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
+        setText(documentElements().errorMessage, "Missing or expired CRM session.");
+        return;
+    }
+    currentDocumentFile = file;
+    renderDocumentPreview(file);
+    const form = new FormData();
+    form.append("file", file);
+    setDocumentImportState("uploading");
+    const elements = documentElements();
+    setText(elements.progressTitle, "Uploading document");
+    setText(elements.progressDetail, "Sending the selected document securely to the bridge.");
+    try {
+        window.setTimeout(() => {
+            if (document.getElementById("document-processing-panel")?.hidden) return;
+            setDocumentImportState("extracting");
+            const latestElements = documentElements();
+            setText(latestElements.progressTitle, "Extracting products");
+            setText(latestElements.progressDetail, "Reading product rows and checking Madhushala mappings.");
+        }, 500);
+        const response = await fetch(apiUrl("/api/v1/document-import/upload"), {
+            method: "POST",
+            headers: {"Authorization": `Bearer ${sessionToken}`},
+            body: form,
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || payload.error || "Document import failed");
+        renderDocumentReview(payload);
+        setDocumentImportState("review");
+    } catch (error) {
+        setText(documentElements().errorMessage, error.message || "Document import failed.");
+        setDocumentImportState("error");
+    }
+}
+
+async function initDocumentImport() {
+    stopMappingAutoRefresh();
+    setHidden(document.getElementById("launch-view"), true);
+    setHidden(document.getElementById("mapping-view"), true);
+    setHidden(document.getElementById("document-import-view"), false);
+    setDocumentImportState("idle", "Ready. Select a purchase document or QR image.");
+    if (!sessionToken) {
+        setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
+        setText(documentElements().errorMessage, "Missing or expired CRM session.");
+        return;
+    }
+    try {
+        const session = await api("/session/status");
+        setText(document.getElementById("document-session-info"), `Shop ${session.shopCode}`);
+    } catch (error) {
+        setText(documentElements().errorMessage, error.message || "CRM session could not be opened.");
+        setDocumentImportState("error");
+    }
+}
+
+document.getElementById("open-portal")?.addEventListener("click", openPortal);
+document.getElementById("reload-workspace")?.addEventListener("click", () => {
+    void loadWorkspace(currentDocumentJobId, {preserveState: true});
+});
+document.getElementById("madhushala-search")?.addEventListener("input", runSearch);
+document.getElementById("submit-mappings")?.addEventListener("click", saveMappings);
+document.getElementById("document-file")?.addEventListener("change", (event) => {
+    const [file] = event.target.files || [];
+    if (file) uploadDocument(file);
+});
+document.getElementById("qr-file")?.addEventListener("change", (event) => {
+    const [file] = event.target.files || [];
+    if (file) uploadQr(file);
+});
+document.getElementById("qr-link-submit")?.addEventListener("click", () => {
+    void submitQrLink();
+});
+document.getElementById("qr-link-input")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        event.preventDefault();
+        void submitQrLink();
     }
 });
-
-document.getElementById('close-credentials')?.addEventListener('click', closeCredentialsModal);
-document.getElementById('cancel-credentials')?.addEventListener('click', closeCredentialsModal);
-
-document.getElementById('refresh-workspace')?.addEventListener('click', refreshWorkspace);
-document.getElementById('close-mapping')?.addEventListener('click', closeMappingModal);
-document.querySelector('[data-close-modal]')?.addEventListener('click', closeMappingModal);
-document.getElementById('show-latest-unmapped')?.addEventListener('click', () => switchWorkspaceMode('latest'));
-document.getElementById('show-all-unmapped')?.addEventListener('click', () => switchWorkspaceMode('all'));
-document.getElementById('madhushala-search')?.addEventListener('input', runSearch);
-document.getElementById('cancel-guardrail')?.addEventListener('click', closeGuardrailModal);
-document.getElementById('confirm-guardrail')?.addEventListener('click', () => {
+function bindDropzone(id, handler) {
+    const zone = document.getElementById(id);
+    zone?.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        zone.classList.add("dragover");
+    });
+    zone?.addEventListener("dragleave", () => zone.classList.remove("dragover"));
+    zone?.addEventListener("drop", (event) => {
+        event.preventDefault();
+        zone.classList.remove("dragover");
+        const [file] = event.dataTransfer.files || [];
+        if (file) handler(file);
+    });
+}
+bindDropzone("document-dropzone", uploadDocument);
+bindDropzone("qr-dropzone", uploadQr);
+document.getElementById("document-refresh")?.addEventListener("click", resetDocumentImport);
+document.getElementById("replace-document")?.addEventListener("click", resetDocumentImport);
+document.getElementById("document-upload-another")?.addEventListener("click", resetDocumentImport);
+document.getElementById("success-upload-another")?.addEventListener("click", resetDocumentImport);
+document.getElementById("choose-another-document")?.addEventListener("click", resetDocumentImport);
+document.getElementById("retry-document")?.addEventListener("click", () => {
+    if (currentDocumentFile) uploadDocument(currentDocumentFile);
+    else resetDocumentImport();
+});
+document.getElementById("copy-document-json")?.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(document.getElementById("document-json")?.textContent || "");
+    showToast("JSON copied", "success");
+});
+document.getElementById("purchase-form")?.addEventListener("input", persistPurchaseHeader);
+document.getElementById("save-purchase")?.addEventListener("click", () => {
+    void savePurchaseFromJob("review");
+});
+document.getElementById("save-purchase-from-mapping")?.addEventListener("click", () => {
+    void savePurchaseFromJob("mapping");
+});
+document.getElementById("continue-document-mapping")?.addEventListener("click", () => {
+    const jobId = sanitizeJobId(currentDocumentJobId);
+    if (!jobId) return;
+    persistPurchaseHeader();
+    window.location.href = `${basePath}/?view=mapping&jobId=${encodeURIComponent(jobId)}&sessionId=${encodeURIComponent(sessionId)}#session=${encodeURIComponent(sessionToken)}`;
+});
+document.getElementById("cancel-guardrail")?.addEventListener("click", closeGuardrailModal);
+document.getElementById("confirm-guardrail")?.addEventListener("click", () => {
     const action = pendingGuardrailAction;
     closeGuardrailModal();
     if (action) action();
 });
 
-document.getElementById('submit-mappings')?.addEventListener('click', async () => {
-    const mappings = Array.from(selectedMappings.entries()).map(([exciseItemCode, itemCode]) => ({
-        exciseItemCode: Number(exciseItemCode),
-        itemCode
-    }));
-
-    const submitIssues = [];
-    for (const mapping of mappings) {
-        const exciseItem = workspace.unmappedItems.find((item) => Number(item.exciseItemCode) === Number(mapping.exciseItemCode));
-        const madhushalaItem = findMadhushalaItem(mapping.itemCode);
-        const issues = guardrailIssues(exciseItem, madhushalaItem);
-        const duplicateIssue = duplicateMappingIssue(mapping.itemCode, mapping.exciseItemCode);
-        if (duplicateIssue) issues.push(duplicateIssue);
-        if (issues.length) {
-            submitIssues.push(`${exciseItem?.itemName || mapping.exciseItemCode}: ${issues.join(', ')}`);
-        }
-    }
-
-    if (submitIssues.length) {
-        showGuardrailModal(submitIssues, () => submitMappings(mappings));
-        return;
-    }
-
-    await submitMappings(mappings);
+document.addEventListener("DOMContentLoaded", () => {
+    if (documentMode) initDocumentImport();
+    else if (mappingMode) initMapping();
+    else initLaunch();
 });
 
-async function submitMappings(mappings) {
-    try {
-        const result = await api('/mapping/submit', {
-            method: 'POST',
-            body: JSON.stringify({mappings})
-        });
-        selectedMappings.clear();
-        showNotification(`Saved ${result.mappedCount}`, 'success');
-        await refreshWorkspace();
-    } catch (error) {
-        showNotification(error.message, 'error');
-    }
-}
 
-document.addEventListener('DOMContentLoaded', async () => {
-    updateWorkspaceModeButtons();
-    discoverExtension();
 
-    if (mappingOnlyMode) {
-        document.body.classList.add('mapping-only');
-        workspaceMode = 'latest';
-        openMappingModal();
-        await refreshWorkspace(false);
-        return;
-    }
-
-    setTimeout(() => {
-        if (!extensionConnected) {
-            discoverExtension();
-            setText('extension-status', 'Browser extension required', 'status-waiting');
-        }
-    }, 2000);
-    pollStatus();
-    loadApiStatus();
-});
