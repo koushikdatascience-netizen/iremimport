@@ -116,7 +116,7 @@
         try {
             const query = normalizedJobId ? `?jobId=${encodeURIComponent(normalizedJobId)}` : "?latestOnly=true";
             workspace = await api(`/mapping/workspace${query}`);
-            currentDocumentJobId = normalizedJobId || currentDocumentJobId;
+            currentDocumentJobId = normalizedJobId || sanitizeJobId(workspace?.jobId) || currentDocumentJobId;
             const keys = new Set((workspace.unmappedItems || []).map(mappingRowKey));
             selectedExciseCode = previousSelected && keys.has(String(previousSelected)) ? previousSelected : null;
             if (search) search.value = previousSearch;
@@ -129,41 +129,67 @@
 
     saveMappings = async function saveUniqueDocumentMappings() {
         const mappings = [];
+        const documentJobId = sanitizeJobId(currentDocumentJobId || workspace?.jobId || "");
+        const documentMapping = Boolean(documentJobId && isDocumentWorkspace());
+
         for (const [rowKey, itemCode] of selectedMappings.entries()) {
             const row = rowForKey(rowKey);
             if (!row) continue;
             const rawExciseCode = String(row.exciseItemCode ?? "").trim();
-            const exciseItemCode = Number(rawExciseCode);
-            if (!rawExciseCode || !Number.isInteger(exciseItemCode) || exciseItemCode <= 0) {
-                showToast(`${row.itemName || "This row"} does not have a valid Excise item code yet. Refresh mapping and try again.`, "error");
-                return;
+            const parsedExciseCode = Number(rawExciseCode);
+            const hasValidExciseCode = Boolean(
+                rawExciseCode && Number.isInteger(parsedExciseCode) && parsedExciseCode > 0,
+            );
+
+            if (!documentMapping && !hasValidExciseCode) {
+                showToast(`${row.itemName || "This row"} does not have a valid Excise item code.`, "error");
+                return false;
             }
+
             mappings.push({
-                jobItemId: row.jobItemId || null,
-                exciseItemCode,
+                jobItemId: documentMapping ? row.jobItemId || null : null,
+                exciseItemCode: hasValidExciseCode ? parsedExciseCode : null,
                 itemCode,
             });
         }
-        if (!mappings.length) return;
+        if (!mappings.length) return false;
 
         const submit = document.getElementById("submit-mappings");
         if (submit) submit.disabled = true;
         try {
-            const result = await api("/mapping/submit", {
+            const endpoint = documentMapping
+                ? `/api/v1/document-import/jobs/${encodeURIComponent(documentJobId)}/mapping/save`
+                : "/mapping/submit";
+            const body = documentMapping ? {mappings} : {mappings, jobId: null};
+            const result = await api(endpoint, {
                 method: "POST",
-                body: JSON.stringify({mappings, jobId: currentDocumentJobId || null}),
+                body: JSON.stringify(body),
             });
             selectedMappings.clear();
-            showToast(`Saved ${result.mappedCount}`, "success");
-            await loadWorkspace(currentDocumentJobId, {preserveState: false});
-            if (sanitizeJobId(currentDocumentJobId)) {
+            showToast(`Saved ${result.mappedCount} mapping${result.mappedCount === 1 ? "" : "s"}`, "success");
+            await loadWorkspace(documentJobId || currentDocumentJobId, {preserveState: false});
+            if (documentJobId) {
                 setHidden(document.getElementById("save-purchase-from-mapping"), false);
             }
+            return true;
         } catch (error) {
             showToast(error.message || "Could not save mapping", "error");
+            return false;
         } finally {
             if (submit) submit.disabled = selectedMappings.size === 0;
         }
+    };
+
+    // If the user chooses items and clicks Save Purchase directly, persist the
+    // pending row selections first. Purchase creation only needs mapped_item_code;
+    // an Excise item code is optional for document/QR rows.
+    const originalSavePurchaseFromJob = savePurchaseFromJob;
+    savePurchaseFromJob = async function savePurchaseAfterPendingMappings(source = "review") {
+        if (source === "mapping" && selectedMappings.size > 0) {
+            const saved = await saveMappings();
+            if (!saved) return;
+        }
+        return originalSavePurchaseFromJob(source);
     };
 
     // The legacy inline page attached the old saveMappings function directly to this button.
