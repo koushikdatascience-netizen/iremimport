@@ -56,6 +56,39 @@ class Settings:
     CRM_INTEGRATION_KEY: str = os.getenv("CRM_INTEGRATION_KEY", "")
     MADHUSHALA_SERVICE_TOKEN: str = os.getenv("MADHUSHALA_SERVICE_TOKEN", "")
     VALIDATE_MADHUSHALA_TOKEN_ON_SESSION: bool = _env_bool("VALIDATE_MADHUSHALA_TOKEN_ON_SESSION", False)
+
+    # Madhushala HTTP integration. One pooled async client is reused by every
+    # request; GET retries are deliberately bounded and purchase/save is never
+    # blindly retried because it can create duplicate accounting transactions.
+    MADHUSHALA_CONNECT_TIMEOUT_SECONDS: float = float(os.getenv("MADHUSHALA_CONNECT_TIMEOUT_SECONDS", "5"))
+    MADHUSHALA_READ_TIMEOUT_SECONDS: float = float(os.getenv("MADHUSHALA_READ_TIMEOUT_SECONDS", "30"))
+    MADHUSHALA_WRITE_TIMEOUT_SECONDS: float = float(os.getenv("MADHUSHALA_WRITE_TIMEOUT_SECONDS", "30"))
+    MADHUSHALA_POOL_TIMEOUT_SECONDS: float = float(os.getenv("MADHUSHALA_POOL_TIMEOUT_SECONDS", "5"))
+    MADHUSHALA_MAX_CONNECTIONS: int = int(os.getenv("MADHUSHALA_MAX_CONNECTIONS", "100"))
+    MADHUSHALA_MAX_KEEPALIVE_CONNECTIONS: int = int(os.getenv("MADHUSHALA_MAX_KEEPALIVE_CONNECTIONS", "20"))
+    MADHUSHALA_GET_RETRIES: int = int(os.getenv("MADHUSHALA_GET_RETRIES", "2"))
+    MADHUSHALA_ITEM_FETCH_CONCURRENCY: int = int(os.getenv("MADHUSHALA_ITEM_FETCH_CONCURRENCY", "8"))
+
+    # Optional shared cache. With REDIS_URL unset the application uses a
+    # process-local TTL cache, so current deployments continue to work without
+    # infrastructure changes. Supplying REDIS_URL later makes the same code
+    # horizontally scalable without changing the purchase flow.
+    REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
+    CACHE_PREFIX: str = os.getenv("CACHE_PREFIX", "madhushala-bridge:v1")
+    CACHE_MASTER_TTL_SECONDS: int = int(os.getenv("CACHE_MASTER_TTL_SECONDS", "1800"))
+    CACHE_USER_TTL_SECONDS: int = int(os.getenv("CACHE_USER_TTL_SECONDS", "900"))
+    CACHE_SCHEME_TTL_SECONDS: int = int(os.getenv("CACHE_SCHEME_TTL_SECONDS", "900"))
+    CACHE_TAX_TTL_SECONDS: int = int(os.getenv("CACHE_TAX_TTL_SECONDS", "10800"))
+    CACHE_ITEM_TTL_SECONDS: int = int(os.getenv("CACHE_ITEM_TTL_SECONDS", "21600"))
+
+    # Purchase orchestration controls. Calculation is now the authoritative
+    # Madhushala business-rule boundary. Duplicate checking remains best-effort
+    # until the upstream team documents a strict response contract.
+    PURCHASE_CALCULATION_REQUIRED: bool = _env_bool("PURCHASE_CALCULATION_REQUIRED", True)
+    PURCHASE_DUPLICATE_CHECK_REQUIRED: bool = _env_bool("PURCHASE_DUPLICATE_CHECK_REQUIRED", False)
+    PURCHASE_DEFAULT_SALES_TAX_RATE: float = float(os.getenv("PURCHASE_DEFAULT_SALES_TAX_RATE", "0"))
+    PURCHASE_DEFAULT_SALES_TAX_INCLUDING_FREE: bool = _env_bool("PURCHASE_DEFAULT_SALES_TAX_INCLUDING_FREE", False)
+
     LLAMA_CLOUD_API_KEY: str = os.getenv("LLAMA_CLOUD_API_KEY", "")
     LLAMA_CLOUD_BASE_URL: str = os.getenv("LLAMA_CLOUD_BASE_URL", "https://api.cloud.llamaindex.ai").rstrip("/")
     DOCUMENT_IMPORT_EXTRACTION_MODE: str = os.getenv("DOCUMENT_IMPORT_EXTRACTION_MODE", "FAST").strip().upper() or "FAST"
@@ -113,5 +146,3 @@ class Settings:
             raise RuntimeError(f"Missing production settings: {', '.join(missing)}")
 
 settings = Settings()
-
-
