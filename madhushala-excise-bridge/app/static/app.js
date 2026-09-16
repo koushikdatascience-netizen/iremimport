@@ -178,11 +178,6 @@ async function savePurchaseFromJob(source = "review") {
         return;
     }
     let header = source === "mapping" ? loadPurchaseHeader(jobId) : collectPurchaseHeader();
-    const missing = validatePurchaseHeader(header);
-    if (missing.length) {
-        showToast(`Fill purchase fields first: ${missing.join(", ")}`, "error");
-        return;
-    }
     persistPurchaseHeader();
     const button = source === "mapping" ? document.getElementById("save-purchase-from-mapping") : document.getElementById("save-purchase");
     if (button) button.disabled = true;
