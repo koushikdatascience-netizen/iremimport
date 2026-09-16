@@ -38,9 +38,6 @@ def _unwrap_dict(value: Any) -> dict[str, Any]:
 
 def _has_purchase_detail(item: dict[str, Any]) -> bool:
     normalized = {_key(name) for name in item}
-    # The dropdown is considered rich enough if it carries packing plus at
-    # least one commercial/tax signal. Missing fields trigger /api/items/{code}
-    # only for those mapped products rather than for the entire catalogue.
     has_packing = any(_key(name) in normalized for name in ("packing", "bottlePerCase", "bottlesPerCase", "caseQty"))
     has_commercial = any(
         _key(name) in normalized
@@ -59,6 +56,8 @@ def _has_purchase_detail(item: dict[str, Any]) -> bool:
 
 
 class MadhushalaReferenceDataService:
+    """Cached/read-through view of the masters used by Madhushala Purchase."""
+
     def client_for_session(self, session: dict[str, Any]) -> MadhushalaClient:
         token = session.get("madhushala_token") or settings.MADHUSHALA_SERVICE_TOKEN
         return MadhushalaClient(
@@ -92,6 +91,19 @@ class MadhushalaReferenceDataService:
             return rows
 
         value = await cache_service.get_or_load(cache_key, ttl, load)
+        return value if isinstance(value, list) else []
+
+    async def companies(self, session: dict[str, Any]) -> list[Any]:
+        shop, _, _ = self._scope(session)
+        cache_key = f"master:companies:{shop}"
+        client = self.client_for_session(session)
+
+        async def load() -> list[Any]:
+            rows = await client.get_purchase_company()
+            logger.info("reference_refresh name=companies shopCode=%s rows=%s", shop, len(rows))
+            return rows
+
+        value = await cache_service.get_or_load(cache_key, settings.CACHE_MASTER_TTL_SECONDS, load)
         return value if isinstance(value, list) else []
 
     async def suppliers(self, session: dict[str, Any]) -> list[Any]:
@@ -234,9 +246,7 @@ class MadhushalaReferenceDataService:
         if isinstance(raw, str):
             candidate = raw
         elif isinstance(raw, dict):
-            candidate = str(
-                _dict_value(raw, "purchaseTaxMode", "taxMode", "mode", "value") or ""
-            )
+            candidate = str(_dict_value(raw, "purchaseTaxMode", "taxMode", "mode", "value") or "")
         else:
             candidate = ""
         mode = candidate.strip().upper()
@@ -255,6 +265,56 @@ class MadhushalaReferenceDataService:
 
         value = await cache_service.get_or_load(cache_key, settings.CACHE_TAX_TTL_SECONDS, load)
         return value if isinstance(value, list) else []
+
+    async def purchase_bootstrap(self, session: dict[str, Any]) -> dict[str, Any]:
+        """Warm the same Purchase-specific masters used by the manual screen.
+
+        All independent reads run concurrently and are cached. We deliberately
+        do not replay dashboard filters/session-data or account-maintenance
+        endpoints because the CRM launch already establishes the session and
+        those calls are not inputs to PurchaseCalculationRequest/PurchaseRequest.
+        """
+        names = (
+            "companies",
+            "suppliers",
+            "storages",
+            "accounts",
+            "users",
+            "schemes",
+            "taxMode",
+            "catalogue",
+            "taxTags",
+        )
+        results = await asyncio.gather(
+            self.companies(session),
+            self.suppliers(session),
+            self.storages(session),
+            self.purchase_accounts(session),
+            self.users(session),
+            self.schemes(session),
+            self.tax_mode(session),
+            self.catalogue(session),
+            self.tax_tags(session),
+            return_exceptions=True,
+        )
+        output: dict[str, Any] = {}
+        warnings: list[str] = []
+        for name, result in zip(names, results):
+            if isinstance(result, Exception):
+                warnings.append(f"{name}: {result}")
+                output[name] = "ITEMWISE" if name == "taxMode" else []
+                logger.warning("purchase_bootstrap_failed name=%s error=%s", name, result)
+            else:
+                output[name] = result
+        output["warnings"] = warnings
+        logger.info(
+            "purchase_bootstrap_ready shopCode=%s companyCode=%s catalogue=%s warnings=%s",
+            self._scope(session)[0],
+            self._scope(session)[1],
+            len(output.get("catalogue") or []),
+            len(warnings),
+        )
+        return output
 
 
 reference_data_service = MadhushalaReferenceDataService()
