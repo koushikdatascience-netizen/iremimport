@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.services.session_service import session_service
 from app.integrations.madhushala.client import MadhushalaApiError
 from app.modules.document_import.service import DocumentImportService
+from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
 from app.modules.document_import.purchase_context import build_purchase_context, up_supplier_hint
 from app.modules.document_import.purchase_required import resolve_required_purchase_header
 from app.modules.document_import.qr_decoder import decode_qr_upload
@@ -16,6 +17,7 @@ from app.modules.document_import.up_excise_qr import (
     extract_up_transport_pass,
     is_up_transport_pass_url,
 )
+from app.services.purchase_transaction_service import purchase_transaction_service
 
 
 class QrExtractRequest(BaseModel):
@@ -32,6 +34,7 @@ class DocumentMappingSaveRequest(BaseModel):
 
 def create_router(service: DocumentImportService) -> APIRouter:
     router = APIRouter(prefix="/api/v1/document-import", tags=["document-import"])
+    purchase_adapter = DocumentPurchaseAdapter(service)
 
     @router.post("/upload")
     async def upload_document(request: Request, file: UploadFile = File(...)):
@@ -83,6 +86,12 @@ def create_router(service: DocumentImportService) -> APIRouter:
         session = session_service.from_request(request)
         return await build_purchase_context(session, supplier_name=supplierName)
 
+    @router.get("/jobs/{job_id}/purchase/transaction")
+    async def get_purchase_transaction(job_id: str, request: Request):
+        session = session_service.from_request(request)
+        service.get_job(session, job_id)
+        return {"transaction": purchase_transaction_service.get(job_id)}
+
     @router.post("/jobs/{job_id}/purchase/save")
     async def save_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):
         session = session_service.from_request(request)
@@ -93,7 +102,7 @@ def create_router(service: DocumentImportService) -> APIRouter:
                 job_id,
                 payload.header,
             )
-            return await service.save_purchase(session, job_id, header)
+            return await purchase_adapter.save_purchase(session, job_id, header)
         except MadhushalaApiError as exc:
             status_code = exc.status_code if exc.status_code and exc.status_code >= 400 else 502
             raise HTTPException(status_code=status_code, detail=str(exc)) from exc
