@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from app.config import settings
-from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
+from app.services.reference_data_service import reference_data_service
 
 
 _OPTION_ALIASES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
@@ -153,6 +153,26 @@ def _jwt_claims(token: str) -> dict[str, Any]:
         return {}
 
 
+def jwt_context(token: str) -> dict[str, str]:
+    """Expose only non-secret business context carried by the Madhushala JWT."""
+    claims = _jwt_claims(token)
+    normalized = {_key(key): value for key, value in claims.items()}
+
+    def claim(*aliases: str) -> str:
+        for alias in aliases:
+            value = normalized.get(_key(alias))
+            if value not in (None, ""):
+                return _text(value)
+        return ""
+
+    return {
+        "companyCode": claim("companyCode", "company_code"),
+        "companyName": claim("companyName", "company_name"),
+        "yearCode": claim("yearCode", "year_code"),
+        "userCode": claim("userCode", "user_code", "username", "preferred_username", "unique_name"),
+    }
+
+
 def _current_user_default(options: list[dict[str, str]], token: str) -> str:
     claims = _jwt_claims(token)
     if not claims:
@@ -188,41 +208,23 @@ async def build_purchase_context(
     supplier_name: str = "",
 ) -> dict[str, Any]:
     token = str(session.get("madhushala_token") or settings.MADHUSHALA_SERVICE_TOKEN or "")
-    client = MadhushalaClient(
-        settings.MADHUSHALA_BASE_URL,
-        str(session.get("shop_code") or ""),
-        token,
-    )
     company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE)
 
-    calls = {
-        "suppliers": (client.get_purchase_suppliers, "supplier"),
-        "storages": (client.get_purchase_storages, "storage"),
-        "accounts": (client.get_purchase_accounts, "account"),
-        "users": (client.get_purchase_users, "user"),
-    }
-    options: dict[str, list[dict[str, str]]] = {}
     warnings: list[str] = []
-
-    for key, (method, kind) in calls.items():
-        try:
-            rows = await method(company_code)
-            options[key] = normalize_options(rows, kind)
-        except MadhushalaApiError as exc:
-            options[key] = []
-            warnings.append(f"{key}: {exc}")
-
     try:
-        scheme_rows = await client._get_purchase_master(
-            "/api/purchase/dropdown/schemes",
-            company_code,
-            "schemes",
-            "schemeList",
-        )
-        options["schemes"] = normalize_options(scheme_rows, "scheme")
-    except MadhushalaApiError as exc:
-        options["schemes"] = []
-        warnings.append(f"schemes: {exc}")
+        rows = await reference_data_service.purchase_context_rows(session)
+    except Exception as exc:
+        rows = {"suppliers": [], "storages": [], "accounts": [], "users": [], "schemes": []}
+        warnings.append(str(exc))
+
+    options = {
+        "suppliers": normalize_options(rows.get("suppliers", []), "supplier"),
+        "storages": normalize_options(rows.get("storages", []), "storage"),
+        "accounts": normalize_options(rows.get("accounts", []), "account"),
+        "users": normalize_options(rows.get("users", []), "user"),
+        "schemes": normalize_options(rows.get("schemes", []), "scheme"),
+    }
+    token_context = jwt_context(token)
 
     defaults = {
         "supplierCode": _match_option(options["suppliers"], supplier_name) or _single_option(options["suppliers"]),
@@ -230,6 +232,7 @@ async def build_purchase_context(
         "schemeCode": _single_option(options["schemes"]),
         "purchaseAccCode": _single_option(options["accounts"]),
         "userCode": _current_user_default(options["users"], token),
+        "yearCode": token_context.get("yearCode", ""),
     }
 
     return {
@@ -237,6 +240,7 @@ async def build_purchase_context(
         "companyCode": company_code,
         "billType": str(session.get("bill_type") or settings.DEFAULT_BILL_TYPE),
         "supplierHint": _text(supplier_name),
+        "jwtContext": token_context,
         "options": options,
         "defaults": defaults,
         "warnings": warnings,
