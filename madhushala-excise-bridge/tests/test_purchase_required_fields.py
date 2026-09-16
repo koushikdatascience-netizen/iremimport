@@ -33,7 +33,7 @@ class FakeDb:
 
 
 @pytest.mark.asyncio
-async def test_resolves_tp_pass_and_unique_purchase_masters(monkeypatch):
+async def test_resolves_optional_tp_pass_and_required_purchase_masters(monkeypatch):
     raw = json.dumps({"transportPassNo": "TP-2026-0001"})
     monkeypatch.setattr(purchase_required, "conn", lambda: FakeDb([{"raw_data_json": raw}]))
 
@@ -43,6 +43,9 @@ async def test_resolves_tp_pass_and_unique_purchase_masters(monkeypatch):
                 "supplierCode": "SUP-1",
                 "storeCode": "STORE-1",
                 "schemeCode": "SCH-1",
+                "purchaseAccCode": "PUR-1",
+                "userCode": "USR-1",
+                "taxMode": "ITEMWISE",
             }
         }
 
@@ -66,6 +69,9 @@ async def test_resolves_tp_pass_and_unique_purchase_masters(monkeypatch):
     assert resolved["supplierCode"] == "SUP-1"
     assert resolved["storeCode"] == "STORE-1"
     assert resolved["schemeCode"] == "SCH-1"
+    assert resolved["purchaseAccCode"] == "PUR-1"
+    assert resolved["userCode"] == "USR-1"
+    assert resolved["taxMode"] == "ITEMWISE"
 
 
 @pytest.mark.asyncio
@@ -95,7 +101,10 @@ async def test_existing_up_qr_job_recovers_supplier_hint_from_source_page(monkey
             "defaults": {
                 "supplierCode": "SUP-HS",
                 "storeCode": "STORE-1",
-                "schemeCode": "SCH-1",
+                "schemeCode": "",
+                "purchaseAccCode": "PUR-1",
+                "userCode": "USR-1",
+                "taxMode": "ITEMWISE",
             }
         }
 
@@ -120,14 +129,17 @@ async def test_existing_up_qr_job_recovers_supplier_hint_from_source_page(monkey
     assert seen["supplier"] == "HARPREET SINGH"
     assert seen["persisted"] == {"supplier_name": "HARPREET SINGH"}
     assert resolved["supplierCode"] == "SUP-HS"
+    assert resolved["purchaseAccCode"] == "PUR-1"
+    assert resolved["userCode"] == "USR-1"
+    assert resolved["schemeCode"] == ""
 
 
 @pytest.mark.asyncio
-async def test_clear_error_when_required_master_has_multiple_choices(monkeypatch):
+async def test_clear_error_only_for_contract_required_masters(monkeypatch):
     monkeypatch.setattr(
         purchase_required,
         "conn",
-        lambda: FakeDb([{"raw_data_json": json.dumps({"transportPassNo": "TP-1"})}]),
+        lambda: FakeDb([{"raw_data_json": json.dumps({"transportPassNo": ""})}]),
     )
 
     async def fake_context(session, supplier_name=""):
@@ -154,5 +166,7 @@ async def test_clear_error_when_required_master_has_multiple_choices(monkeypatch
     detail = str(exc.value.detail)
     assert "Supplier" in detail
     assert "Store" in detail
-    assert "Scheme" in detail
+    assert "Purchase A/c" in detail
+    assert "User" in detail
+    assert "Scheme" not in detail
     assert "TP Pass No" not in detail
