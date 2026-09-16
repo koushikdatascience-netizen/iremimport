@@ -91,7 +91,10 @@ def create_router(service: DocumentImportService) -> APIRouter:
     async def get_purchase_transaction(job_id: str, request: Request):
         session = session_service.from_request(request)
         service.get_job(session, job_id)
-        return {"transaction": purchase_transaction_service.get(job_id)}
+        return {
+            "transaction": purchase_transaction_service.get(job_id),
+            "events": purchase_transaction_service.events(job_id),
+        }
 
     @router.post("/jobs/{job_id}/purchase/save")
     async def save_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):
