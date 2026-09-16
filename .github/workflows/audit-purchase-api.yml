@@ -14,7 +14,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Download and inspect live Swagger
+      - name: Inspect exact purchase dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -24,57 +24,49 @@ jobs:
           import json
           api = json.load(open('/tmp/swagger.json'))
           paths = api.get('paths', {})
-          keywords = ('purchase','company','supplier','storage','store','scheme','counter-sales','user','tax','ledger','item','year')
-          print('=== RELEVANT PATHS ===')
-          selected = []
-          for path in sorted(paths):
-              if any(k in path.lower() for k in keywords):
-                  selected.append(path)
-                  print(path)
-
-          print('\n=== ENDPOINT DETAILS ===')
-          for path in selected:
-              print('\n###', path)
-              for method, op in paths[path].items():
-                  if method.lower() not in {'get','post','put','delete','patch'}:
-                      continue
-                  print(method.upper(), '-', op.get('summary') or op.get('operationId') or '')
-                  params = op.get('parameters') or []
-                  if params:
-                      print('  params:')
-                      for p in params:
-                          sch = p.get('schema') or {}
-                          print('   -', p.get('name'), 'in='+str(p.get('in')), 'required='+str(p.get('required', False)), 'type='+str(sch.get('type') or sch.get('$ref') or ''))
-                  rb = op.get('requestBody') or {}
-                  if rb:
-                      print('  requestBody required=', rb.get('required', False))
-                      for ctype, body in (rb.get('content') or {}).items():
-                          sch = (body or {}).get('schema') or {}
-                          print('   -', ctype, sch.get('$ref') or sch.get('type') or sch)
-                  for code, resp in (op.get('responses') or {}).items():
-                      refs=[]
-                      for ctype, body in (resp.get('content') or {}).items():
-                          sch=(body or {}).get('schema') or {}
-                          if sch.get('$ref'): refs.append(sch['$ref'])
-                          elif sch.get('items',{}).get('$ref'): refs.append('array:'+sch['items']['$ref'])
-                          elif sch.get('type'): refs.append(sch['type'])
-                      if refs:
-                          print('  response', code, ', '.join(refs))
-
           schemas = api.get('components', {}).get('schemas', {})
-          print('\n=== PURCHASE / MASTER SCHEMAS ===')
-          for name in sorted(schemas):
-              low = name.lower()
-              if any(k in low for k in ('purchase','supplier','storage','store','scheme','company','tax','item','user')):
-                  sch = schemas[name]
-                  print('\n##', name)
-                  print('required:', sch.get('required') or [])
-                  props = sch.get('properties') or {}
-                  for field, prop in props.items():
-                      typ = prop.get('type') or prop.get('$ref') or ''
-                      if prop.get('items'):
-                          typ = 'array[' + str(prop['items'].get('$ref') or prop['items'].get('type') or '') + ']'
-                      fmt = prop.get('format') or ''
-                      nullable = prop.get('nullable', False)
-                      print(f'  {field}: type={typ} format={fmt} nullable={nullable}')
+
+          exact = [
+              '/api/purchase/dropdown/company',
+              '/api/purchase/dropdown/items',
+              '/api/purchase/dropdown/suppliers',
+              '/api/purchase/dropdown/storages',
+              '/api/purchase/dropdown/purchase-accounts',
+              '/api/purchase/dropdown/schemes',
+              '/api/counter-sales/users',
+              '/api/companies/purchase-tax-mode',
+              '/api/purchase/calculate',
+              '/api/TaxTag/ShowTaxTag',
+              '/api/TaxTag/by-TaxCode/{code}',
+              '/api/purchase/check-duplicate-billno',
+              '/api/purchase/save',
+              '/api/items/{code}',
+          ]
+          print('=== EXACT PURCHASE DEPENDENCY ENDPOINTS ===')
+          for path in exact:
+              print('\n###', path)
+              print(json.dumps(paths.get(path), indent=2)[:18000])
+
+          print('\n=== PATHS THAT REFERENCE CompanyItem / YearCodeItem ===')
+          targets = ('Madhushala.Core.DTOs.Auth.CompanyItem','Madhushala.Core.DTOs.Auth.YearCodeItem')
+          for path, methods in paths.items():
+              text = json.dumps(methods)
+              if any(t in text for t in targets):
+                  print('\n###', path)
+                  print(json.dumps(methods, indent=2)[:12000])
+
+          print('\n=== EXACT SCHEMAS ===')
+          names = [
+              'Madhushala.Core.DTOs.Auth.CompanyItem',
+              'Madhushala.Core.DTOs.Auth.YearCodeItem',
+              'Madhushala.Core.DTOs.Transaction.Purchase.PurchaseRequest',
+              'Madhushala.Core.DTOs.Transaction.Purchase.PurchaseItemRequest',
+              'Madhushala.Core.DTOs.Transaction.Purchase.PurchaseTaxRequest',
+              'Madhushala.Core.DTOs.Transaction.Purchase.PurchaseCalculationRequest',
+              'Madhushala.Core.DTOs.Transaction.Purchase.PurchaseItemCalcRequest',
+              'Madhushala.Core.DTOs.Master.TaxTag.TaxTagSaveRequest',
+          ]
+          for name in names:
+              print('\n##', name)
+              print(json.dumps(schemas.get(name), indent=2)[:16000])
           PY
