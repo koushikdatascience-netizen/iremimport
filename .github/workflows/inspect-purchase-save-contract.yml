@@ -1,0 +1,44 @@
+name: Inspect purchase save contract
+on:
+  push:
+    branches: [fix/purchase-save-contract]
+    paths: [.github/workflows/inspect-purchase-save-contract.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect Swagger purchase save schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -k -fsSL https://reportapi.madhushalasoftware.com/swagger/v1/swagger.json -o /tmp/api.json
+          python - <<'PY'
+          import json
+          api=json.load(open('/tmp/api.json'))
+          path='/api/purchase/save'
+          node=(api.get('paths') or {}).get(path)
+          print('=== PATH ===')
+          print(json.dumps(node, indent=2)[:20000])
+          refs=set()
+          def walk(v):
+              if isinstance(v, dict):
+                  for k,x in v.items():
+                      if k=='$ref' and isinstance(x,str): refs.add(x)
+                      else: walk(x)
+              elif isinstance(v,list):
+                  for x in v: walk(x)
+          walk(node)
+          schemas=api.get('components',{}).get('schemas',{})
+          seen=set()
+          while refs:
+              ref=refs.pop()
+              name=ref.rsplit('/',1)[-1]
+              if name in seen: continue
+              seen.add(name)
+              schema=schemas.get(name)
+              print(f'=== SCHEMA {name} ===')
+              print(json.dumps(schema, indent=2)[:20000])
+              walk(schema)
+          PY
