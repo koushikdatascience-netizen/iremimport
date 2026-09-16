@@ -47,20 +47,20 @@ def _dict_value(row: dict[str, Any], *aliases: str) -> Any:
     return None
 
 
-def _year_code_for_date(value: str) -> str:
-    try:
-        effective = date.fromisoformat(str(value or "")[:10])
-    except ValueError:
-        return ""
-    start_year = effective.year if effective.month >= 4 else effective.year - 1
-    return f"{start_year}-{str((start_year + 1) % 100).zfill(2)}"
-
-
 class PurchaseOrchestrator:
+    """Mirror Madhushala's current Purchase business flow for imported bills.
+
+    Browser-only bootstrap/master screens are not replayed sequentially here.
+    Stable reference data is cached by ``reference_data_service``; the live
+    transaction path uses Madhushala's own Calculate API and then Save API.
+    """
+
+    # yearCode is intentionally not required here. The current Madhushala
+    # Purchase screen sends yearCode="" and lets its backend/session context
+    # resolve the effective year.
     REQUIRED_TEXT_FIELDS = (
         "shopCode",
         "companyCode",
-        "yearCode",
         "trnDate",
         "docDate",
         "docNo",
@@ -86,6 +86,7 @@ class PurchaseOrchestrator:
     )
 
     def build_calculation_request(self, payload: dict[str, Any], header: dict[str, Any]) -> dict[str, Any]:
+        """Build the exact PurchaseCalculationRequest shape from live Swagger."""
         calc_items = []
         for item in payload.get("items") or []:
             calc_items.append({
@@ -150,6 +151,7 @@ class PurchaseOrchestrator:
         return []
 
     def merge_calculation(self, payload: dict[str, Any], response: Any) -> None:
+        """Merge live Calculate output without assuming an undocumented wrapper."""
         calculated = self._calculated_items(response)
         by_code = {str(item.get("itemCode") or item.get("code") or "").strip(): item for item in calculated}
         merge_fields = (
@@ -223,6 +225,7 @@ class PurchaseOrchestrator:
         return result
 
     async def _build_billwise_taxes(self, session: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, Any]]:
+        # Prefer taxes[] produced by Madhushala Calculate if it supplies them.
         existing = payload.get("taxes")
         if isinstance(existing, list) and existing:
             return existing
@@ -304,7 +307,10 @@ class PurchaseOrchestrator:
 
             doc_date = str(header.get("docDate") or job.get("invoice_date") or "").strip()
             trn_date = str(header.get("trnDate") or date.today().isoformat()).strip()
-            year_code = str(header.get("yearCode") or "").strip() or _year_code_for_date(doc_date or trn_date)
+            # Match the current manual Purchase screen. It sends yearCode="";
+            # do not invent a financial year unless a caller explicitly gives it.
+            year_code = str(header.get("yearCode") or "").strip()
+
             try:
                 tax_mode = await reference_data_service.tax_mode(session)
             except Exception as exc:
@@ -326,10 +332,10 @@ class PurchaseOrchestrator:
                 "storeCode": str(header.get("storeCode") or "").strip(),
                 "schemeCode": str(header.get("schemeCode") or "").strip(),
                 "purchaseAccCode": str(header.get("purchaseAccCode") or "").strip(),
-                "narration": str(header.get("narration") or "Document import").strip(),
+                "narration": str(header.get("narration") or "").strip(),
                 "userCode": str(header.get("userCode") or "").strip(),
                 "billType": "AI",
-                "pType": "PURCHASE",
+                "pType": "purchase",
                 "taxMode": tax_mode,
                 "grossAmount": _money(header.get("grossAmount") if header.get("grossAmount") is not None else gross),
                 "taxAmount": _money(header.get("taxAmount") or 0),
@@ -424,6 +430,9 @@ class PurchaseOrchestrator:
             else:
                 payload["taxes"] = []
 
+            # These values are needed only by PurchaseCalculationRequest. The
+            # current PurchaseRequest/ItemRequest sent by the manual screen does
+            # not include them as item properties.
             for item in payload["items"]:
                 for helper_key in ("packing", "boxRate", "looseRate", "t1Rate", "t2Rate", "t3Rate", "t4Rate"):
                     item.pop(helper_key, None)
@@ -437,9 +446,8 @@ class PurchaseOrchestrator:
             try:
                 response = await client.save_purchase(payload)
             except Exception as exc:
-                # Do not auto-retry purchase/save. The upstream may have committed
-                # before a timeout. Persist UNKNOWN so an operator/reconciliation
-                # path can verify the bill before any later retry.
+                # Never blindly retry Purchase Save. A network failure can happen
+                # after Madhushala commits the accounting transaction.
                 status = "UNKNOWN" if isinstance(exc, MadhushalaApiError) and exc.status_code is None else "FAILED"
                 purchase_transaction_service.update(job_id, status, error=str(exc))
                 purchase_transaction_service.record_event(tx_id, job_id, "SAVE", status, details={"error": str(exc)})
