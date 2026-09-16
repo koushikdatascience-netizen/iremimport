@@ -14,7 +14,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Trace purchase calculation config sources
+      - name: Trace session and company purchase config endpoints
         shell: bash
         run: |
           set -euo pipefail
@@ -24,22 +24,18 @@ jobs:
           import json
           api=json.load(open('/tmp/swagger.json'))
           paths=api.get('paths',{})
-          schemas=api.get('components',{}).get('schemas',{})
 
-          needles=('salestaxrate','salestaxincludingfree','salestaxonmrp','purchasetaxmode','yearcode')
-          print('=== PATHS CONTAINING PURCHASE CALC/YEAR SIGNALS ===')
+          print('=== SESSION DATA RESPONSE REFERENCES ===')
           for path, methods in sorted(paths.items()):
-              text=json.dumps(methods).lower()
-              hits=[n for n in needles if n in text]
-              if hits:
-                  print('\n###',path,'hits=',','.join(hits))
+              text=json.dumps(methods)
+              if 'SessionDataResponse' in text or 'AuthResponse' in text and '/api/auth/' in path:
+                  print('\n###',path)
                   print(json.dumps(methods,indent=2)[:16000])
 
-          print('\n=== SCHEMAS CONTAINING PURCHASE CALC/YEAR SIGNALS ===')
-          for name, schema in sorted(schemas.items()):
-              text=json.dumps(schema).lower()
-              hits=[n for n in needles if n in text]
-              if hits:
-                  print('\n##',name,'hits=',','.join(hits))
-                  print(json.dumps(schema,indent=2)[:14000])
+          print('\n=== COMPANY / CONFIG / TAX PATH NAMES ===')
+          for path, methods in sorted(paths.items()):
+              low=path.lower()
+              if any(k in low for k in ('compan','param','config','setting','tax','scheme')):
+                  print('\n###',path)
+                  print(json.dumps(methods,indent=2)[:10000])
           PY
