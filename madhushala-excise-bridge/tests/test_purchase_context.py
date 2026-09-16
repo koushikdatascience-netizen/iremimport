@@ -35,6 +35,11 @@ def test_normalize_purchase_master_options_accepts_madhushala_field_names():
     ) == [{"code": "MAIN", "name": "Main Store"}]
 
     assert purchase_context.normalize_options(
+        [{"schemeCode": "SCH-1", "schemeName": "Regular Purchase"}],
+        "scheme",
+    ) == [{"code": "SCH-1", "name": "Regular Purchase"}]
+
+    assert purchase_context.normalize_options(
         [{"accountCode": "PUR", "accountName": "Purchase Account"}],
         "account",
     ) == [{"code": "PUR", "name": "Purchase Account"}]
@@ -60,7 +65,7 @@ def test_up_excise_supplier_hint_uses_consignor_not_consignee():
 
 
 @pytest.mark.asyncio
-async def test_purchase_context_matches_supplier_and_current_user(monkeypatch):
+async def test_purchase_context_matches_supplier_current_user_and_scheme(monkeypatch):
     class FakeClient:
         def __init__(self, base_url: str, shop_code: str, token: str):
             assert shop_code == "SHOP-A"
@@ -85,6 +90,11 @@ async def test_purchase_context_matches_supplier_and_current_user(monkeypatch):
                 {"userCode": "U7", "userName": "Atul Kumar"},
             ]
 
+        async def _get_purchase_master(self, path: str, company_code: str, *response_keys: str):
+            assert path == "/api/purchase/dropdown/schemes"
+            assert company_code == "2"
+            return [{"schemeCode": "SCH-1", "schemeName": "Regular Purchase"}]
+
     monkeypatch.setattr(purchase_context, "MadhushalaClient", FakeClient)
     session = {
         "shop_code": "SHOP-A",
@@ -98,21 +108,25 @@ async def test_purchase_context_matches_supplier_and_current_user(monkeypatch):
     assert result["defaults"] == {
         "supplierCode": "SUP-2",
         "storeCode": "STORE-1",
+        "schemeCode": "SCH-1",
         "purchaseAccCode": "PUR-1",
         "userCode": "U7",
     }
     assert result["warnings"] == []
     assert result["options"]["suppliers"][1]["name"] == "HARPREET SINGH"
+    assert result["options"]["schemes"][0]["code"] == "SCH-1"
 
 
 def test_purchase_context_script_uses_document_date_for_financial_year():
     script = open("app/static/purchase-context.js", encoding="utf-8").read()
     assert "if (month < 4) year -= 1" in script
     assert "purchase-tp-pass-no" in script
+    assert "purchase-scheme-code" in script
     assert "madhushalaPurchaseProfile" in script
 
+
 @pytest.mark.asyncio
-async def test_purchase_save_does_not_block_optional_header_fields(monkeypatch):
+async def test_purchase_service_core_still_allows_resolved_optional_fields(monkeypatch):
     from app.modules.document_import import service as service_module
     from app.modules.document_import.service import DocumentImportService
 
@@ -168,14 +182,16 @@ async def test_purchase_save_does_not_block_optional_header_fields(monkeypatch):
 
     assert result["success"] is True
     assert "docDate" not in fake_client.payload
-    assert "supplierCode" not in fake_client.payload
-    assert "storeCode" not in fake_client.payload
     assert fake_client.payload["trnDate"]
     assert fake_client.payload["yearCode"]
 
 
-def test_frontend_does_not_block_purchase_save_on_optional_headers():
-    html = open("app/static/index.html", encoding="utf-8").read()
+def test_frontend_blocks_only_live_api_proven_required_purchase_fields():
     helper = open("app/static/purchase-context.js", encoding="utf-8").read()
-    assert "Fill purchase fields first:" not in html
-    assert "if (showFriendlyMissing()) return;" not in helper
+    assert 'id: "purchase-supplier-code"' in helper
+    assert 'id: "purchase-store-code"' in helper
+    assert 'id: "purchase-scheme-code"' in helper
+    assert 'id: "purchase-tp-pass-no"' in helper
+    assert "Madhushala requires:" in helper
+    assert "showFriendlyMissing()" in helper
+    assert "schemeCode" in helper
