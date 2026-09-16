@@ -1,0 +1,47 @@
+name: Audit Current Purchase Flow
+
+on:
+  push:
+    branches:
+      - feat/purchase-orchestration-platform
+    paths:
+      - ".github/workflows/audit-current-purchase-flow.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect live Madhushala purchase-related Swagger
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE='https://reportapi.madhushalasoftware.com'
+          curl -k -fsSL "$BASE/swagger/v1/swagger.json" -o /tmp/swagger.json
+          python - <<'PY'
+          import json
+          api=json.load(open('/tmp/swagger.json'))
+          paths=api.get('paths',{})
+          schemas=api.get('components',{}).get('schemas',{})
+          keywords=(
+              'filters','session-data','purchase-tax-mode','dropdown/company','dropdown/suppliers',
+              'dropdown/schemes','dropdown/storages','dropdown/items','dropdown/purchase-accounts',
+              'calculate','showtaxtag','ledgers','account-sub-groups','account-main-groups',
+              'check-duplicate-billno','purchase/save','counter-sales/users'
+          )
+          print('=== MATCHING PATHS ===')
+          for path, methods in sorted(paths.items()):
+              low=path.lower()
+              if any(k in low for k in keywords):
+                  print('\n###', path)
+                  print(json.dumps(methods, indent=2)[:22000])
+          print('\n=== PURCHASE/CALC/TAX SCHEMAS ===')
+          for name, schema in sorted(schemas.items()):
+              low=name.lower()
+              text=json.dumps(schema).lower()
+              if any(k in low or k in text for k in ('purchaserequest','purchaseitemrequest','purchasetaxrequest','purchasecalculation','taxtag','sessiondataresponse')):
+                  print('\n##', name)
+                  print(json.dumps(schema, indent=2)[:18000])
+          PY
