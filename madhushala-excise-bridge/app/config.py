@@ -24,9 +24,11 @@ def _env_list(name: str, default: list[str]) -> list[str]:
 
 @dataclass(frozen=True)
 class Settings:
-    """Local settings object.
+    """Application settings.
 
     Secrets are read from environment variables and must not be committed.
+    Performance/cache defaults are deliberately safe for the current single-node
+    deployment and become horizontally scalable when REDIS_URL is configured.
     """
 
     LOCAL_HOST: str = os.getenv("LOCAL_HOST", "127.0.0.1")
@@ -39,6 +41,7 @@ class Settings:
     BROWSER_PROFILE_DIR: str = os.getenv("BROWSER_PROFILE_DIR", "data/browser_profile")
     CAPTURES_DIR: str = os.getenv("CAPTURES_DIR", "data/captures")
     MAPPINGS_DIR: str = os.getenv("MAPPINGS_DIR", "data/mappings")
+
     MADHUSHALA_BASE_URL: str = os.getenv(
         "MADHUSHALA_BASE_URL",
         "https://reportapi.madhushalasoftware.com",
@@ -48,6 +51,32 @@ class Settings:
     MADHUSHALA_BILL_TYPE: str = os.getenv("MADHUSHALA_BILL_TYPE", "AI")
     DEFAULT_COMPANY_CODE: str = os.getenv("DEFAULT_COMPANY_CODE", os.getenv("MADHUSHALA_COMPANY_CODE", "2"))
     DEFAULT_BILL_TYPE: str = os.getenv("DEFAULT_BILL_TYPE", os.getenv("MADHUSHALA_BILL_TYPE", "AI"))
+
+    # Madhushala HTTP client: pooled, bounded and conservative.
+    MADHUSHALA_CONNECT_TIMEOUT_SECONDS: float = float(os.getenv("MADHUSHALA_CONNECT_TIMEOUT_SECONDS", "5"))
+    MADHUSHALA_READ_TIMEOUT_SECONDS: float = float(os.getenv("MADHUSHALA_READ_TIMEOUT_SECONDS", "30"))
+    MADHUSHALA_WRITE_TIMEOUT_SECONDS: float = float(os.getenv("MADHUSHALA_WRITE_TIMEOUT_SECONDS", "30"))
+    MADHUSHALA_POOL_TIMEOUT_SECONDS: float = float(os.getenv("MADHUSHALA_POOL_TIMEOUT_SECONDS", "5"))
+    MADHUSHALA_MAX_CONNECTIONS: int = int(os.getenv("MADHUSHALA_MAX_CONNECTIONS", "100"))
+    MADHUSHALA_MAX_KEEPALIVE_CONNECTIONS: int = int(os.getenv("MADHUSHALA_MAX_KEEPALIVE_CONNECTIONS", "20"))
+    MADHUSHALA_MAX_CONCURRENCY: int = int(os.getenv("MADHUSHALA_MAX_CONCURRENCY", "20"))
+    MADHUSHALA_ITEM_FETCH_CONCURRENCY: int = int(os.getenv("MADHUSHALA_ITEM_FETCH_CONCURRENCY", "8"))
+    MADHUSHALA_READ_RETRY_ATTEMPTS: int = int(os.getenv("MADHUSHALA_READ_RETRY_ATTEMPTS", "3"))
+    MADHUSHALA_RETRY_BASE_DELAY_SECONDS: float = float(os.getenv("MADHUSHALA_RETRY_BASE_DELAY_SECONDS", "0.15"))
+    MADHUSHALA_CIRCUIT_FAILURE_THRESHOLD: int = int(os.getenv("MADHUSHALA_CIRCUIT_FAILURE_THRESHOLD", "5"))
+    MADHUSHALA_CIRCUIT_OPEN_SECONDS: int = int(os.getenv("MADHUSHALA_CIRCUIT_OPEN_SECONDS", "20"))
+
+    # Cache. With no REDIS_URL the service uses an in-process TTL cache so the
+    # current deployment requires no additional infrastructure. Configure Redis
+    # later for shared cache across multiple FastAPI replicas.
+    REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
+    MADHUSHALA_CACHE_PREFIX: str = os.getenv("MADHUSHALA_CACHE_PREFIX", "madhushala")
+    MADHUSHALA_MASTER_CACHE_TTL_SECONDS: int = int(os.getenv("MADHUSHALA_MASTER_CACHE_TTL_SECONDS", "3600"))
+    MADHUSHALA_USER_CACHE_TTL_SECONDS: int = int(os.getenv("MADHUSHALA_USER_CACHE_TTL_SECONDS", "1800"))
+    MADHUSHALA_SCHEME_CACHE_TTL_SECONDS: int = int(os.getenv("MADHUSHALA_SCHEME_CACHE_TTL_SECONDS", "900"))
+    MADHUSHALA_CONFIG_CACHE_TTL_SECONDS: int = int(os.getenv("MADHUSHALA_CONFIG_CACHE_TTL_SECONDS", "10800"))
+    MADHUSHALA_ITEM_CACHE_TTL_SECONDS: int = int(os.getenv("MADHUSHALA_ITEM_CACHE_TTL_SECONDS", "21600"))
+
     APP_BASE_URL: str = os.getenv("APP_BASE_URL", "https://integrations.madhushalasoftware.com/excise-import").rstrip("/")
     APP_ENV: str = os.getenv("APP_ENV", "development")
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "data/bridge.db")
@@ -112,6 +141,5 @@ class Settings:
         if missing:
             raise RuntimeError(f"Missing production settings: {', '.join(missing)}")
 
+
 settings = Settings()
-
-
