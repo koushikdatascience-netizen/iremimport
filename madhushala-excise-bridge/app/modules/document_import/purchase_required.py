@@ -6,8 +6,12 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.db import conn
-from app.modules.document_import.purchase_context import build_purchase_context
-from app.modules.document_import.up_excise_qr import parse_up_transport_url
+from app.modules.document_import.purchase_context import build_purchase_context, up_supplier_hint
+from app.modules.document_import.up_excise_qr import (
+    _fetch_up_transport_page,
+    _payload_from_html,
+    parse_up_transport_url,
+)
 
 
 _REQUIRED_LABELS = {
@@ -43,14 +47,38 @@ def _raw_value(job_id: str, *aliases: str) -> str:
     return ""
 
 
+def _up_source_url(job: dict[str, Any]) -> str:
+    source = _text(job.get("source_filename"))
+    return source if parse_up_transport_url(source) else ""
+
+
 def _transport_pass_from_job(job: dict[str, Any], job_id: str) -> str:
     from_rows = _raw_value(job_id, "transportPassNo", "tpPassNo", "transport_pass_no")
     if from_rows:
         return from_rows
-    source = _text(job.get("source_filename"))
+    source = _up_source_url(job)
     if source:
         return _text(parse_up_transport_url(source).get("transportPassNo"))
     return ""
+
+
+async def _supplier_hint_for_job(service: Any, job: dict[str, Any], job_id: str) -> str:
+    """Recover the UP Excise consignor for old QR jobs created before it was persisted."""
+    saved = _text(job.get("supplier_name"))
+    if saved:
+        return saved
+
+    source = _up_source_url(job)
+    if not source:
+        return ""
+    try:
+        fetched = await _fetch_up_transport_page(source)
+        hint = up_supplier_hint(_payload_from_html(fetched.get("text") or ""))
+    except Exception:
+        return ""
+    if hint:
+        service._update_job(job_id, supplier_name=hint)
+    return _text(hint)
 
 
 async def resolve_required_purchase_header(
@@ -71,10 +99,11 @@ async def resolve_required_purchase_header(
         for name in ("supplierCode", "storeCode", "schemeCode")
     )
     if missing_master:
+        supplier_hint = await _supplier_hint_for_job(service, job, job_id)
         try:
             context = await build_purchase_context(
                 session,
-                supplier_name=_text(job.get("supplier_name")),
+                supplier_name=supplier_hint,
             )
         except Exception:
             context = {}
