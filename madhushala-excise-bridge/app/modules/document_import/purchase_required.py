@@ -87,16 +87,15 @@ async def resolve_required_purchase_header(
     job_id: str,
     header: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Resolve Purchase header data without inventing Madhushala business values.
+    """Resolve the master values required by the current Purchase screen.
 
-    tpPassNo and schemeCode are optional in the agreed PurchaseRequest contract.
-    Supplier, Store, Purchase A/c and User are required and are resolved from
-    Madhushala master data when an unambiguous default exists.
+    The observed manual Purchase payload permits yearCode, tpPassNo and
+    schemeCode to be empty. Supplier, Store, Purchase A/c and User are the
+    master values that must be resolved before submitting the import.
     """
     job = service.get_job(session, job_id)
     resolved = dict(header or {})
 
-    # Optional but useful for transport-pass imports; recover it automatically.
     if not _text(resolved.get("tpPassNo")):
         resolved["tpPassNo"] = _transport_pass_from_job(job, job_id)
 
@@ -110,12 +109,13 @@ async def resolve_required_purchase_header(
         defaults = context.get("defaults") if isinstance(context, dict) else {}
         if not isinstance(defaults, dict):
             defaults = {}
-        for name in (*needed, "schemeCode", "yearCode"):
+        for name in (*needed, "schemeCode"):
             if not _text(resolved.get(name)) and _text(defaults.get(name)):
                 resolved[name] = _text(defaults[name])
 
-    # Preserve optional fields as empty strings so the upstream .NET DTO sees
-    # the expected JSON properties rather than missing members.
+    # Match the current manual Purchase JSON contract. These members are sent
+    # as empty strings when unused rather than removed from the request.
+    resolved.setdefault("yearCode", "")
     resolved.setdefault("tpPassNo", "")
     resolved.setdefault("schemeCode", "")
 
