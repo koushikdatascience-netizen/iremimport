@@ -3,13 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.session_service import session_service
 from app.integrations.madhushala.client import MadhushalaApiError
 from app.modules.document_import.service import DocumentImportService
 from app.modules.document_import.purchase_context import build_purchase_context, up_supplier_hint
-from app.modules.document_import.purchase_required import resolve_required_purchase_header
 from app.modules.document_import.qr_decoder import decode_qr_upload
 from app.modules.document_import.document_mapping import save_document_row_mappings
 from app.modules.document_import.up_excise_qr import (
@@ -23,7 +22,7 @@ class QrExtractRequest(BaseModel):
 
 
 class PurchaseSaveRequest(BaseModel):
-    header: dict[str, Any]
+    header: dict[str, Any] = Field(default_factory=dict)
 
 
 class DocumentMappingSaveRequest(BaseModel):
@@ -83,17 +82,20 @@ def create_router(service: DocumentImportService) -> APIRouter:
         session = session_service.from_request(request)
         return await build_purchase_context(session, supplier_name=supplierName)
 
+    @router.post("/jobs/{job_id}/purchase/preview")
+    async def preview_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):
+        session = session_service.from_request(request)
+        try:
+            return await service.preview_purchase(session, job_id, payload.header)
+        except MadhushalaApiError as exc:
+            status_code = exc.status_code if exc.status_code and exc.status_code >= 400 else 502
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
     @router.post("/jobs/{job_id}/purchase/save")
     async def save_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):
         session = session_service.from_request(request)
         try:
-            header = await resolve_required_purchase_header(
-                service,
-                session,
-                job_id,
-                payload.header,
-            )
-            return await service.save_purchase(session, job_id, header)
+            return await service.save_purchase(session, job_id, payload.header)
         except MadhushalaApiError as exc:
             status_code = exc.status_code if exc.status_code and exc.status_code >= 400 else 502
             raise HTTPException(status_code=status_code, detail=str(exc)) from exc
