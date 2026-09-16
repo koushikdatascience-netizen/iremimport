@@ -1,20 +1,79 @@
-"""Madhushala API client for excise import mapping."""
+"""Production Madhushala API client for excise import and purchase orchestration."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
-from typing import Any
 import logging
+import random
+import time
+from typing import Any
 
 import httpx
 
+from app.config import settings
+from app.observability import get_correlation_id
 
-logger = logging.getLogger("madhushala-excise-bridge")
+
+logger = logging.getLogger("madhushala-excise-bridge.madhushala")
+
+_VERIFIED_CLIENT: httpx.AsyncClient | None = None
+_INSECURE_CLIENT: httpx.AsyncClient | None = None
+_CLIENT_LOCK = asyncio.Lock()
+_RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
 
 
 class MadhushalaApiError(RuntimeError):
     def __init__(self, message: str, status_code: int | None = None):
         super().__init__(message)
         self.status_code = status_code
+
+
+def _http_timeout() -> httpx.Timeout:
+    return httpx.Timeout(
+        connect=settings.MADHUSHALA_CONNECT_TIMEOUT_SECONDS,
+        read=settings.MADHUSHALA_READ_TIMEOUT_SECONDS,
+        write=settings.MADHUSHALA_WRITE_TIMEOUT_SECONDS,
+        pool=settings.MADHUSHALA_POOL_TIMEOUT_SECONDS,
+    )
+
+
+def _http_limits() -> httpx.Limits:
+    return httpx.Limits(
+        max_connections=max(1, settings.MADHUSHALA_MAX_CONNECTIONS),
+        max_keepalive_connections=max(1, settings.MADHUSHALA_MAX_KEEPALIVE_CONNECTIONS),
+    )
+
+
+async def _shared_client(*, verify: bool) -> httpx.AsyncClient:
+    global _VERIFIED_CLIENT, _INSECURE_CLIENT
+    existing = _VERIFIED_CLIENT if verify else _INSECURE_CLIENT
+    if existing is not None and not existing.is_closed:
+        return existing
+
+    async with _CLIENT_LOCK:
+        existing = _VERIFIED_CLIENT if verify else _INSECURE_CLIENT
+        if existing is not None and not existing.is_closed:
+            return existing
+        client = httpx.AsyncClient(
+            timeout=_http_timeout(),
+            limits=_http_limits(),
+            verify=verify,
+            follow_redirects=True,
+        )
+        if verify:
+            _VERIFIED_CLIENT = client
+        else:
+            _INSECURE_CLIENT = client
+        return client
+
+
+async def close_madhushala_http_clients() -> None:
+    global _VERIFIED_CLIENT, _INSECURE_CLIENT
+    for client in (_VERIFIED_CLIENT, _INSECURE_CLIENT):
+        if client is not None and not client.is_closed:
+            await client.aclose()
+    _VERIFIED_CLIENT = None
+    _INSECURE_CLIENT = None
 
 
 class MadhushalaClient:
@@ -40,7 +99,6 @@ class MadhushalaClient:
             value = data.get(key)
             if isinstance(value, list):
                 return value
-        # Some APIs wrap the real list one level deeper, e.g. {data: {items: [...]}}.
         for value in data.values():
             if isinstance(value, dict):
                 nested = MadhushalaClient._list_payload(value, *keys)
@@ -75,15 +133,35 @@ class MadhushalaClient:
                 raise MadhushalaApiError(
                     f"Invalid purchase date '{text}'. Expected an ISO date or date-time."
                 )
-
-        # Madhushala models these as System.DateTime rather than DateTimeOffset.
-        # Send a timezone-free ISO local date-time; date-only inputs become midnight.
         return parsed.replace(tzinfo=None).isoformat(timespec="seconds")
 
     def _auth_headers(self, accept: str = "application/json") -> dict[str, str]:
         if not self.token:
             raise MadhushalaApiError("Madhushala token is not configured")
-        return {"accept": accept, "Authorization": f"Bearer {self.token}"}
+        return {
+            "accept": accept,
+            "Authorization": f"Bearer {self.token}",
+            "X-Correlation-ID": get_correlation_id(),
+        }
+
+    async def _send_once(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None,
+        json_body: Any | None,
+        headers: dict[str, str] | None,
+    ) -> httpx.Response:
+        try:
+            client = await _shared_client(verify=True)
+            return await client.request(method, url, params=params, json=json_body, headers=headers)
+        except httpx.ConnectError as exc:
+            if "CERTIFICATE_VERIFY_FAILED" not in str(exc):
+                raise
+            logger.warning("madhushala_tls_fallback host=%s", self.base_url)
+            client = await _shared_client(verify=False)
+            return await client.request(method, url, params=params, json=json_body, headers=headers)
 
     async def _request(
         self,
@@ -94,36 +172,53 @@ class MadhushalaClient:
         json_body: Any | None = None,
         headers: dict[str, str] | None = None,
     ) -> Any:
+        method = method.upper()
         url = f"{self.base_url}{path}"
-        try:
-            response = await self._send(method, url, params=params, json_body=json_body, headers=headers)
-            response.raise_for_status()
-            if not response.content:
-                return None
-            return response.json()
-        except httpx.HTTPStatusError as exc:
-            message = exc.response.text or exc.response.reason_phrase
-            raise MadhushalaApiError(message, exc.response.status_code) from exc
-        except httpx.HTTPError as exc:
-            raise MadhushalaApiError(str(exc)) from exc
+        max_attempts = 1 + (max(0, settings.MADHUSHALA_GET_RETRIES) if method == "GET" else 0)
+        last_error: Exception | None = None
 
-    async def _send(
-        self,
-        method: str,
-        url: str,
-        *,
-        params: dict[str, Any] | None,
-        json_body: Any | None,
-        headers: dict[str, str] | None,
-    ) -> httpx.Response:
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                return await client.request(method, url, params=params, json=json_body, headers=headers)
-        except httpx.ConnectError as exc:
-            if "CERTIFICATE_VERIFY_FAILED" not in str(exc):
-                raise
-            async with httpx.AsyncClient(timeout=30, verify=False) as client:
-                return await client.request(method, url, params=params, json=json_body, headers=headers)
+        for attempt in range(1, max_attempts + 1):
+            started = time.perf_counter()
+            try:
+                response = await self._send_once(
+                    method,
+                    url,
+                    params=params,
+                    json_body=json_body,
+                    headers=headers,
+                )
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                logger.info(
+                    "madhushala_http method=%s path=%s status=%s durationMs=%s attempt=%s",
+                    method,
+                    path,
+                    response.status_code,
+                    duration_ms,
+                    attempt,
+                )
+                if method == "GET" and response.status_code in _RETRYABLE_STATUS and attempt < max_attempts:
+                    await asyncio.sleep((0.12 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.08))
+                    continue
+                response.raise_for_status()
+                if not response.content:
+                    return None
+                try:
+                    return response.json()
+                except ValueError:
+                    return response.text
+            except httpx.HTTPStatusError as exc:
+                message = exc.response.text or exc.response.reason_phrase
+                raise MadhushalaApiError(message, exc.response.status_code) from exc
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+                last_error = exc
+                if method == "GET" and attempt < max_attempts:
+                    await asyncio.sleep((0.12 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.08))
+                    continue
+                raise MadhushalaApiError(str(exc)) from exc
+            except httpx.HTTPError as exc:
+                raise MadhushalaApiError(str(exc)) from exc
+
+        raise MadhushalaApiError(str(last_error or "Madhushala request failed"))
 
     async def save_excise_item(self, payload: dict[str, str]) -> dict[str, Any]:
         headers = self._auth_headers("application/json")
@@ -145,7 +240,7 @@ class MadhushalaClient:
         )
 
     async def save_mapping(self, mappings: list[dict[str, str]]) -> Any:
-        headers = {"accept": "*/*", "Content-Type": "application/json"}
+        headers = {"accept": "*/*", "Content-Type": "application/json", "X-Correlation-ID": get_correlation_id()}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         return await self._request(
@@ -156,32 +251,28 @@ class MadhushalaClient:
             headers=headers,
         )
 
-    async def get_dropdown_items(self, company_code: str, bill_type: str) -> list[dict[str, Any]]:
+    async def get_dropdown_items(
+        self,
+        company_code: str,
+        bill_type: str,
+        search: str = "",
+    ) -> list[dict[str, Any]]:
         safe_company_code = str(company_code or "").strip()
         safe_bill_type = str(bill_type or "").strip()
-        logger.info(
-            "Madhushala dropdown request shopCode=%s companyCode=%s billType=%s",
-            self.shop_code,
-            safe_company_code,
-            safe_bill_type,
-        )
+        params: dict[str, Any] = {
+            "shopCode": self.shop_code,
+            "companyCode": safe_company_code,
+            "billType": safe_bill_type,
+        }
+        if str(search or "").strip():
+            params["search"] = str(search).strip()
         data = await self._request(
             "GET",
             "/api/purchase/dropdown/items",
-            params={"shopCode": self.shop_code, "companyCode": safe_company_code, "billType": safe_bill_type},
+            params=params,
             headers=self._auth_headers("*/*"),
         )
-        items = self._list_payload(data, "products")
-        if not isinstance(items, list):
-            raise MadhushalaApiError("Madhushala dropdown response was not a list")
-        logger.info(
-            "Madhushala dropdown response shopCode=%s companyCode=%s billType=%s itemCount=%s",
-            self.shop_code,
-            safe_company_code,
-            safe_bill_type,
-            len(items),
-        )
-        return items
+        return [row for row in self._list_payload(data, "products") if isinstance(row, dict)]
 
     async def _get_purchase_master(
         self,
@@ -198,7 +289,7 @@ class MadhushalaClient:
         )
         rows = self._list_payload(data, *response_keys)
         logger.info(
-            "Madhushala purchase master response path=%s shopCode=%s companyCode=%s rowCount=%s",
+            "madhushala_master path=%s shopCode=%s companyCode=%s rowCount=%s",
             path,
             self.shop_code,
             safe_company_code,
@@ -206,38 +297,105 @@ class MadhushalaClient:
         )
         return rows
 
+    async def get_purchase_company(self) -> list[Any]:
+        data = await self._request(
+            "GET",
+            "/api/purchase/dropdown/company",
+            params={"shopCode": self.shop_code},
+            headers=self._auth_headers("*/*"),
+        )
+        return self._list_payload(data, "companies", "companyList")
+
     async def get_purchase_suppliers(self, company_code: str) -> list[Any]:
         return await self._get_purchase_master(
-            "/api/purchase/dropdown/suppliers",
-            company_code,
-            "suppliers",
-            "supplierList",
+            "/api/purchase/dropdown/suppliers", company_code, "suppliers", "supplierList"
         )
 
     async def get_purchase_storages(self, company_code: str) -> list[Any]:
         return await self._get_purchase_master(
-            "/api/purchase/dropdown/storages",
-            company_code,
-            "storages",
-            "stores",
-            "storageList",
+            "/api/purchase/dropdown/storages", company_code, "storages", "stores", "storageList"
         )
 
     async def get_purchase_accounts(self, company_code: str) -> list[Any]:
         return await self._get_purchase_master(
-            "/api/purchase/dropdown/purchase-accounts",
-            company_code,
-            "accounts",
-            "purchaseAccounts",
-            "accountList",
+            "/api/purchase/dropdown/purchase-accounts", company_code, "accounts", "purchaseAccounts", "accountList"
         )
 
     async def get_purchase_users(self, company_code: str) -> list[Any]:
         return await self._get_purchase_master(
-            "/api/counter-sales/users",
-            company_code,
-            "users",
-            "userList",
+            "/api/counter-sales/users", company_code, "users", "userList"
+        )
+
+    async def get_purchase_schemes(self, company_code: str) -> list[Any]:
+        return await self._get_purchase_master(
+            "/api/purchase/dropdown/schemes", company_code, "schemes", "schemeList"
+        )
+
+    async def get_purchase_tax_mode(self, company_code: str) -> Any:
+        safe = str(company_code or "").strip()
+        return await self._request(
+            "GET",
+            "/api/companies/purchase-tax-mode",
+            params={"companyCode": safe, "targetCompanyCode": safe},
+            headers=self._auth_headers("application/json"),
+        )
+
+    async def get_item(self, item_code: str, company_code: str) -> Any:
+        safe_company = str(company_code or "").strip()
+        return await self._request(
+            "GET",
+            f"/api/items/{item_code}",
+            params={"companyCode": safe_company, "targetCompanyCode": safe_company},
+            headers=self._auth_headers("application/json"),
+        )
+
+    async def get_tax_tags(self, company_code: str, *, search: str = "", page: int = 1) -> list[Any]:
+        params: dict[str, Any] = {
+            "page": max(1, int(page)),
+            "targetCompanyCode": str(company_code or "").strip(),
+        }
+        if str(search or "").strip():
+            params["search"] = str(search).strip()
+        data = await self._request(
+            "GET",
+            "/api/TaxTag/ShowTaxTag",
+            params=params,
+            headers=self._auth_headers("application/json"),
+        )
+        return self._list_payload(data, "taxTags", "taxTagList")
+
+    async def get_tax_tag_by_code(self, code: str, company_code: str, item_type: str = "") -> Any:
+        params: dict[str, Any] = {"targetCompanyCode": str(company_code or "").strip()}
+        if str(item_type or "").strip():
+            params["itemType"] = str(item_type).strip()
+        return await self._request(
+            "GET",
+            f"/api/TaxTag/by-TaxCode/{code}",
+            params=params,
+            headers=self._auth_headers("application/json"),
+        )
+
+    async def check_duplicate_bill(
+        self,
+        company_code: str,
+        supplier_code: str,
+        doc_no: str,
+        *,
+        exclude_trn_no: str = "",
+    ) -> Any:
+        params: dict[str, Any] = {
+            "shopCode": self.shop_code,
+            "companyCode": str(company_code or "").strip(),
+            "supplierCode": str(supplier_code or "").strip(),
+            "docNo": str(doc_no or "").strip(),
+        }
+        if str(exclude_trn_no or "").strip():
+            params["excludeTrnNo"] = str(exclude_trn_no).strip()
+        return await self._request(
+            "GET",
+            "/api/purchase/check-duplicate-billno",
+            params=params,
+            headers=self._auth_headers("application/json"),
         )
 
     async def calculate_purchase(self, payload: dict[str, Any]) -> Any:
@@ -258,7 +416,7 @@ class MadhushalaClient:
             if field in request_payload:
                 request_payload[field] = self._purchase_datetime(request_payload[field])
         logger.info(
-            "Madhushala purchase save request shopCode=%s companyCode=%s docNo=%s itemCount=%s",
+            "purchase_save_outbound shopCode=%s companyCode=%s docNo=%s itemCount=%s",
             request_payload.get("shopCode"),
             request_payload.get("companyCode"),
             request_payload.get("docNo"),
