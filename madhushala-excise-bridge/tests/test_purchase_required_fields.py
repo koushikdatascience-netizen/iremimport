@@ -164,9 +164,11 @@ async def test_clear_error_only_for_contract_required_masters(monkeypatch):
 
     assert exc.value.status_code == 400
     detail = str(exc.value.detail)
-    assert "Supplier" in detail
-    assert "Store" in detail
-    assert "Purchase A/c" in detail
-    assert "User" in detail
-    assert "Scheme" not in detail
-    assert "TP Pass No" not in detail
+    required_part = detail.split("Select the value", 1)[0]
+    assert "Supplier" in required_part
+    assert "Store" in required_part
+    assert "Purchase A/c" in required_part
+    assert "User" in required_part
+    assert "Scheme" not in required_part
+    assert "TP Pass No" not in required_part
+    assert "TP Pass and Scheme are optional" in detail
