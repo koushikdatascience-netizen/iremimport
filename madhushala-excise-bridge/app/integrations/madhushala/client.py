@@ -1,6 +1,7 @@
 """Madhushala API client for excise import mapping."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 import logging
 
@@ -46,6 +47,38 @@ class MadhushalaClient:
                 if nested:
                     return nested
         return []
+
+    @staticmethod
+    def _purchase_datetime(value: Any) -> str:
+        """Convert purchase dates to the ISO date-time shape expected by ASP.NET."""
+        text = str(value or "").strip()
+        if not text:
+            return ""
+
+        normalized = text.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            parsed = None
+            for fmt in (
+                "%d-%b-%Y %H:%M:%S",
+                "%d-%b-%Y",
+                "%d/%m/%Y %H:%M:%S",
+                "%d/%m/%Y",
+            ):
+                try:
+                    parsed = datetime.strptime(text, fmt)
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                raise MadhushalaApiError(
+                    f"Invalid purchase date '{text}'. Expected an ISO date or date-time."
+                )
+
+        # Madhushala models these as System.DateTime rather than DateTimeOffset.
+        # Send a timezone-free ISO local date-time; date-only inputs become midnight.
+        return parsed.replace(tzinfo=None).isoformat(timespec="seconds")
 
     def _auth_headers(self, accept: str = "application/json") -> dict[str, str]:
         if not self.token:
@@ -220,16 +253,20 @@ class MadhushalaClient:
     async def save_purchase(self, payload: dict[str, Any]) -> Any:
         headers = self._auth_headers("application/json")
         headers["Content-Type"] = "application/json"
+        request_payload = dict(payload)
+        for field in ("trnDate", "docDate"):
+            if field in request_payload:
+                request_payload[field] = self._purchase_datetime(request_payload[field])
         logger.info(
             "Madhushala purchase save request shopCode=%s companyCode=%s docNo=%s itemCount=%s",
-            payload.get("shopCode"),
-            payload.get("companyCode"),
-            payload.get("docNo"),
-            len(payload.get("items") or []),
+            request_payload.get("shopCode"),
+            request_payload.get("companyCode"),
+            request_payload.get("docNo"),
+            len(request_payload.get("items") or []),
         )
         return await self._request(
             "POST",
             "/api/purchase/save",
-            json_body=payload,
+            json_body=request_payload,
             headers=headers,
         )
