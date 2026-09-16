@@ -19,7 +19,8 @@ from app.config import settings
 from app.db import conn, now_iso
 from app.modules.document_import.llama_client import LlamaCloudClient, LlamaCloudError
 from app.modules.document_import.normalizer import normalize_extracted_document
-from app.modules.document_import.purchase_context import build_purchase_context
+from app.modules.document_import.purchase_items import build_purchase_items
+from app.modules.document_import.purchase_orchestrator import PurchaseOrchestrator
 from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct, NormalizedImportItem
 from app.services.mapping_service import MappingService
 from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
@@ -575,7 +576,7 @@ class DocumentImportService:
             "shopCode": payload["shopCode"],
             "companyCode": payload["companyCode"],
             "schemeCode": payload.get("schemeCode", ""),
-            "salesTaxRate": _money(header.get("salesTaxRate") or payload.get("salesTaxOnMRP") or 0),
+            "salesTaxRate": _money(header.get("salesTaxRate") or 0),
             "salesTaxIncludingFree": bool(payload.get("saletaxIncludingFree")),
             "items": calc_items,
         }
@@ -624,225 +625,10 @@ class DocumentImportService:
                 payload["taxes"] = taxes
 
     async def _purchase_items_for_job(self, session: dict[str, Any], job_id: str) -> list[dict[str, Any]]:
-        self.get_job(session, job_id)
-        company_code = str(session.get("company_code") or "").strip()
-        bill_type = str(session.get("bill_type") or "AI").strip() or "AI"
-        catalogue = await self._client_for_session(session).get_dropdown_items(company_code, bill_type)
-        with conn() as db:
-            rows = db.execute("SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id", (job_id,)).fetchall()
-            items = []
-            missing = []
-            for row in rows:
-                try:
-                    raw_data = json.loads(row["raw_data_json"] or "{}")
-                except Exception:
-                    raw_data = {}
-                if not isinstance(raw_data, dict):
-                    raw_data = {}
+        return await build_purchase_items(self, session, job_id)
 
-                raw_normalized = {self._catalogue_key(key): value for key, value in raw_data.items()}
-
-                def raw_value(*aliases: str) -> Any:
-                    for alias in aliases:
-                        value = raw_normalized.get(self._catalogue_key(alias))
-                        if value not in (None, ""):
-                            return value
-                    return None
-
-                def raw_money(*aliases: str, fallback: Any = None) -> float:
-                    value = raw_value(*aliases)
-                    return _money(fallback if value in (None, "") else value)
-
-                def raw_int(*aliases: str, fallback: Any = None) -> int:
-                    value = raw_value(*aliases)
-                    return _int_value(fallback if value in (None, "") else value)
-
-                mapped = (row["mapped_item_code"] or "").strip()
-                if not mapped and row["excise_item_code"]:
-                    map_row = db.execute(
-                        "SELECT madhushala_item_code FROM mappings WHERE shop_code=? AND excise_item_code=?",
-                        (session["shop_code"], str(row["excise_item_code"])),
-                    ).fetchone()
-                    mapped = (map_row["madhushala_item_code"] if map_row else "").strip()
-                if not mapped:
-                    missing.append(row["raw_name"] or row["normalized_name"] or row["id"])
-                    continue
-
-                fallback_name = str(row["normalized_name"] or row["raw_name"] or mapped)
-                catalogue_item = self._catalogue_item(mapped, catalogue)
-                catalogue_packing = self._catalogue_int(catalogue_item, "packing", "bottlePerCase", "bottlesPerCase", "caseQty")
-
-                packing = raw_int("packing", "bottlePerCase", "bottlesPerCase", "caseQty", fallback=row["packing"] or catalogue_packing)
-                box = raw_int("box", "boxes", "case", "cases", fallback=row["quantity"] or 1)
-                loose = raw_int("loose", "looseQty", "bottle", "bottles", fallback=0)
-                qnty = raw_int("qnty", "qty", "totalQty", "totalQuantity", fallback=0)
-                if not qnty:
-                    qnty = (box * packing + loose) if packing else (box + loose)
-
-                catalogue_mrp = self._catalogue_money(catalogue_item, "mrp", "itemMrp", "mrpPerUnit")
-                catalogue_rate = self._catalogue_money(catalogue_item, "rate", "boxRate", "purchaseRate", "itemRate")
-                amount = raw_money("itemAmount", "amount", "lineAmount", "totalAmount", fallback=row["amount"])
-                rate = raw_money("rate", "purchaseRate", fallback=row["rate"] or catalogue_rate)
-                box_rate = raw_money("boxRate", "caseRate", fallback=rate or catalogue_rate)
-                loose_rate = raw_money("looseRate", "bottleRate", fallback=self._catalogue_money(catalogue_item, "looseRate", "bottleRate"))
-                if not amount:
-                    if box_rate and box:
-                        amount = _money((box_rate * box) + (loose_rate * loose))
-                    elif rate and qnty:
-                        amount = _money(rate * qnty)
-
-                item = {
-                    "itemCode": mapped,
-                    "itemName": self._purchase_item_name(mapped, catalogue, fallback_name),
-                    "batchNo": str(raw_value("batchNo", "batch") or self._catalogue_value(catalogue_item, "batchNo", "batch") or ""),
-                    "box": box,
-                    "loose": loose,
-                    "qnty": qnty,
-                    "freeQnty": raw_int("freeQnty", "freeQty", "free", fallback=self._catalogue_int(catalogue_item, "freeQnty", "freeQty", "free") or 0),
-                    "rate": rate or box_rate,
-                    "boxRate": box_rate or rate,
-                    "mrp": raw_money("mrp", fallback=row["mrp"] or catalogue_mrp),
-                    "itemAmount": amount,
-                    "discount": raw_money("discount", "disc", fallback=0),
-                    "cgst": raw_money("cgst", fallback=0),
-                    "sgst": raw_money("sgst", fallback=0),
-                    "cess": raw_money("cess", fallback=0),
-                    "addCess": raw_money("addCess", "adCess", "additionalCess", fallback=0),
-                    "igst": raw_money("igst", fallback=0),
-                    "t1Amt": raw_money("t1Amt", "t1", fallback=0),
-                    "t2Amt": raw_money("t2Amt", "t2", fallback=0),
-                    "t3Amt": raw_money("t3Amt", "t3", fallback=0),
-                    "t4Amt": raw_money("t4Amt", "t4", fallback=0),
-                    "etd": raw_money("etd", fallback=0),
-                    "cgstInptLdgr": str(raw_value("cgstInptLdgr") or ""),
-                    "sgstInptLdgr": str(raw_value("sgstInptLdgr") or ""),
-                    "cessInptLdgr": str(raw_value("cessInptLdgr") or ""),
-                    "adCessInptLdgr": str(raw_value("adCessInptLdgr", "addCessInptLdgr") or ""),
-                    "igstInptLdgr": str(raw_value("igstInptLdgr") or ""),
-                }
-                item["packing"] = packing
-                item["looseRate"] = loose_rate
-                item["t1Rate"] = raw_money("t1Rate", fallback=self._catalogue_money(catalogue_item, "t1Rate"))
-                item["t2Rate"] = raw_money("t2Rate", fallback=self._catalogue_money(catalogue_item, "t2Rate"))
-                item["t3Rate"] = raw_money("t3Rate", fallback=self._catalogue_money(catalogue_item, "t3Rate"))
-                item["t4Rate"] = raw_money("t4Rate", fallback=self._catalogue_money(catalogue_item, "t4Rate"))
-                items.append(item)
-        if missing:
-            raise HTTPException(status_code=409, detail=f"Map all items before saving purchase: {', '.join(missing[:5])}")
-        if not items:
-            raise HTTPException(status_code=400, detail="No items available for purchase save")
-        return items
+    async def preview_purchase(self, session: dict[str, Any], job_id: str, header: dict[str, Any]) -> dict[str, Any]:
+        return await PurchaseOrchestrator(self).preview(session, job_id, header)
 
     async def save_purchase(self, session: dict[str, Any], job_id: str, header: dict[str, Any]) -> dict[str, Any]:
-        job = self.get_job(session, job_id)
-        header = dict(header or {})
-        context_defaults: dict[str, Any] = {}
-        master_fields = ("supplierCode", "storeCode", "purchaseAccCode", "userCode")
-        if any(not str(header.get(name) or "").strip() for name in master_fields):
-            try:
-                context = await build_purchase_context(
-                    session,
-                    supplier_name=str(job.get("supplier_name") or ""),
-                )
-                defaults = context.get("defaults") if isinstance(context, dict) else {}
-                if isinstance(defaults, dict):
-                    context_defaults = defaults
-            except Exception:
-                # Master-data lookup is only a convenience. The Madhushala
-                # purchase/save API remains the authority on required fields.
-                context_defaults = {}
-
-        def header_text(name: str, fallback: Any = "") -> str:
-            return str(header.get(name) or fallback or "").strip()
-
-        doc_date = header_text("docDate", job.get("invoice_date"))
-        trn_date = header_text("trnDate", date.today().isoformat())
-        year_code = header_text("yearCode")
-        if not year_code:
-            try:
-                effective_date = date.fromisoformat((doc_date or trn_date)[:10])
-                start_year = effective_date.year if effective_date.month >= 4 else effective_date.year - 1
-                year_code = f"{start_year}-{str((start_year + 1) % 100).zfill(2)}"
-            except ValueError:
-                year_code = ""
-
-        clean_header = {
-            "yearCode": year_code,
-            "trnDate": trn_date,
-            "docDate": doc_date,
-            "docNo": header_text("docNo", job.get("invoice_number")),
-            "supplierCode": header_text("supplierCode", context_defaults.get("supplierCode")),
-            "storeCode": header_text("storeCode", context_defaults.get("storeCode")),
-            "purchaseAccCode": header_text("purchaseAccCode", context_defaults.get("purchaseAccCode")),
-            "userCode": header_text("userCode", context_defaults.get("userCode")),
-        }
-        items = await self._purchase_items_for_job(session, job_id)
-        gross = _money(sum(_money(item["itemAmount"]) for item in items))
-        payload = {
-            "shopCode": session["shop_code"],
-            "companyCode": session["company_code"],
-            "yearCode": clean_header["yearCode"],
-            "trnDate": clean_header["trnDate"],
-            "docDate": clean_header["docDate"],
-            "docNo": clean_header["docNo"],
-            "tpPassNo": str(header.get("tpPassNo") or "").strip(),
-            "supplierCode": clean_header["supplierCode"],
-            "storeCode": clean_header["storeCode"],
-            "schemeCode": str(header.get("schemeCode") or "").strip(),
-            "purchaseAccCode": clean_header["purchaseAccCode"],
-            "narration": str(header.get("narration") or "PDF import").strip(),
-            "userCode": clean_header["userCode"],
-            "billType": "AI",
-            "pType": "PURCHASE",
-            "taxMode": str(header.get("taxMode") or "ITEMWISE").strip().upper() or "ITEMWISE",
-            "grossAmount": _money(header.get("grossAmount") or gross),
-            "taxAmount": _money(header.get("taxAmount") or 0),
-            "netAmount": _money(header.get("netAmount") or header.get("grossAmount") or gross),
-            "discount": _money(header.get("discount") or 0),
-            "salesTaxOnMRP": _money(header.get("salesTaxOnMRP") or 0),
-            "roundOff": _money(header.get("roundOff") or 0),
-            "saletaxIncludingFree": bool(header.get("saletaxIncludingFree") or False),
-            "items": items,
-            "taxes": header.get("taxes") if isinstance(header.get("taxes"), list) else [],
-        }
-        # The live Swagger contract does not declare these header fields
-        # as required. Omit empty values and let Madhushala validate them.
-        for optional_key in (
-            "yearCode",
-            "docDate",
-            "docNo",
-            "tpPassNo",
-            "supplierCode",
-            "storeCode",
-            "schemeCode",
-            "purchaseAccCode",
-            "userCode",
-        ):
-            if payload.get(optional_key) in (None, ""):
-                payload.pop(optional_key, None)
-        client = self._client_for_session(session)
-        if str(job.get("source_type") or "") != "QR_HTML":
-            try:
-                calculation = await client.calculate_purchase(self._build_purchase_calculation_request(payload, header))
-                self._merge_purchase_calculation(payload, calculation)
-            except MadhushalaApiError:
-                raise
-            except Exception:
-                # Calculation response shape is not documented; keep the extracted/mapped payload if calculation is unavailable.
-                pass
-        if payload["taxMode"] == "BILLWISE":
-            for item in payload["items"]:
-                for key in ("cgst", "sgst", "cess", "addCess", "igst", "t1Amt", "t2Amt", "t3Amt", "t4Amt", "etd"):
-                    item[key] = 0
-        else:
-            payload["taxes"] = []
-        for item in payload["items"]:
-            for helper_key in ("packing", "boxRate", "looseRate", "t1Rate", "t2Rate", "t3Rate", "t4Rate"):
-                item.pop(helper_key, None)
-        response = await client.save_purchase(payload)
-        with conn() as db:
-            db.execute(
-                "UPDATE import_jobs SET status=?, completed_at=?, updated_at=? WHERE id=?",
-                ("PURCHASE_SAVED", now_iso(), now_iso(), job_id),
-            )
-        return {"success": True, "jobId": job_id, "purchasePayload": payload, "madhushalaResponse": response, "job": job}
+        return await PurchaseOrchestrator(self).save(session, job_id, header)

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,13 +21,15 @@ from app.automation.row_parser import normalize_raw_items
 from app.config import settings
 from app.db import conn, init_db
 from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
+from app.integrations.madhushala.cache import madhushala_cache
+from app.observability import bind_request_id, configure_logging, current_request_id, reset_request_id
 from app.modules.document_import.routes import create_router as create_document_import_router
 from app.modules.document_import.service import DocumentImportService
 from app.services.session_service import session_service
 from app.services.mapping_service import MappingService
 
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+configure_logging(logging.INFO)
 logger = logging.getLogger("madhushala-excise-bridge")
 
 @asynccontextmanager
@@ -35,8 +38,13 @@ async def lifespan(_app: FastAPI):
     init_db()
     session_service.cleanup_expired()
     await mapping_service.initialize()
-    logger.info("Madhushala Automation Platform started env=%s", settings.APP_ENV)
-    yield
+    logger.info("event=application_started env=%s", settings.APP_ENV)
+    try:
+        yield
+    finally:
+        await madhushala_cache.close()
+        await MadhushalaClient.close_shared_client()
+        logger.info("event=application_stopped")
 
 
 PUBLIC_PREFIX = "/excise-import"
@@ -74,13 +82,29 @@ def document_import_html() -> str:
 app = FastAPI(
     title="Madhushala Automation Platform",
     description="CRM-launched automation, document import, and shared Madhushala mapping",
-    version="2.1.1",
+    version="2.2.0",
     docs_url=None,
     redoc_url=None,
     openapi_url=None if settings.is_production else "/openapi.json",
     servers=[{"url": PUBLIC_PREFIX}],
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def request_observability(request: Request, call_next):
+    token = bind_request_id(request.headers.get("X-Request-ID"))
+    started = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-ID"] = current_request_id()
+        return response
+    finally:
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        logger.info("event=http_request method=%s path=%s status=%s elapsedMs=%s", request.method, request.url.path, status_code, elapsed_ms)
+        reset_request_id(token)
 
 if not settings.is_production:
     @app.get("/docs", include_in_schema=False)
@@ -104,7 +128,7 @@ app.add_middleware(
     allow_origin_regex=settings.CORS_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-CRM-Integration-Key"],
+    allow_headers=["Authorization", "Content-Type", "X-CRM-Integration-Key", "X-Request-ID"],
 )
 
 mapping_service = MappingService()
@@ -242,7 +266,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ready", "version": "2.1.1"}
+    return {"status": "ready", "version": "2.2.0"}
 
 
 async def validate_madhushala_context(shop_code: str, token: str, *, force: bool = False) -> None:
