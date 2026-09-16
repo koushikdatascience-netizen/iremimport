@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import re
 from typing import Any
 
 from app.config import settings
-from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
+from app.integrations.madhushala.masters import MadhushalaMasterService
 
 
 _OPTION_ALIASES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
@@ -65,7 +66,6 @@ def normalize_options(rows: Any, kind: str) -> list[dict[str, str]]:
     aliases = _OPTION_ALIASES[kind]
     if not isinstance(rows, list):
         return []
-
     result: list[dict[str, str]] = []
     seen: set[str] = set()
     for row in rows:
@@ -90,7 +90,6 @@ def up_supplier_hint(payload: Any) -> str:
     tables = payload.get("tables")
     if not isinstance(tables, list):
         return ""
-
     fallback = ""
     for table in tables:
         if not isinstance(table, list):
@@ -119,11 +118,9 @@ def _match_option(options: list[dict[str, str]], hint: str) -> str:
     target = _normalized_name(hint)
     if not target:
         return ""
-
     exact = [option for option in options if _normalized_name(option.get("name", "")) == target]
     if len(exact) == 1:
         return exact[0]["code"]
-
     fuzzy = [
         option
         for option in options
@@ -157,7 +154,6 @@ def _current_user_default(options: list[dict[str, str]], token: str) -> str:
     claims = _jwt_claims(token)
     if not claims:
         return _single_option(options)
-
     candidates: list[str] = []
     preferred_claims = {
         "usercode",
@@ -172,7 +168,6 @@ def _current_user_default(options: list[dict[str, str]], token: str) -> str:
     for key, value in claims.items():
         if _key(key) in normalized_claim_names and isinstance(value, (str, int)):
             candidates.append(_text(value))
-
     for candidate in candidates:
         by_code = [option for option in options if option.get("code", "").casefold() == candidate.casefold()]
         if len(by_code) == 1:
@@ -187,42 +182,31 @@ async def build_purchase_context(
     session: dict[str, Any],
     supplier_name: str = "",
 ) -> dict[str, Any]:
+    """Return cached Purchase reference data, loading independent APIs concurrently on cache miss."""
     token = str(session.get("madhushala_token") or settings.MADHUSHALA_SERVICE_TOKEN or "")
-    client = MadhushalaClient(
-        settings.MADHUSHALA_BASE_URL,
-        str(session.get("shop_code") or ""),
-        token,
+    master = MadhushalaMasterService(session)
+    calls = (
+        ("suppliers", "supplier", master.suppliers()),
+        ("storages", "storage", master.storages()),
+        ("accounts", "account", master.accounts()),
+        ("users", "user", master.users()),
+        ("schemes", "scheme", master.schemes()),
     )
-    company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE)
-
-    calls = {
-        "suppliers": (client.get_purchase_suppliers, "supplier"),
-        "storages": (client.get_purchase_storages, "storage"),
-        "accounts": (client.get_purchase_accounts, "account"),
-        "users": (client.get_purchase_users, "user"),
-    }
+    results = await asyncio.gather(*(call[2] for call in calls), return_exceptions=True)
     options: dict[str, list[dict[str, str]]] = {}
     warnings: list[str] = []
-
-    for key, (method, kind) in calls.items():
-        try:
-            rows = await method(company_code)
-            options[key] = normalize_options(rows, kind)
-        except MadhushalaApiError as exc:
-            options[key] = []
-            warnings.append(f"{key}: {exc}")
+    for (name, kind, _), result in zip(calls, results):
+        if isinstance(result, Exception):
+            options[name] = []
+            warnings.append(f"{name}: {result}")
+        else:
+            options[name] = normalize_options(result, kind)
 
     try:
-        scheme_rows = await client._get_purchase_master(
-            "/api/purchase/dropdown/schemes",
-            company_code,
-            "schemes",
-            "schemeList",
-        )
-        options["schemes"] = normalize_options(scheme_rows, "scheme")
-    except MadhushalaApiError as exc:
-        options["schemes"] = []
-        warnings.append(f"schemes: {exc}")
+        tax_mode = await master.purchase_tax_mode()
+    except Exception as exc:
+        tax_mode = "ITEMWISE"
+        warnings.append(f"taxMode: {exc}")
 
     defaults = {
         "supplierCode": _match_option(options["suppliers"], supplier_name) or _single_option(options["suppliers"]),
@@ -230,14 +214,16 @@ async def build_purchase_context(
         "schemeCode": _single_option(options["schemes"]),
         "purchaseAccCode": _single_option(options["accounts"]),
         "userCode": _current_user_default(options["users"], token),
+        "taxMode": tax_mode,
     }
 
     return {
-        "shopCode": str(session.get("shop_code") or ""),
-        "companyCode": company_code,
-        "billType": str(session.get("bill_type") or settings.DEFAULT_BILL_TYPE),
+        "shopCode": master.shop_code,
+        "companyCode": master.company_code,
+        "billType": master.bill_type,
         "supplierHint": _text(supplier_name),
         "options": options,
         "defaults": defaults,
+        "taxMode": tax_mode,
         "warnings": warnings,
     }
