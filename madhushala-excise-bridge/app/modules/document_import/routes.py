@@ -17,6 +17,7 @@ from app.modules.document_import.up_excise_qr import (
     extract_up_transport_pass,
     is_up_transport_pass_url,
 )
+from app.observability import reset_correlation_id, set_correlation_id
 from app.services.purchase_transaction_service import purchase_transaction_service
 
 
@@ -95,6 +96,8 @@ def create_router(service: DocumentImportService) -> APIRouter:
     @router.post("/jobs/{job_id}/purchase/save")
     async def save_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):
         session = session_service.from_request(request)
+        correlation = request.headers.get("X-Correlation-ID") or f"purchase-{job_id}"
+        token = set_correlation_id(correlation)
         try:
             header = await resolve_required_purchase_header(
                 service,
@@ -106,5 +109,7 @@ def create_router(service: DocumentImportService) -> APIRouter:
         except MadhushalaApiError as exc:
             status_code = exc.status_code if exc.status_code and exc.status_code >= 400 else 502
             raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        finally:
+            reset_correlation_id(token)
 
     return router
