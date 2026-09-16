@@ -1,9 +1,10 @@
 (() => {
     const fieldConfig = [
-        {id: "purchase-supplier-code", key: "supplierCode", optionKey: "suppliers", label: "Supplier", prompt: "Select Supplier", persist: false},
-        {id: "purchase-store-code", key: "storeCode", optionKey: "storages", label: "Store", prompt: "Select Store", persist: true},
-        {id: "purchase-acc-code", key: "purchaseAccCode", optionKey: "accounts", label: "Purchase A/c", prompt: "Select Purchase A/c", persist: true},
-        {id: "purchase-user-code", key: "userCode", optionKey: "users", label: "User", prompt: "Select User", persist: true},
+        {id: "purchase-supplier-code", key: "supplierCode", optionKey: "suppliers", label: "Supplier", prompt: "Select Supplier", persist: false, required: true},
+        {id: "purchase-store-code", key: "storeCode", optionKey: "storages", label: "Store", prompt: "Select Store", persist: true, required: true},
+        {id: "purchase-scheme-code", key: "schemeCode", optionKey: "schemes", label: "Scheme", prompt: "Select Scheme", persist: true, required: true},
+        {id: "purchase-acc-code", key: "purchaseAccCode", optionKey: "accounts", label: "Purchase A/c", prompt: "Select Purchase A/c", persist: true, required: false},
+        {id: "purchase-user-code", key: "userCode", optionKey: "users", label: "User", prompt: "Select User", persist: true, required: false},
     ];
 
     const pageParams = new URLSearchParams(window.location.search);
@@ -18,6 +19,25 @@
 
     function clean(value) {
         return String(value ?? "").trim();
+    }
+
+    function ensureSchemeField() {
+        if (document.getElementById("purchase-scheme-code")) return;
+        const form = document.getElementById("purchase-form");
+        if (!form) return;
+        const label = document.createElement("label");
+        label.append(document.createTextNode("Scheme"));
+        const select = document.createElement("select");
+        select.id = "purchase-scheme-code";
+        select.name = "schemeCode";
+        select.required = true;
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Select Scheme";
+        select.appendChild(placeholder);
+        label.appendChild(select);
+        const accountField = document.getElementById("purchase-acc-code")?.closest("label");
+        form.insertBefore(label, accountField || null);
     }
 
     function profileKey(context = latestContext) {
@@ -76,7 +96,7 @@
             select = document.createElement("select");
             select.id = current.id;
             select.name = current.getAttribute("name") || config.key;
-            select.required = current.required;
+            select.required = Boolean(config.required);
             select.className = current.className;
             select.setAttribute("aria-label", config.label);
             current.replaceWith(select);
@@ -158,7 +178,7 @@
     }
 
     function financialYearCode(dateValue) {
-        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(clean(dateValue));
+        const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(clean(dateValue));
         if (!match) return "";
         let year = Number(match[1]);
         const month = Number(match[2]);
@@ -186,14 +206,21 @@
         }
     }
 
+    function requiredPurchaseFields() {
+        return [
+            {id: "purchase-tp-pass-no", label: "TP Pass No"},
+            ...fieldConfig.filter((field) => field.required).map((field) => ({id: field.id, label: field.label})),
+        ];
+    }
+
     function currentMissingFields() {
-        return fieldConfig.filter((config) => !clean(document.getElementById(config.id)?.value));
+        return requiredPurchaseFields().filter((field) => !clean(document.getElementById(field.id)?.value));
     }
 
     function showFriendlyMissing() {
         const missing = currentMissingFields();
         if (!missing.length) return false;
-        const message = `Select purchase details first: ${missing.map((field) => field.label).join(", ")}`;
+        const message = `Madhushala requires: ${missing.map((field) => field.label).join(", ")}`;
         if (typeof window.showToast === "function") window.showToast(message, "error");
         else window.alert(message);
         document.getElementById(missing[0].id)?.focus();
@@ -213,7 +240,30 @@
         });
     }
 
+    function installHeaderHooks() {
+        const originalCollect = window.collectPurchaseHeader;
+        if (typeof originalCollect === "function") {
+            window.collectPurchaseHeader = function collectRequiredPurchaseHeader() {
+                return {
+                    ...originalCollect.apply(this, arguments),
+                    schemeCode: clean(document.getElementById("purchase-scheme-code")?.value),
+                };
+            };
+        }
+
+        const originalApply = window.applyPurchaseHeader;
+        if (typeof originalApply === "function") {
+            window.applyPurchaseHeader = function applyRequiredPurchaseHeader(header = {}) {
+                const result = originalApply.apply(this, arguments);
+                setField("purchase-scheme-code", header.schemeCode || "", true);
+                return result;
+            };
+        }
+    }
+
     function installHooks() {
+        installHeaderHooks();
+
         const originalRender = window.renderDocumentReview;
         if (typeof originalRender === "function") {
             window.renderDocumentReview = function purchaseAwareRender(payload) {
@@ -227,6 +277,14 @@
         const originalSave = window.savePurchaseFromJob;
         if (typeof originalSave === "function") {
             window.savePurchaseFromJob = async function purchaseAwareSave(source = "review") {
+                if (source !== "mapping") {
+                    try {
+                        await fetchPurchaseContext(window.currentDocumentResult?.extractedDocument?.supplierName || "");
+                    } catch {
+                        // The bridge will provide a precise error if master lookup is unavailable.
+                    }
+                    if (showFriendlyMissing()) return;
+                }
                 saveProfile();
                 return originalSave.call(this, source);
             };
@@ -241,16 +299,26 @@
                 return result;
             };
         }
+
+        const continueButton = document.getElementById("continue-document-mapping");
+        continueButton?.addEventListener("click", (event) => {
+            saveProfile();
+            if (showFriendlyMissing()) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+            }
+        }, true);
     }
 
     document.addEventListener("DOMContentLoaded", () => {
         if (!window.location.pathname.endsWith("/document-import")) return;
+        ensureSchemeField();
         installHooks();
         document.getElementById("purchase-form")?.addEventListener("change", (event) => {
             if (fieldConfig.some((field) => field.persist && field.id === event.target?.id)) saveProfile();
         });
         void fetchPurchaseContext("").catch(() => {
-            // Keep the original manual code inputs available if master-data lookup is unavailable.
+            // Keep the form usable; the bridge will report required master lookup failures.
         });
     });
 })();
