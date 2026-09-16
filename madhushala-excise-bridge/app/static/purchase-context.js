@@ -2,9 +2,9 @@
     const fieldConfig = [
         {id: "purchase-supplier-code", key: "supplierCode", optionKey: "suppliers", label: "Supplier", prompt: "Select Supplier", persist: false, required: true},
         {id: "purchase-store-code", key: "storeCode", optionKey: "storages", label: "Store", prompt: "Select Store", persist: true, required: true},
-        {id: "purchase-scheme-code", key: "schemeCode", optionKey: "schemes", label: "Scheme", prompt: "Select Scheme", persist: true, required: true},
-        {id: "purchase-acc-code", key: "purchaseAccCode", optionKey: "accounts", label: "Purchase A/c", prompt: "Select Purchase A/c", persist: true, required: false},
-        {id: "purchase-user-code", key: "userCode", optionKey: "users", label: "User", prompt: "Select User", persist: true, required: false},
+        {id: "purchase-scheme-code", key: "schemeCode", optionKey: "schemes", label: "Scheme", prompt: "Select Scheme", persist: true, required: false},
+        {id: "purchase-acc-code", key: "purchaseAccCode", optionKey: "accounts", label: "Purchase A/c", prompt: "Select Purchase A/c", persist: true, required: true},
+        {id: "purchase-user-code", key: "userCode", optionKey: "users", label: "User", prompt: "Select User", persist: true, required: true},
     ];
 
     const pageParams = new URLSearchParams(window.location.search);
@@ -26,14 +26,14 @@
         const form = document.getElementById("purchase-form");
         if (!form) return;
         const label = document.createElement("label");
-        label.append(document.createTextNode("Scheme"));
+        label.append(document.createTextNode("Scheme (optional)"));
         const select = document.createElement("select");
         select.id = "purchase-scheme-code";
         select.name = "schemeCode";
-        select.required = true;
+        select.required = false;
         const placeholder = document.createElement("option");
         placeholder.value = "";
-        placeholder.textContent = "Select Scheme";
+        placeholder.textContent = "No Scheme";
         select.appendChild(placeholder);
         label.appendChild(select);
         const accountField = document.getElementById("purchase-acc-code")?.closest("label");
@@ -100,13 +100,15 @@
             select.className = current.className;
             select.setAttribute("aria-label", config.label);
             current.replaceWith(select);
+        } else {
+            select.required = Boolean(config.required);
         }
 
         const desired = previousValue || clean(preferredValue);
         select.innerHTML = "";
         const placeholder = document.createElement("option");
         placeholder.value = "";
-        placeholder.textContent = config.prompt;
+        placeholder.textContent = config.required ? config.prompt : (config.key === "schemeCode" ? "No Scheme" : config.prompt);
         select.appendChild(placeholder);
 
         options.forEach((item) => {
@@ -126,7 +128,7 @@
             select.appendChild(option);
         }
         if (desired) select.value = desired;
-        setLabelText(select, config.label);
+        setLabelText(select, config.required ? config.label : `${config.label} (optional)`);
     }
 
     function applyContext(context) {
@@ -139,11 +141,7 @@
             const currentValue = clean(document.getElementById(config.id)?.value);
             const savedValue = config.persist ? clean(profile[config.key]) : "";
             const defaultValue = clean(defaults[config.key]);
-            upgradeField(
-                config,
-                options[config.optionKey] || [],
-                currentValue || savedValue || defaultValue,
-            );
+            upgradeField(config, options[config.optionKey] || [], currentValue || savedValue || defaultValue);
         });
     }
 
@@ -196,21 +194,18 @@
     function applyDocumentDefaults(payload) {
         const documentData = payload?.extractedDocument || {};
         const saved = savedJobHeader(payload);
-
         if (!saved.docNo) setField("purchase-doc-no", documentData.invoiceNumber);
         if (!saved.docDate) setField("purchase-doc-date", documentData.invoiceDate, true);
         if (!saved.tpPassNo) setField("purchase-tp-pass-no", documentData.transportPassNo, true);
-
         if (!saved.yearCode && documentData.invoiceDate) {
             setField("purchase-year-code", financialYearCode(documentData.invoiceDate), true);
         }
     }
 
     function requiredPurchaseFields() {
-        return [
-            {id: "purchase-tp-pass-no", label: "TP Pass No"},
-            ...fieldConfig.filter((field) => field.required).map((field) => ({id: field.id, label: field.label})),
-        ];
+        return fieldConfig
+            .filter((field) => field.required)
+            .map((field) => ({id: field.id, label: field.label}));
     }
 
     function currentMissingFields() {
@@ -247,6 +242,7 @@
                 return {
                     ...originalCollect.apply(this, arguments),
                     schemeCode: clean(document.getElementById("purchase-scheme-code")?.value),
+                    taxMode: clean(latestContext?.taxMode || latestContext?.defaults?.taxMode),
                 };
             };
         }
@@ -281,7 +277,7 @@
                     try {
                         await fetchPurchaseContext(window.currentDocumentResult?.extractedDocument?.supplierName || "");
                     } catch {
-                        // The bridge will provide a precise error if master lookup is unavailable.
+                        // Backend returns the precise upstream/master error when context refresh fails.
                     }
                     if (showFriendlyMissing()) return;
                 }
@@ -318,7 +314,7 @@
             if (fieldConfig.some((field) => field.persist && field.id === event.target?.id)) saveProfile();
         });
         void fetchPurchaseContext("").catch(() => {
-            // Keep the form usable; the bridge will report required master lookup failures.
+            // Keep extraction/review usable; backend handles unavailable master data precisely.
         });
     });
 })();
