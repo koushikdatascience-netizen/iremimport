@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -286,6 +287,80 @@ def _metadata(payload: dict[str, Any]) -> dict[str, str]:
     return {**fallback, **structured}
 
 
+
+def _looks_like_product_row(row: dict[str, Any]) -> bool:
+    keys = {_key(name) for name in row.keys()}
+    has_name = bool(
+        keys
+        & {
+            "brand",
+            "description",
+            "descriptionofgoods",
+            "itemname",
+            "productname",
+            "brandname",
+        }
+    )
+    has_shape = any(
+        token in key
+        for key in keys
+        for token in (
+            "packagingsize",
+            "packagingtype",
+            "case",
+            "bottle",
+            "quantity",
+            "amount",
+            "rate",
+            "mrp",
+            "bulk",
+        )
+    )
+    return has_name and has_shape
+
+
+def _iter_dicts(value: Any) -> Iterable[dict[str, Any]]:
+    if isinstance(value, dict):
+        yield value
+        for nested in value.values():
+            yield from _iter_dicts(nested)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_dicts(item)
+
+
+def _json_candidates(text: str) -> Iterable[Any]:
+    decoder = json.JSONDecoder()
+    clean = str(text or "")[:50000]
+    for index, char in enumerate(clean):
+        if char not in "[{":
+            continue
+        nearby = clean[index : index + 1200].casefold()
+        if not any(marker in nearby for marker in ("brand", "packaging", "bottle", "case", "quantity")):
+            continue
+        try:
+            value, _ = decoder.raw_decode(clean[index:])
+        except Exception:
+            continue
+        yield value
+
+
+def _embedded_product_rows(payload: dict[str, Any]) -> list[dict[str, str]]:
+    found: list[dict[str, str]] = []
+    seen: set[tuple[tuple[str, str], ...]] = set()
+    for candidate in _json_candidates(str(payload.get("text") or "")):
+        for row in _iter_dicts(candidate):
+            if not _looks_like_product_row(row):
+                continue
+            clean_row = {str(key): _clean(value) for key, value in row.items() if _clean(value)}
+            signature = tuple(sorted(clean_row.items()))
+            if signature in seen:
+                continue
+            seen.add(signature)
+            found.append(clean_row)
+    return found
+
+
 def _product_rows(payload: dict[str, Any]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for table in _coerce_tables(payload.get("tables")):
@@ -336,7 +411,9 @@ def _product_rows(payload: dict[str, Any]) -> list[dict[str, str]]:
             if _key(name).startswith(("total", "tcspayable", "roundoff")):
                 continue
             rows.append(row)
-    return rows
+    if rows:
+        return rows
+    return _embedded_product_rows(payload)
 
 
 def _document_from_payload(
@@ -632,7 +709,8 @@ async def extract_up_transport_pass(
         status_code = 401 if exc.status_code == 401 else 403 if exc.status_code == 403 else 502
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
-    unmapped_count = len(workspace.get("unmappedItems", []))
+    mapping_rows = workspace.get("unmappedItems", [])
+    unmapped_count = sum(1 for row in mapping_rows if not row.get("selectedItemCode"))
     status = "MAPPING_REQUIRED" if unmapped_count else "READY"
     service._update_job(
         job_id,

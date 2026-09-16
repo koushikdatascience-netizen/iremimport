@@ -287,6 +287,43 @@ def test_up_excise_transport_pass_qr_exact_url_and_table_shape(client, monkeypat
     assert raw["bulkLitres"] == "18.00"
 
 
+def test_up_excise_transport_pass_qr_reads_script_embedded_rows():
+    from app.modules.document_import import up_excise_qr
+
+    html = """
+    <html><body>
+      <div>Indent No.: RETAIL995782-20260615110345746</div>
+      <div>Indent Date: 15-Jun-2026</div>
+      <script>
+        window.transportPass = {
+          "items": [
+            {
+              "brand": "Tenjaku Blended Whisky",
+              "packagingSize": "700 ML",
+              "packagingType": "Glass Bottle",
+              "noOfCasesDispatched": "1",
+              "noOfBottlesDispatched": "12",
+              "bulkLitres": "8.40"
+            }
+          ]
+        };
+      </script>
+    </body></html>
+    """
+
+    payload = up_excise_qr._payload_from_html(html)
+    document = up_excise_qr._document_from_payload(
+        payload,
+        up_excise_qr.parse_up_transport_url(UP_EXCISE_QR_URL),
+    )
+    normalized = normalize_extracted_document(document, "QR_HTML")
+
+    assert len(normalized) == 1
+    assert normalized[0].rawName == "Tenjaku Blended Whisky"
+    assert normalized[0].ml == 700
+    assert normalized[0].packing == 12
+    assert normalized[0].quantity == 1.0
+
 def test_shop_cannot_read_other_shop_job(client, monkeypatch):
     from app.modules.document_import.service import DocumentImportService
     from app.main import mapping_service
