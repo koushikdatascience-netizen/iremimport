@@ -207,22 +207,37 @@ async def build_purchase_context(
     session: dict[str, Any],
     supplier_name: str = "",
 ) -> dict[str, Any]:
+    """Return the cached Purchase bootstrap used by document import.
+
+    This warms the same Purchase-specific masters visible in the current
+    Madhushala network trace, but does so concurrently and with read-through
+    caching so later Save Purchase does not repeat the whole page bootstrap.
+    """
     token = str(session.get("madhushala_token") or settings.MADHUSHALA_SERVICE_TOKEN or "")
     company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE)
 
-    warnings: list[str] = []
     try:
-        rows = await reference_data_service.purchase_context_rows(session)
+        bootstrap = await reference_data_service.purchase_bootstrap(session)
     except Exception as exc:
-        rows = {"suppliers": [], "storages": [], "accounts": [], "users": [], "schemes": []}
-        warnings.append(str(exc))
+        bootstrap = {
+            "companies": [],
+            "suppliers": [],
+            "storages": [],
+            "accounts": [],
+            "users": [],
+            "schemes": [],
+            "catalogue": [],
+            "taxTags": [],
+            "taxMode": "ITEMWISE",
+            "warnings": [str(exc)],
+        }
 
     options = {
-        "suppliers": normalize_options(rows.get("suppliers", []), "supplier"),
-        "storages": normalize_options(rows.get("storages", []), "storage"),
-        "accounts": normalize_options(rows.get("accounts", []), "account"),
-        "users": normalize_options(rows.get("users", []), "user"),
-        "schemes": normalize_options(rows.get("schemes", []), "scheme"),
+        "suppliers": normalize_options(bootstrap.get("suppliers", []), "supplier"),
+        "storages": normalize_options(bootstrap.get("storages", []), "storage"),
+        "accounts": normalize_options(bootstrap.get("accounts", []), "account"),
+        "users": normalize_options(bootstrap.get("users", []), "user"),
+        "schemes": normalize_options(bootstrap.get("schemes", []), "scheme"),
     }
     token_context = jwt_context(token)
 
@@ -232,7 +247,9 @@ async def build_purchase_context(
         "schemeCode": _single_option(options["schemes"]),
         "purchaseAccCode": _single_option(options["accounts"]),
         "userCode": _current_user_default(options["users"], token),
-        "yearCode": token_context.get("yearCode", ""),
+        # Current manual Purchase sends yearCode="". Keep the JWT value visible
+        # as diagnostic context but do not silently inject it into the payload.
+        "yearCode": "",
     }
 
     return {
@@ -240,8 +257,11 @@ async def build_purchase_context(
         "companyCode": company_code,
         "billType": str(session.get("bill_type") or settings.DEFAULT_BILL_TYPE),
         "supplierHint": _text(supplier_name),
+        "purchaseTaxMode": str(bootstrap.get("taxMode") or "ITEMWISE"),
+        "catalogueCount": len(bootstrap.get("catalogue") or []),
+        "taxTagCount": len(bootstrap.get("taxTags") or []),
         "jwtContext": token_context,
         "options": options,
         "defaults": defaults,
-        "warnings": warnings,
+        "warnings": list(bootstrap.get("warnings") or []),
     }
