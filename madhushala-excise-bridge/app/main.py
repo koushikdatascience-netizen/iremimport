@@ -45,14 +45,30 @@ DOCUMENT_IMPORT_SCRIPTS = (
     '<script src="./static/qr-browser-fallback.js"></script>',
     '<script src="./static/purchase-context.js"></script>',
 )
+PAGE_END_SCRIPTS = (
+    '<script src="./static/mapping-row-identity.js"></script>',
+)
+
+
+def _inject_missing_scripts(html: str, scripts: tuple[str, ...], marker: str) -> str:
+    missing = [
+        script
+        for script in scripts
+        if script.split('src="', 1)[1].split('"', 1)[0] not in html
+    ]
+    if not missing:
+        return html
+    return html.replace(marker, "    " + "\n    ".join(missing) + f"\n{marker}", 1)
+
+
+def index_html() -> str:
+    html = INDEX_HTML_PATH.read_text(encoding="utf-8")
+    return _inject_missing_scripts(html, PAGE_END_SCRIPTS, "</body>")
 
 
 def document_import_html() -> str:
-    html = INDEX_HTML_PATH.read_text(encoding="utf-8")
-    missing_scripts = [script for script in DOCUMENT_IMPORT_SCRIPTS if script.split('src="', 1)[1].split('"', 1)[0] not in html]
-    if missing_scripts:
-        html = html.replace("</head>", "    " + "\n    ".join(missing_scripts) + "\n</head>", 1)
-    return html
+    html = index_html()
+    return _inject_missing_scripts(html, DOCUMENT_IMPORT_SCRIPTS, "</head>")
 
 
 app = FastAPI(
@@ -174,6 +190,48 @@ def capture_signature(items: list[dict[str, Any]]) -> str:
             )
         )
     return "||".join(sorted(parts))
+
+
+def _document_job_owned(db: Any, session: dict[str, Any], job_id: str) -> bool:
+    return bool(
+        db.execute(
+            "SELECT id FROM import_jobs WHERE id=? AND shop_code=? AND session_id=?",
+            (job_id, session["shop_code"], session["session_id"]),
+        ).fetchone()
+    )
+
+
+def _apply_document_row_mapping_state(
+    workspace: dict[str, Any],
+    session: dict[str, Any],
+    job_id: str,
+) -> dict[str, Any]:
+    """For document jobs, local job-row state is authoritative over global Excise mappings."""
+    with conn() as db:
+        if not _document_job_owned(db, session, job_id):
+            raise HTTPException(status_code=404, detail="Import job not found")
+        states = {
+            str(row["id"]): row
+            for row in db.execute(
+                "SELECT id, mapped_item_code, mapping_status FROM import_items WHERE job_id=?",
+                (job_id,),
+            ).fetchall()
+        }
+
+    dropdown = {
+        str(item.get("itemCode")): item
+        for item in workspace.get("madhushalaItems", [])
+        if item.get("itemCode") is not None
+    }
+    for row in workspace.get("unmappedItems", []):
+        state = states.get(str(row.get("jobItemId") or ""))
+        if not state:
+            continue
+        mapped_code = str(state["mapped_item_code"] or "").strip()
+        row["selectedItemCode"] = mapped_code or None
+        row["selectedItem"] = dropdown.get(mapped_code) if mapped_code else None
+        row["mappingStatus"] = "MAPPED" if mapped_code else (state["mapping_status"] or "PENDING")
+    return workspace
 
 
 @app.exception_handler(Exception)
@@ -347,7 +405,7 @@ async def capture_from_extension(payload: CaptureRequest, request: Request):
 async def get_mapping_workspace(request: Request, latestOnly: bool = True, jobId: str | None = None):
     session = session_service.from_request(request)
     try:
-        return await mapping_service.workspace_for_session(
+        workspace = await mapping_service.workspace_for_session(
             session,
             latest_capture_for_session(session["session_id"]),
             latest_only=latestOnly,
@@ -355,26 +413,119 @@ async def get_mapping_workspace(request: Request, latestOnly: bool = True, jobId
         )
     except MadhushalaApiError as exc:
         handle_madhushala_error(exc)
+    if jobId:
+        workspace = _apply_document_row_mapping_state(workspace, session, jobId)
+    return workspace
 
 
 @app.post("/mapping/submit")
 async def submit_mappings(payload: MappingRequest, request: Request):
     session = session_service.from_request(request)
-    try:
-        result = await mapping_service.save_session_mappings(session, payload.mappings, job_id=payload.jobId)
-    except MadhushalaApiError as exc:
-        handle_madhushala_error(exc)
+    job_id = str(payload.jobId or "").strip()
+    uses_job_rows = bool(
+        job_id
+        and payload.mappings
+        and all(str(item.get("jobItemId") or "").strip() for item in payload.mappings)
+    )
+    session_state = "complete"
+
+    if uses_job_rows:
+        clean: list[dict[str, Any]] = []
+        seen_job_items: set[str] = set()
+        with conn() as db:
+            if not _document_job_owned(db, session, job_id):
+                raise HTTPException(status_code=404, detail="Import job not found")
+            for item in payload.mappings:
+                job_item_id = str(item.get("jobItemId") or "").strip()
+                item_code = str(item.get("itemCode") or "").strip()
+                if not job_item_id or not item_code:
+                    raise HTTPException(status_code=400, detail="jobItemId and itemCode are required")
+                if job_item_id in seen_job_items:
+                    raise HTTPException(status_code=400, detail="Duplicate document row in mapping request")
+                seen_job_items.add(job_item_id)
+
+                row = db.execute(
+                    "SELECT excise_item_code FROM import_items WHERE id=? AND job_id=?",
+                    (job_item_id, job_id),
+                ).fetchone()
+                if not row:
+                    raise HTTPException(status_code=400, detail="Document mapping row was not found")
+                actual_excise_code = str(row["excise_item_code"] or "").strip()
+                requested_excise_code = str(item.get("exciseItemCode") or "").strip()
+                if not actual_excise_code or not actual_excise_code.isdigit():
+                    raise HTTPException(status_code=409, detail="Excise item code is not ready for this document row")
+                if requested_excise_code and requested_excise_code != actual_excise_code:
+                    raise HTTPException(status_code=409, detail="Document mapping row changed; refresh and try again")
+                clean.append(
+                    {
+                        "jobItemId": job_item_id,
+                        "exciseItemCode": int(actual_excise_code),
+                        "itemCode": item_code,
+                    }
+                )
+
+        try:
+            # Save the global Excise -> Madhushala mapping without the legacy broad
+            # document-row UPDATE; local row state is updated by its unique jobItemId below.
+            result = await mapping_service.save_session_mappings(session, clean, job_id=None)
+        except MadhushalaApiError as exc:
+            handle_madhushala_error(exc)
+
+        mapped_at = datetime.now(timezone.utc).isoformat()
+        with conn() as db:
+            for item in clean:
+                db.execute(
+                    """
+                    UPDATE import_items
+                    SET mapping_status='MAPPED', mapped_item_code=?, updated_at=?
+                    WHERE id=? AND job_id=?
+                    """,
+                    (item["itemCode"], mapped_at, item["jobItemId"], job_id),
+                )
+            counts = db.execute(
+                """
+                SELECT
+                  COUNT(*) AS total,
+                  SUM(CASE WHEN mapping_status='MAPPED' THEN 1 ELSE 0 END) AS mapped
+                FROM import_items WHERE job_id=?
+                """,
+                (job_id,),
+            ).fetchone()
+            total = counts["total"] or 0
+            mapped = counts["mapped"] or 0
+            status = "COMPLETED" if total and mapped >= total else "MAPPING_REQUIRED"
+            session_state = "complete" if status == "COMPLETED" else "mapping_required"
+            db.execute(
+                """
+                UPDATE import_jobs
+                SET mapped_count=?, status=?,
+                    completed_at=CASE WHEN ?='COMPLETED' THEN ? ELSE completed_at END,
+                    updated_at=?
+                WHERE id=? AND shop_code=? AND session_id=?
+                """,
+                (mapped, status, status, mapped_at, mapped_at, job_id, session["shop_code"], session["session_id"]),
+            )
+        result["mappedCount"] = len(clean)
+    else:
+        try:
+            result = await mapping_service.save_session_mappings(session, payload.mappings, job_id=payload.jobId)
+        except MadhushalaApiError as exc:
+            handle_madhushala_error(exc)
+
     with conn() as db:
         db.execute(
-            "UPDATE integration_sessions SET state='complete' WHERE session_id=?",
-            (session["session_id"],),
+            "UPDATE integration_sessions SET state=? WHERE session_id=?",
+            (session_state, session["session_id"]),
         )
     return result
 
 
 @app.get("/")
 async def serve_index():
-    return FileResponse(INDEX_HTML_PATH)
+    return HTMLResponse(
+        content=index_html(),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/document-import")
