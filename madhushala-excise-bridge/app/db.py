@@ -86,17 +86,34 @@ CREATE TABLE IF NOT EXISTS import_items (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS purchase_transactions (
+  job_id TEXT PRIMARY KEY,
+  shop_code TEXT NOT NULL,
+  company_code TEXT NOT NULL,
+  supplier_code TEXT,
+  doc_no TEXT,
+  payload_hash TEXT NOT NULL,
+  status TEXT NOT NULL,
+  request_json TEXT NOT NULL,
+  response_json TEXT,
+  error TEXT,
+  madhushala_trn_no TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_import_jobs_shop_code ON import_jobs(shop_code);
 CREATE INDEX IF NOT EXISTS idx_import_jobs_session_id ON import_jobs(session_id);
 CREATE INDEX IF NOT EXISTS idx_import_jobs_status ON import_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_import_items_job_id ON import_items(job_id);
 CREATE INDEX IF NOT EXISTS idx_import_items_mapping_status ON import_items(mapping_status);
+CREATE INDEX IF NOT EXISTS idx_purchase_transactions_status ON purchase_transactions(status);
+CREATE INDEX IF NOT EXISTS idx_purchase_transactions_bill ON purchase_transactions(shop_code, company_code, supplier_code, doc_no);
 """
 
 @contextmanager
 def conn():
     os.makedirs(os.path.dirname(settings.DATABASE_PATH) or ".", exist_ok=True)
-    db = sqlite3.connect(settings.DATABASE_PATH)
+    db = sqlite3.connect(settings.DATABASE_PATH, timeout=30)
     db.row_factory = sqlite3.Row
     try:
         yield db
