@@ -14,11 +14,13 @@ from app.modules.document_import.up_excise_qr import (
 )
 
 
+# Confirmed PurchaseRequest business requirements supplied by the Madhushala team.
+# tpPassNo and schemeCode are optional and therefore must never block Save Purchase.
 _REQUIRED_LABELS = {
-    "tpPassNo": "TP Pass No",
     "supplierCode": "Supplier",
     "storeCode": "Store",
-    "schemeCode": "Scheme",
+    "purchaseAccCode": "Purchase A/c",
+    "userCode": "User",
 }
 
 
@@ -67,7 +69,6 @@ async def _supplier_hint_for_job(service: Any, job: dict[str, Any], job_id: str)
     saved = _text(job.get("supplier_name"))
     if saved:
         return saved
-
     source = _up_source_url(job)
     if not source:
         return ""
@@ -87,32 +88,38 @@ async def resolve_required_purchase_header(
     job_id: str,
     header: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Fill fields the live Madhushala purchase API has proven to require."""
+    """Resolve Purchase header/master values without inventing accounting data."""
     job = service.get_job(session, job_id)
     resolved = dict(header or {})
 
+    # TP Pass is optional, but recover it automatically when the source provides it.
     if not _text(resolved.get("tpPassNo")):
         resolved["tpPassNo"] = _transport_pass_from_job(job, job_id)
 
-    missing_master = any(
-        not _text(resolved.get(name))
-        for name in ("supplierCode", "storeCode", "schemeCode")
-    )
-    if missing_master:
+    supplier_hint = ""
+    needs_context = any(not _text(resolved.get(name)) for name in _REQUIRED_LABELS) or not _text(resolved.get("schemeCode"))
+    if needs_context:
         supplier_hint = await _supplier_hint_for_job(service, job, job_id)
         try:
-            context = await build_purchase_context(
-                session,
-                supplier_name=supplier_hint,
-            )
+            context = await build_purchase_context(session, supplier_name=supplier_hint)
         except Exception:
             context = {}
         defaults = context.get("defaults") if isinstance(context, dict) else {}
         if not isinstance(defaults, dict):
             defaults = {}
-        for name in ("supplierCode", "storeCode", "schemeCode"):
+
+        # Required masters: fill only when Madhushala gives an unambiguous/default value.
+        for name in _REQUIRED_LABELS:
             if not _text(resolved.get(name)) and _text(defaults.get(name)):
                 resolved[name] = _text(defaults[name])
+        # Scheme is optional; use the Madhushala default when there is one, otherwise keep "".
+        if not _text(resolved.get("schemeCode")) and _text(defaults.get("schemeCode")):
+            resolved["schemeCode"] = _text(defaults["schemeCode"])
+        if not _text(resolved.get("taxMode")) and _text(defaults.get("taxMode")):
+            resolved["taxMode"] = _text(defaults["taxMode"])
+
+    resolved.setdefault("schemeCode", "")
+    resolved.setdefault("tpPassNo", "")
 
     missing = [name for name in _REQUIRED_LABELS if not _text(resolved.get(name))]
     if missing:
@@ -120,9 +127,8 @@ async def resolve_required_purchase_header(
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Madhushala requires these purchase details: {labels}. "
-                "Select them on the document review screen before continuing to mapping."
+                f"Purchase requires Madhushala master selection for: {labels}. "
+                "Select the value on the document review screen; TP Pass and Scheme are optional."
             ),
         )
-
     return resolved
