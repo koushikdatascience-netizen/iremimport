@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from html.parser import HTMLParser
 from typing import Any
@@ -483,39 +484,72 @@ async def _fetch_up_transport_page(url: str) -> dict[str, Any]:
 
 
 async def _render_up_transport_page(url: str) -> tuple[str, str]:
-    """Render once when UP Excise populates the pass rows client-side."""
+    """Render UP Excise patiently; its public page often fills rows late via JavaScript."""
     from playwright.async_api import async_playwright
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(
-            headless=True,
+            # Production already runs under Xvfb. A headed browser is more reliable
+            # with this legacy public portal, while tests/local shells can stay headless.
+            headless=not bool(os.environ.get("DISPLAY")),
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
+        context = await browser.new_context(
+            viewport={"width": 1366, "height": 768},
+            locale="en-US",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/128.0.0.0 Safari/537.36"
+            ),
+        )
         try:
-            page = await browser.new_page()
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            try:
-                await page.wait_for_function(
-                    """
-                    () => [...document.querySelectorAll('table')].some(table => {
-                        const rows = [...table.querySelectorAll('tr')];
-                        if (rows.length < 2) return false;
-                        const header = (rows[0]?.innerText || '').toLowerCase();
-                        if (!header.includes('brand')) return false;
-                        return rows.slice(1).some(row =>
-                            row.querySelectorAll('td').length >= 3 && row.innerText.trim()
-                        );
-                    })
-                    """,
-                    timeout=15000,
-                )
-            except Exception:
-                pass
-            await page.wait_for_timeout(750)
-            return await page.content(), page.url
-        finally:
-            await browser.close()
+            page = await context.new_page()
+            last_html = ""
+            last_url = url
 
+            # UP Excise intermittently returns only the empty table shell. Give the
+            # same public URL a few fresh browser loads before treating it as empty.
+            for attempt in range(3):
+                try:
+                    if attempt == 0:
+                        await page.goto(
+                            url,
+                            wait_until="domcontentloaded",
+                            timeout=45000,
+                        )
+                    else:
+                        await page.wait_for_timeout(1000 * attempt)
+                        await page.reload(
+                            wait_until="domcontentloaded",
+                            timeout=45000,
+                        )
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    continue
+
+                last_url = page.url
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    # The portal keeps background connections open on some loads.
+                    pass
+
+                # Do not rely on one brittle DOM selector. Parse successive DOM
+                # snapshots with the same product parser used by the import flow.
+                for _ in range(20):
+                    last_html = await page.content()
+                    if _product_rows(_payload_from_html(last_html)):
+                        return last_html, page.url
+                    await page.wait_for_timeout(1000)
+
+            if not last_html:
+                last_html = await page.content()
+            return last_html, last_url
+        finally:
+            await context.close()
+            await browser.close()
 
 async def extract_up_transport_pass(
     service: Any,
@@ -576,7 +610,7 @@ async def extract_up_transport_pass(
     )
     normalized = normalize_extracted_document(extracted, "QR_HTML")
     if not normalized:
-        detail = "No populated product rows were found in the UP Excise transport-pass page"
+        detail = "UP Excise did not populate product rows after automatic browser retries"
         service._update_job(job_id, status="FAILED", error=detail)
         raise HTTPException(status_code=422, detail=detail)
 
