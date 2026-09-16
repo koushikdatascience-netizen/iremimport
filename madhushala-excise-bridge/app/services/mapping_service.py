@@ -429,13 +429,12 @@ class MappingService:
     ) -> dict[str, Any]:
         shop_code = session["shop_code"]
         client = self._client_for_session(session)
-        unmapped = await client.get_unmapped_items()
         company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
         bill_type = str(session.get("bill_type") or settings.DEFAULT_BILL_TYPE).strip()
         madhushala_items = await client.get_dropdown_items(company_code, bill_type)
-        latest_codes: set[str] = set()
 
         if job_id:
+            rows: list[dict[str, Any]] = []
             with conn() as db:
                 job = db.execute(
                     "SELECT id FROM import_jobs WHERE id=? AND shop_code=? AND session_id=?",
@@ -444,12 +443,79 @@ class MappingService:
                 if not job:
                     from fastapi import HTTPException
                     raise HTTPException(status_code=404, detail="Import job not found")
+
                 job_rows = db.execute(
-                    "SELECT excise_item_code FROM import_items WHERE job_id=? AND excise_item_code IS NOT NULL",
+                    "SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id",
                     (job_id,),
                 ).fetchall()
-                latest_codes = {str(row["excise_item_code"]) for row in job_rows if row["excise_item_code"]}
-        elif latest_only and capture:
+                for job_item in job_rows:
+                    excise_code = str(job_item["excise_item_code"] or "").strip()
+                    raw_data: dict[str, Any] = {}
+                    try:
+                        loaded = json.loads(job_item["raw_data_json"] or "{}")
+                        if isinstance(loaded, dict):
+                            raw_data = loaded
+                    except Exception:
+                        raw_data = {}
+
+                    captured = {
+                        **raw_data,
+                        "rawName": job_item["raw_name"],
+                        "brand": job_item["brand"],
+                        "measureMl": job_item["ml"],
+                        "ml": job_item["ml"],
+                        "bottlesPerCase": job_item["packing"],
+                        "packing": job_item["packing"],
+                        "quantity": job_item["quantity"],
+                        "rate": job_item["rate"],
+                        "mrpPerUnit": job_item["mrp"],
+                        "mrp": job_item["mrp"],
+                        "amount": job_item["amount"],
+                        "barcode": job_item["barcode"],
+                        "confidence": job_item["confidence"],
+                    }
+                    context = {
+                        "exciseItemCode": excise_code,
+                        "itemName": job_item["raw_name"] or job_item["normalized_name"] or excise_code,
+                        **captured,
+                    }
+
+                    mapped_code = str(job_item["mapped_item_code"] or "").strip()
+                    if not mapped_code and excise_code:
+                        mapped = db.execute(
+                            "SELECT madhushala_item_code FROM mappings WHERE shop_code=? AND excise_item_code=?",
+                            (shop_code, excise_code),
+                        ).fetchone()
+                        mapped_code = str(mapped["madhushala_item_code"] if mapped else "").strip()
+                    mapped_item = next((item for item in madhushala_items if str(item.get("itemCode")) == mapped_code), None)
+                    rows.append(
+                        {
+                            "jobItemId": job_item["id"],
+                            "exciseItemCode": excise_code,
+                            "itemName": job_item["raw_name"] or job_item["normalized_name"] or excise_code,
+                            "capturedItem": captured,
+                            "suggestions": suggest_matches(context, madhushala_items),
+                            "selectedItemCode": mapped_code or None,
+                            "selectedItem": mapped_item,
+                            "mappingStatus": "MAPPED" if mapped_code else (job_item["mapping_status"] or "PENDING"),
+                            "documentRow": True,
+                        }
+                    )
+
+            return {
+                "shopCode": shop_code,
+                "jobId": job_id,
+                "documentMapping": True,
+                "unmappedItems": rows,
+                "madhushalaItems": madhushala_items,
+                "dropdownCount": len(madhushala_items),
+                "latestOnly": latest_only,
+            }
+
+        unmapped = await client.get_unmapped_items()
+        latest_codes: set[str] = set()
+
+        if latest_only and capture:
             with conn() as db:
                 for item in capture.get("items", []):
                     row = db.execute(
@@ -507,23 +573,6 @@ class MappingService:
                     (shop_code, excise_code),
                 ).fetchone()
                 captured = json.loads(imported["captured_item_json"]) if imported else None
-                if job_id:
-                    job_item = db.execute(
-                        "SELECT * FROM import_items WHERE job_id=? AND excise_item_code=?",
-                        (job_id, excise_code),
-                    ).fetchone()
-                    if job_item:
-                        captured = {
-                            "rawName": job_item["raw_name"],
-                            "brand": job_item["brand"],
-                            "measureMl": job_item["ml"],
-                            "ml": job_item["ml"],
-                            "bottlesPerCase": job_item["packing"],
-                            "packing": job_item["packing"],
-                            "mrpPerUnit": job_item["mrp"],
-                            "barcode": job_item["barcode"],
-                            "confidence": job_item["confidence"],
-                        }
                 context = dict(unmapped_item)
                 if captured:
                     context.update(captured)
@@ -545,12 +594,12 @@ class MappingService:
         return {
             "shopCode": shop_code,
             "jobId": job_id,
+            "documentMapping": False,
             "unmappedItems": rows,
             "madhushalaItems": madhushala_items,
             "dropdownCount": len(madhushala_items),
             "latestOnly": latest_only,
         }
-
     async def prepare_document_job(self, session: dict[str, Any], job_id: str) -> dict[str, Any]:
         shop_code = session["shop_code"]
         client = self._client_for_session(session)
@@ -582,14 +631,21 @@ class MappingService:
                 excise_item_code, prepare_action, unmapped = await self._create_or_reuse_excise_item(
                     client, payload, unmapped
                 )
-                mapping_status = "UNMAPPED" if excise_item_code else ("REVIEW_REQUIRED" if prepare_action == "review_required" else "PENDING")
+                mapped_item_code = ""
+                if excise_item_code is not None:
+                    mapped = db.execute(
+                        "SELECT madhushala_item_code FROM mappings WHERE shop_code=? AND excise_item_code=?",
+                        (shop_code, str(excise_item_code)),
+                    ).fetchone()
+                    mapped_item_code = str(mapped["madhushala_item_code"] if mapped else "").strip()
+                mapping_status = "MAPPED" if mapped_item_code else ("UNMAPPED" if excise_item_code else ("REVIEW_REQUIRED" if prepare_action == "review_required" else "PENDING"))
                 db.execute(
                     """
                     UPDATE import_items
-                    SET excise_item_code=?, mapping_status=?, updated_at=?
+                    SET excise_item_code=?, mapping_status=?, mapped_item_code=?, updated_at=?
                     WHERE id=?
                     """,
-                    (str(excise_item_code or ""), mapping_status, now, row["id"]),
+                    (str(excise_item_code or ""), mapping_status, mapped_item_code, now, row["id"]),
                 )
                 prepared += 1
         return {"preparedCount": prepared}

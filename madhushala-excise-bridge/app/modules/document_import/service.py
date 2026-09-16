@@ -341,7 +341,8 @@ class DocumentImportService:
             self._update_job(job_id, status="CHECKING_MAPPING", extracted_count=len(normalized))
             await self.mapping_service.prepare_document_job(session, job_id)
             workspace = await self.mapping_service.workspace_for_session(session, job_id=job_id)
-            unmapped_count = len(workspace.get("unmappedItems", []))
+            mapping_rows = workspace.get("unmappedItems", [])
+            unmapped_count = sum(1 for row in mapping_rows if not row.get("selectedItemCode"))
             status = "MAPPING_REQUIRED" if unmapped_count else "READY"
             self._update_job(job_id, status=status, mapped_count=len(normalized) - unmapped_count)
             return {
@@ -489,7 +490,8 @@ class DocumentImportService:
         self._update_job(job_id, status="CHECKING_MAPPING", extracted_count=len(normalized))
         await self.mapping_service.prepare_document_job(session, job_id)
         workspace = await self.mapping_service.workspace_for_session(session, job_id=job_id)
-        unmapped_count = len(workspace.get("unmappedItems", []))
+        mapping_rows = workspace.get("unmappedItems", [])
+        unmapped_count = sum(1 for row in mapping_rows if not row.get("selectedItemCode"))
         status = "MAPPING_REQUIRED" if unmapped_count else "READY"
         self._update_job(job_id, status=status, mapped_count=len(normalized) - unmapped_count)
         return {
@@ -844,9 +846,3 @@ class DocumentImportService:
                 ("PURCHASE_SAVED", now_iso(), now_iso(), job_id),
             )
         return {"success": True, "jobId": job_id, "purchasePayload": payload, "madhushalaResponse": response, "job": job}
-
-
-
-
-
-

@@ -534,6 +534,17 @@ function closeGuardrailModal() {
     pendingGuardrailAction = null;
 }
 
+function mappedItemForRow(item) {
+    const code = selectedMappings.get(String(item.exciseItemCode)) || item.selectedItemCode || "";
+    if (!code) return null;
+    return findMadhushalaItem(code) || item.selectedItem || {itemCode: code, itemName: "Mapped item"};
+}
+
+function mappedItemMarkup(item) {
+    const mapped = mappedItemForRow(item);
+    if (!mapped) return `<span class="mapped-choice empty">Select item</span>`;
+    return `<span class="mapped-choice done"><strong>${escapeHtml(mapped.itemCode || "")}</strong><span>${escapeHtml(mapped.itemName || "Mapped item")}</span></span>`;
+}
 function currentExciseItem() {
     return workspace.unmappedItems.find((item) => String(item.exciseItemCode) === String(selectedExciseCode));
 }
@@ -558,11 +569,20 @@ function renderWorkspace() {
         selectedExciseCode = workspace.unmappedItems[0] ? String(workspace.unmappedItems[0].exciseItemCode) : null;
     }
 
-    list.className = "list-body";
+    const documentModeRows = Boolean(workspace.documentMapping || currentDocumentJobId);
+    list.className = documentModeRows ? "list-body document-map-list" : "list-body";
     list.innerHTML = workspace.unmappedItems.map((item) => {
         const code = String(item.exciseItemCode);
         const selected = code === String(selectedExciseCode);
         const mapped = selectedMappings.get(code) || item.selectedItemCode;
+        if (documentModeRows) {
+            return `
+                <button class="unmapped-item document-map-row ${selected ? "selected" : ""}" data-excise="${escapeHtml(code)}" type="button">
+                    <span class="doc-extracted"><small>${escapeHtml(code || "New")}</small><strong>${escapeHtml(item.itemName)}</strong>${selectedExciseDetails(item)}</span>
+                    <span class="doc-arrow" aria-hidden="true">→</span>
+                    ${mappedItemMarkup(item)}
+                </button>`;
+        }
         return `
             <button class="unmapped-item ${selected ? "selected" : ""}" data-excise="${escapeHtml(code)}" type="button">
                 <span class="item-code">${escapeHtml(code)}</span>
@@ -692,7 +712,7 @@ function runSearch() {
 
 function updateSummary() {
     const left = workspace.unmappedItems.filter((item) => !selectedMappings.get(String(item.exciseItemCode)) && !item.selectedItemCode).length;
-    setText(document.getElementById("mapping-summary"), `Selected: ${selectedMappings.size} | Left: ${left}`);
+    setText(document.getElementById("mapping-summary"), `${workspace.documentMapping ? "Document rows" : "Selected"}: ${selectedMappings.size} | Left: ${left}`);
     const submit = document.getElementById("submit-mappings");
     if (submit) submit.disabled = selectedMappings.size === 0;
 }
@@ -745,7 +765,7 @@ async function saveMappings() {
         const result = await api("/mapping/submit", {method: "POST", body: JSON.stringify({mappings, jobId: currentDocumentJobId || null})});
         selectedMappings.clear();
         showToast(`Saved ${result.mappedCount}`, "success");
-        await loadWorkspace();
+        await loadWorkspace(currentDocumentJobId);
         if (sanitizeJobId(currentDocumentJobId)) {
             setHidden(document.getElementById("save-purchase-from-mapping"), false);
         }
@@ -1005,10 +1025,3 @@ document.addEventListener("DOMContentLoaded", () => {
     else if (mappingMode) initMapping();
     else initLaunch();
 });
-
-
-
-
-
-
-
