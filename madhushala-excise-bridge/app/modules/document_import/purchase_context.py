@@ -18,6 +18,10 @@ _OPTION_ALIASES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         ("storeCode", "storageCode", "godownCode", "warehouseCode", "code", "value", "id"),
         ("storeName", "storageName", "godownName", "warehouseName", "name", "text", "label", "description"),
     ),
+    "scheme": (
+        ("schemeCode", "schemecode", "schemeNo", "code", "value", "id"),
+        ("schemeName", "schemename", "name", "text", "label", "description"),
+    ),
     "account": (
         ("purchaseAccCode", "accountCode", "accCode", "ledgerCode", "code", "value", "id"),
         ("purchaseAccName", "accountName", "accName", "ledgerName", "name", "text", "label", "description"),
@@ -96,8 +100,6 @@ def up_supplier_hint(payload: Any) -> str:
                 continue
             row = [_text(cell) for cell in raw_row]
             keys = [_key(cell) for cell in row]
-            # UP renders party rows as:
-            # Unit Name | <consignor> | Unit Name | <consignee>
             for field in ("unitname", "licenseename"):
                 indexes = [index for index, key in enumerate(keys) if key == field]
                 if indexes:
@@ -210,9 +212,22 @@ async def build_purchase_context(
             options[key] = []
             warnings.append(f"{key}: {exc}")
 
+    try:
+        scheme_rows = await client._get_purchase_master(
+            "/api/purchase/dropdown/schemes",
+            company_code,
+            "schemes",
+            "schemeList",
+        )
+        options["schemes"] = normalize_options(scheme_rows, "scheme")
+    except MadhushalaApiError as exc:
+        options["schemes"] = []
+        warnings.append(f"schemes: {exc}")
+
     defaults = {
         "supplierCode": _match_option(options["suppliers"], supplier_name) or _single_option(options["suppliers"]),
         "storeCode": _single_option(options["storages"]),
+        "schemeCode": _single_option(options["schemes"]),
         "purchaseAccCode": _single_option(options["accounts"]),
         "userCode": _current_user_default(options["users"], token),
     }
