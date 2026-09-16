@@ -10,6 +10,7 @@ from app.integrations.madhushala.client import MadhushalaApiError
 from app.modules.document_import.service import DocumentImportService
 from app.modules.document_import.purchase_context import build_purchase_context, up_supplier_hint
 from app.modules.document_import.qr_decoder import decode_qr_upload
+from app.modules.document_import.document_mapping import save_document_row_mappings
 from app.modules.document_import.up_excise_qr import (
     extract_up_transport_pass,
     is_up_transport_pass_url,
@@ -22,6 +23,10 @@ class QrExtractRequest(BaseModel):
 
 class PurchaseSaveRequest(BaseModel):
     header: dict[str, Any]
+
+
+class DocumentMappingSaveRequest(BaseModel):
+    mappings: list[dict[str, Any]]
 
 
 def create_router(service: DocumentImportService) -> APIRouter:
@@ -41,6 +46,15 @@ def create_router(service: DocumentImportService) -> APIRouter:
     async def get_job_items(job_id: str, request: Request):
         session = session_service.from_request(request)
         return {"items": service.get_items(session, job_id)}
+
+    @router.post("/jobs/{job_id}/mapping/save")
+    async def save_document_mapping(job_id: str, payload: DocumentMappingSaveRequest, request: Request):
+        session = session_service.from_request(request)
+        try:
+            return await save_document_row_mappings(service, session, job_id, payload.mappings)
+        except MadhushalaApiError as exc:
+            status_code = exc.status_code if exc.status_code and exc.status_code >= 400 else 502
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
     @router.post("/qr/decode")
     async def decode_qr_image(request: Request, file: UploadFile = File(...)):
