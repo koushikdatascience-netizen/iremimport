@@ -14,7 +14,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect exact purchase dependencies
+      - name: Trace purchase calculation config sources
         shell: bash
         run: |
           set -euo pipefail
@@ -22,51 +22,24 @@ jobs:
           curl -k -fsSL "$BASE/swagger/v1/swagger.json" -o /tmp/swagger.json
           python - <<'PY'
           import json
-          api = json.load(open('/tmp/swagger.json'))
-          paths = api.get('paths', {})
-          schemas = api.get('components', {}).get('schemas', {})
+          api=json.load(open('/tmp/swagger.json'))
+          paths=api.get('paths',{})
+          schemas=api.get('components',{}).get('schemas',{})
 
-          exact = [
-              '/api/purchase/dropdown/company',
-              '/api/purchase/dropdown/items',
-              '/api/purchase/dropdown/suppliers',
-              '/api/purchase/dropdown/storages',
-              '/api/purchase/dropdown/purchase-accounts',
-              '/api/purchase/dropdown/schemes',
-              '/api/counter-sales/users',
-              '/api/companies/purchase-tax-mode',
-              '/api/purchase/calculate',
-              '/api/TaxTag/ShowTaxTag',
-              '/api/TaxTag/by-TaxCode/{code}',
-              '/api/purchase/check-duplicate-billno',
-              '/api/purchase/save',
-              '/api/items/{code}',
-          ]
-          print('=== EXACT PURCHASE DEPENDENCY ENDPOINTS ===')
-          for path in exact:
-              print('\n###', path)
-              print(json.dumps(paths.get(path), indent=2)[:18000])
+          needles=('salestaxrate','salestaxincludingfree','salestaxonmrp','purchasetaxmode','yearcode')
+          print('=== PATHS CONTAINING PURCHASE CALC/YEAR SIGNALS ===')
+          for path, methods in sorted(paths.items()):
+              text=json.dumps(methods).lower()
+              hits=[n for n in needles if n in text]
+              if hits:
+                  print('\n###',path,'hits=',','.join(hits))
+                  print(json.dumps(methods,indent=2)[:16000])
 
-          print('\n=== PATHS THAT REFERENCE CompanyItem / YearCodeItem ===')
-          targets = ('Madhushala.Core.DTOs.Auth.CompanyItem','Madhushala.Core.DTOs.Auth.YearCodeItem')
-          for path, methods in paths.items():
-              text = json.dumps(methods)
-              if any(t in text for t in targets):
-                  print('\n###', path)
-                  print(json.dumps(methods, indent=2)[:12000])
-
-          print('\n=== EXACT SCHEMAS ===')
-          names = [
-              'Madhushala.Core.DTOs.Auth.CompanyItem',
-              'Madhushala.Core.DTOs.Auth.YearCodeItem',
-              'Madhushala.Core.DTOs.Transaction.Purchase.PurchaseRequest',
-              'Madhushala.Core.DTOs.Transaction.Purchase.PurchaseItemRequest',
-              'Madhushala.Core.DTOs.Transaction.Purchase.PurchaseTaxRequest',
-              'Madhushala.Core.DTOs.Transaction.Purchase.PurchaseCalculationRequest',
-              'Madhushala.Core.DTOs.Transaction.Purchase.PurchaseItemCalcRequest',
-              'Madhushala.Core.DTOs.Master.TaxTag.TaxTagSaveRequest',
-          ]
-          for name in names:
-              print('\n##', name)
-              print(json.dumps(schemas.get(name), indent=2)[:16000])
+          print('\n=== SCHEMAS CONTAINING PURCHASE CALC/YEAR SIGNALS ===')
+          for name, schema in sorted(schemas.items()):
+              text=json.dumps(schema).lower()
+              hits=[n for n in needles if n in text]
+              if hits:
+                  print('\n##',name,'hits=',','.join(hits))
+                  print(json.dumps(schema,indent=2)[:14000])
           PY
