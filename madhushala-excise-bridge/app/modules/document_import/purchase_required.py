@@ -15,10 +15,10 @@ from app.modules.document_import.up_excise_qr import (
 
 
 _REQUIRED_LABELS = {
-    "tpPassNo": "TP Pass No",
     "supplierCode": "Supplier",
     "storeCode": "Store",
-    "schemeCode": "Scheme",
+    "purchaseAccCode": "Purchase A/c",
+    "userCode": "User",
 }
 
 
@@ -87,32 +87,37 @@ async def resolve_required_purchase_header(
     job_id: str,
     header: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Fill fields the live Madhushala purchase API has proven to require."""
+    """Resolve Purchase header data without inventing Madhushala business values.
+
+    tpPassNo and schemeCode are optional in the agreed PurchaseRequest contract.
+    Supplier, Store, Purchase A/c and User are required and are resolved from
+    Madhushala master data when an unambiguous default exists.
+    """
     job = service.get_job(session, job_id)
     resolved = dict(header or {})
 
+    # Optional but useful for transport-pass imports; recover it automatically.
     if not _text(resolved.get("tpPassNo")):
         resolved["tpPassNo"] = _transport_pass_from_job(job, job_id)
 
-    missing_master = any(
-        not _text(resolved.get(name))
-        for name in ("supplierCode", "storeCode", "schemeCode")
-    )
-    if missing_master:
+    needed = ("supplierCode", "storeCode", "purchaseAccCode", "userCode")
+    if any(not _text(resolved.get(name)) for name in needed):
         supplier_hint = await _supplier_hint_for_job(service, job, job_id)
         try:
-            context = await build_purchase_context(
-                session,
-                supplier_name=supplier_hint,
-            )
+            context = await build_purchase_context(session, supplier_name=supplier_hint)
         except Exception:
             context = {}
         defaults = context.get("defaults") if isinstance(context, dict) else {}
         if not isinstance(defaults, dict):
             defaults = {}
-        for name in ("supplierCode", "storeCode", "schemeCode"):
+        for name in (*needed, "schemeCode", "yearCode"):
             if not _text(resolved.get(name)) and _text(defaults.get(name)):
                 resolved[name] = _text(defaults[name])
+
+    # Preserve optional fields as empty strings so the upstream .NET DTO sees
+    # the expected JSON properties rather than missing members.
+    resolved.setdefault("tpPassNo", "")
+    resolved.setdefault("schemeCode", "")
 
     missing = [name for name in _REQUIRED_LABELS if not _text(resolved.get(name))]
     if missing:
@@ -120,8 +125,8 @@ async def resolve_required_purchase_header(
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Madhushala requires these purchase details: {labels}. "
-                "Select them on the document review screen before continuing to mapping."
+                f"Purchase requires: {labels}. "
+                "Select the missing Madhushala master values before Save Purchase."
             ),
         )
 
