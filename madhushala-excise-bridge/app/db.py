@@ -86,11 +86,39 @@ CREATE TABLE IF NOT EXISTS import_items (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS purchase_transactions (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL UNIQUE,
+  shop_code TEXT NOT NULL,
+  company_code TEXT NOT NULL,
+  supplier_code TEXT,
+  doc_no TEXT,
+  payload_hash TEXT,
+  status TEXT NOT NULL,
+  madhushala_trn_no TEXT,
+  response_json TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS purchase_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  transaction_id TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  status TEXT NOT NULL,
+  duration_ms INTEGER,
+  details_json TEXT,
+  created_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_import_jobs_shop_code ON import_jobs(shop_code);
 CREATE INDEX IF NOT EXISTS idx_import_jobs_session_id ON import_jobs(session_id);
 CREATE INDEX IF NOT EXISTS idx_import_jobs_status ON import_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_import_items_job_id ON import_items(job_id);
 CREATE INDEX IF NOT EXISTS idx_import_items_mapping_status ON import_items(mapping_status);
+CREATE INDEX IF NOT EXISTS idx_purchase_transactions_status ON purchase_transactions(status);
+CREATE INDEX IF NOT EXISTS idx_purchase_transactions_doc ON purchase_transactions(shop_code, company_code, supplier_code, doc_no);
+CREATE INDEX IF NOT EXISTS idx_purchase_events_job_id ON purchase_events(job_id);
 """
 
 @contextmanager
