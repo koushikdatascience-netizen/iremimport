@@ -19,6 +19,7 @@ from app.config import settings
 from app.db import conn, now_iso
 from app.modules.document_import.llama_client import LlamaCloudClient, LlamaCloudError
 from app.modules.document_import.normalizer import normalize_extracted_document
+from app.modules.document_import.purchase_context import build_purchase_context
 from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct, NormalizedImportItem
 from app.services.mapping_service import MappingService
 from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
@@ -732,11 +733,47 @@ class DocumentImportService:
 
     async def save_purchase(self, session: dict[str, Any], job_id: str, header: dict[str, Any]) -> dict[str, Any]:
         job = self.get_job(session, job_id)
-        required = ["yearCode", "trnDate", "docDate", "docNo", "supplierCode", "storeCode", "purchaseAccCode", "userCode"]
-        clean_header = {name: str(header.get(name) or "").strip() for name in required}
-        missing = [name for name, value in clean_header.items() if not value]
-        if missing:
-            raise HTTPException(status_code=400, detail=f"Missing purchase fields: {', '.join(missing)}")
+        header = dict(header or {})
+        context_defaults: dict[str, Any] = {}
+        master_fields = ("supplierCode", "storeCode", "purchaseAccCode", "userCode")
+        if any(not str(header.get(name) or "").strip() for name in master_fields):
+            try:
+                context = await build_purchase_context(
+                    session,
+                    supplier_name=str(job.get("supplier_name") or ""),
+                )
+                defaults = context.get("defaults") if isinstance(context, dict) else {}
+                if isinstance(defaults, dict):
+                    context_defaults = defaults
+            except Exception:
+                # Master-data lookup is only a convenience. The Madhushala
+                # purchase/save API remains the authority on required fields.
+                context_defaults = {}
+
+        def header_text(name: str, fallback: Any = "") -> str:
+            return str(header.get(name) or fallback or "").strip()
+
+        doc_date = header_text("docDate", job.get("invoice_date"))
+        trn_date = header_text("trnDate", date.today().isoformat())
+        year_code = header_text("yearCode")
+        if not year_code:
+            try:
+                effective_date = date.fromisoformat((doc_date or trn_date)[:10])
+                start_year = effective_date.year if effective_date.month >= 4 else effective_date.year - 1
+                year_code = f"{start_year}-{str((start_year + 1) % 100).zfill(2)}"
+            except ValueError:
+                year_code = ""
+
+        clean_header = {
+            "yearCode": year_code,
+            "trnDate": trn_date,
+            "docDate": doc_date,
+            "docNo": header_text("docNo", job.get("invoice_number")),
+            "supplierCode": header_text("supplierCode", context_defaults.get("supplierCode")),
+            "storeCode": header_text("storeCode", context_defaults.get("storeCode")),
+            "purchaseAccCode": header_text("purchaseAccCode", context_defaults.get("purchaseAccCode")),
+            "userCode": header_text("userCode", context_defaults.get("userCode")),
+        }
         items = await self._purchase_items_for_job(session, job_id)
         gross = _money(sum(_money(item["itemAmount"]) for item in items))
         payload = {
@@ -766,6 +803,21 @@ class DocumentImportService:
             "items": items,
             "taxes": header.get("taxes") if isinstance(header.get("taxes"), list) else [],
         }
+        # The live Swagger contract does not declare these header fields
+        # as required. Omit empty values and let Madhushala validate them.
+        for optional_key in (
+            "yearCode",
+            "docDate",
+            "docNo",
+            "tpPassNo",
+            "supplierCode",
+            "storeCode",
+            "schemeCode",
+            "purchaseAccCode",
+            "userCode",
+        ):
+            if payload.get(optional_key) in (None, ""):
+                payload.pop(optional_key, None)
         client = self._client_for_session(session)
         if str(job.get("source_type") or "") != "QR_HTML":
             try:

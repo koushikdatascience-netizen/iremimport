@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request, UploadFile, File
+from fastapi import APIRouter, Request, UploadFile, File, HTTPException
 from pydantic import BaseModel
 
 from app.services.session_service import session_service
+from app.integrations.madhushala.client import MadhushalaApiError
 from app.modules.document_import.service import DocumentImportService
 from app.modules.document_import.purchase_context import build_purchase_context, up_supplier_hint
 from app.modules.document_import.qr_decoder import decode_qr_upload
@@ -65,6 +66,10 @@ def create_router(service: DocumentImportService) -> APIRouter:
     @router.post("/jobs/{job_id}/purchase/save")
     async def save_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):
         session = session_service.from_request(request)
-        return await service.save_purchase(session, job_id, payload.header)
+        try:
+            return await service.save_purchase(session, job_id, payload.header)
+        except MadhushalaApiError as exc:
+            status_code = exc.status_code if exc.status_code and exc.status_code >= 400 else 502
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
     return router

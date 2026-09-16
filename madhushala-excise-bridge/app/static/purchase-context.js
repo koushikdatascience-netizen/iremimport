@@ -227,7 +227,6 @@
         const originalSave = window.savePurchaseFromJob;
         if (typeof originalSave === "function") {
             window.savePurchaseFromJob = async function purchaseAwareSave(source = "review") {
-                if (showFriendlyMissing()) return;
                 saveProfile();
                 return originalSave.call(this, source);
             };
