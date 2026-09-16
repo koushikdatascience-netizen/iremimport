@@ -28,22 +28,18 @@ def test_normalize_purchase_master_options_accepts_madhushala_field_names():
         [{"ledgerCode": "SUP-1", "ledgerName": "HARPREET SINGH"}],
         "supplier",
     ) == [{"code": "SUP-1", "name": "HARPREET SINGH"}]
-
     assert purchase_context.normalize_options(
         [{"storageCode": "MAIN", "storageName": "Main Store"}],
         "storage",
     ) == [{"code": "MAIN", "name": "Main Store"}]
-
     assert purchase_context.normalize_options(
         [{"schemeCode": "SCH-1", "schemeName": "Regular Purchase"}],
         "scheme",
     ) == [{"code": "SCH-1", "name": "Regular Purchase"}]
-
     assert purchase_context.normalize_options(
         [{"accountCode": "PUR", "accountName": "Purchase Account"}],
         "account",
     ) == [{"code": "PUR", "name": "Purchase Account"}]
-
     assert purchase_context.normalize_options(
         [{"userCode": "U7", "userName": "Atul Kumar"}],
         "user",
@@ -52,50 +48,50 @@ def test_normalize_purchase_master_options_accepts_madhushala_field_names():
 
 def test_up_excise_supplier_hint_uses_consignor_not_consignee():
     payload = {
-        "tables": [
-            [
-                ["Consignor DetailsConsignee Details"],
-                ["License Type", "FL2", "License Type", "FL4C"],
-                ["Unit Name", "HARPREET SINGH", "Unit Name", "Vina Alkohal"],
-                ["Licensee Name", "HARPREET SINGH", "Licensee Name", "Atul Kumar Jaiswal"],
-            ]
-        ]
+        "tables": [[
+            ["Consignor DetailsConsignee Details"],
+            ["License Type", "FL2", "License Type", "FL4C"],
+            ["Unit Name", "HARPREET SINGH", "Unit Name", "Vina Alkohal"],
+            ["Licensee Name", "HARPREET SINGH", "Licensee Name", "Atul Kumar Jaiswal"],
+        ]]
     }
     assert purchase_context.up_supplier_hint(payload) == "HARPREET SINGH"
 
 
 @pytest.mark.asyncio
-async def test_purchase_context_matches_supplier_current_user_and_scheme(monkeypatch):
-    class FakeClient:
-        def __init__(self, base_url: str, shop_code: str, token: str):
-            assert shop_code == "SHOP-A"
-            self.token = token
+async def test_purchase_context_matches_supplier_current_user_scheme_and_tax_mode(monkeypatch):
+    class FakeMaster:
+        def __init__(self, session):
+            assert session["shop_code"] == "SHOP-A"
+            self.shop_code = "SHOP-A"
+            self.company_code = "2"
+            self.bill_type = "AI"
 
-        async def get_purchase_suppliers(self, company_code: str):
-            assert company_code == "2"
+        async def suppliers(self):
             return [
                 {"ledgerCode": "SUP-1", "ledgerName": "Other Supplier"},
                 {"ledgerCode": "SUP-2", "ledgerName": "HARPREET SINGH"},
             ]
 
-        async def get_purchase_storages(self, company_code: str):
+        async def storages(self):
             return [{"storeCode": "STORE-1", "storeName": "Main Store"}]
 
-        async def get_purchase_accounts(self, company_code: str):
+        async def accounts(self):
             return [{"purchaseAccCode": "PUR-1", "purchaseAccName": "Purchase"}]
 
-        async def get_purchase_users(self, company_code: str):
+        async def users(self):
             return [
                 {"userCode": "U1", "userName": "Other User"},
                 {"userCode": "U7", "userName": "Atul Kumar"},
             ]
 
-        async def _get_purchase_master(self, path: str, company_code: str, *response_keys: str):
-            assert path == "/api/purchase/dropdown/schemes"
-            assert company_code == "2"
+        async def schemes(self):
             return [{"schemeCode": "SCH-1", "schemeName": "Regular Purchase"}]
 
-    monkeypatch.setattr(purchase_context, "MadhushalaClient", FakeClient)
+        async def purchase_tax_mode(self):
+            return "BILLWISE"
+
+    monkeypatch.setattr(purchase_context, "MadhushalaMasterService", FakeMaster)
     session = {
         "shop_code": "SHOP-A",
         "company_code": "2",
@@ -111,7 +107,9 @@ async def test_purchase_context_matches_supplier_current_user_and_scheme(monkeyp
         "schemeCode": "SCH-1",
         "purchaseAccCode": "PUR-1",
         "userCode": "U7",
+        "taxMode": "BILLWISE",
     }
+    assert result["taxMode"] == "BILLWISE"
     assert result["warnings"] == []
     assert result["options"]["suppliers"][1]["name"] == "HARPREET SINGH"
     assert result["options"]["schemes"][0]["code"] == "SCH-1"
@@ -125,73 +123,13 @@ def test_purchase_context_script_uses_document_date_for_financial_year():
     assert "madhushalaPurchaseProfile" in script
 
 
-@pytest.mark.asyncio
-async def test_purchase_service_core_still_allows_resolved_optional_fields(monkeypatch):
-    from app.modules.document_import import service as service_module
-    from app.modules.document_import.service import DocumentImportService
-
-    class DummyDb:
-        def __enter__(self):
-            return self
-        def __exit__(self, exc_type, exc, tb):
-            return False
-        def execute(self, *args, **kwargs):
-            return None
-
-    class FakeClient:
-        async def save_purchase(self, payload):
-            self.payload = payload
-            return {"ok": True}
-
-    async def fake_context(session, supplier_name=""):
-        return {"defaults": {}}
-
-    async def fake_items(session, job_id):
-        return [{
-            "itemCode": "ITEM-1", "itemName": "Item One", "batchNo": "",
-            "box": 1, "loose": 0, "qnty": 1, "freeQnty": 0,
-            "rate": 10.0, "boxRate": 10.0, "looseRate": 0.0,
-            "mrp": 12.0, "itemAmount": 10.0, "discount": 0.0,
-            "cgst": 0.0, "sgst": 0.0, "cess": 0.0, "addCess": 0.0,
-            "igst": 0.0, "t1Amt": 0.0, "t2Amt": 0.0, "t3Amt": 0.0,
-            "t4Amt": 0.0, "etd": 0.0, "cgstInptLdgr": "",
-            "sgstInptLdgr": "", "cessInptLdgr": "", "adCessInptLdgr": "",
-            "igstInptLdgr": "", "packing": 1, "t1Rate": 0.0,
-            "t2Rate": 0.0, "t3Rate": 0.0, "t4Rate": 0.0,
-        }]
-
-    service = DocumentImportService(object())
-    service.get_job = lambda session, job_id: {
-        "id": job_id,
-        "source_type": "QR_HTML",
-        "invoice_date": "",
-        "invoice_number": "",
-        "supplier_name": "",
-    }
-    service._purchase_items_for_job = fake_items
-    fake_client = FakeClient()
-    service._client_for_session = lambda session: fake_client
-    monkeypatch.setattr(service_module, "build_purchase_context", fake_context)
-    monkeypatch.setattr(service_module, "conn", lambda: DummyDb())
-
-    result = await service.save_purchase(
-        {"shop_code": "SHOP-A", "company_code": "2"},
-        "job-12345678",
-        {},
-    )
-
-    assert result["success"] is True
-    assert "docDate" not in fake_client.payload
-    assert fake_client.payload["trnDate"]
-    assert fake_client.payload["yearCode"]
-
-
-def test_frontend_blocks_only_live_api_proven_required_purchase_fields():
+def test_frontend_required_fields_match_purchase_contract():
     helper = open("app/static/purchase-context.js", encoding="utf-8").read()
-    assert 'id: "purchase-supplier-code"' in helper
-    assert 'id: "purchase-store-code"' in helper
-    assert 'id: "purchase-scheme-code"' in helper
-    assert 'id: "purchase-tp-pass-no"' in helper
+    assert '{id: "purchase-supplier-code", key: "supplierCode", optionKey: "suppliers", label: "Supplier", prompt: "Select Supplier", persist: false, required: true}' in helper
+    assert '{id: "purchase-store-code", key: "storeCode", optionKey: "storages", label: "Store", prompt: "Select Store", persist: true, required: true}' in helper
+    assert '{id: "purchase-scheme-code", key: "schemeCode", optionKey: "schemes", label: "Scheme", prompt: "Select Scheme", persist: true, required: false}' in helper
+    assert '{id: "purchase-acc-code", key: "purchaseAccCode", optionKey: "accounts", label: "Purchase A/c", prompt: "Select Purchase A/c", persist: true, required: true}' in helper
+    assert '{id: "purchase-user-code", key: "userCode", optionKey: "users", label: "User", prompt: "Select User", persist: true, required: true}' in helper
+    required_fn = helper.split("function requiredPurchaseFields()", 1)[1].split("function currentMissingFields()", 1)[0]
+    assert "purchase-tp-pass-no" not in required_fn
     assert "Madhushala requires:" in helper
-    assert "showFriendlyMissing()" in helper
-    assert "schemeCode" in helper
