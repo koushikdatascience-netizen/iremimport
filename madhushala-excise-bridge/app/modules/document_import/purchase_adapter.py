@@ -46,11 +46,12 @@ def _dict_value(row: dict[str, Any] | None, *aliases: str) -> Any:
 
 
 class DocumentPurchaseAdapter:
-    """Purchase-specific adapter around the existing DocumentImportService.
+    """Translate a mapped import job into Madhushala Purchase inputs.
 
-    Extraction/mapping remain untouched. Purchase enrichment/orchestration is
-    isolated here so the upstream Madhushala contract can evolve without
-    coupling the entire document-import service to accounting API changes.
+    Document/QR data owns physical document facts and quantities. Madhushala
+    Item Master owns commercial/tax metadata. This boundary lets the upstream
+    Purchase implementation evolve without coupling extraction code to its
+    accounting rules.
     """
 
     def __init__(self, document_service: Any):
@@ -70,7 +71,8 @@ class DocumentPurchaseAdapter:
         return ""
 
     async def purchase_items(self, session: dict[str, Any], job_id: str) -> list[dict[str, Any]]:
-        self.document_service.get_job(session, job_id)
+        job = self.document_service.get_job(session, job_id)
+        is_qr = str(job.get("source_type") or "").upper() == "QR_HTML"
         with conn() as db:
             rows = db.execute(
                 "SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id",
@@ -88,6 +90,9 @@ class DocumentPurchaseAdapter:
         if not row_codes:
             raise HTTPException(status_code=400, detail="No items available for purchase save")
 
+        # The Purchase dropdown is the same Item Master source used by the
+        # current Madhushala Purchase screen. Rich dropdown rows are used
+        # directly; only incomplete/cache-miss items need a detail API call.
         item_master = await reference_data_service.items(session, [code for _, code in row_codes])
         items: list[dict[str, Any]] = []
 
@@ -116,17 +121,61 @@ class DocumentPurchaseAdapter:
                 value = raw_value(*aliases)
                 return _money(fallback if value in (None, "") else value)
 
-            # Commercial/master values are Madhushala-owned. Document values
-            # remain authoritative for physical quantities and document facts.
             master_packing = _int_value(_dict_value(master, "packing", "bottlePerCase", "bottlesPerCase", "caseQty"))
             raw_packing = raw_int("packing", "bottlePerCase", "bottlesPerCase", "caseQty", fallback=row["packing"])
             packing = master_packing or raw_packing
 
             box = raw_int("box", "boxes", "case", "cases", fallback=row["quantity"] or 0)
             loose = raw_int("loose", "looseQty", fallback=0)
-            document_qnty = raw_int("qnty", "qty", "bottles", "totalQty", "totalQuantity", fallback=0)
+            document_qnty = raw_int(
+                "qnty",
+                "qty",
+                "totalQty",
+                "totalQuantity",
+                "No of Bottles Dispatched",
+                "Bottles Dispatched",
+                "No of Bottles Requested",
+                "Bottles Requested",
+                fallback=0,
+            )
+
+            # UP's "Cases / Mono Cartons" is not always a Madhushala case.
+            # Madhushala's grid defines Quantity = Case * ItemMaster.Packing +
+            # Loose. When the transport pass gives an explicit bottle total,
+            # preserve that physical total and translate it into Case/Loose.
+            has_explicit_bottles = any(
+                _key(alias) in normalized_raw
+                for alias in (
+                    "qnty",
+                    "No of Bottles Dispatched",
+                    "Bottles Dispatched",
+                    "No of Bottles Requested",
+                    "Bottles Requested",
+                )
+            )
+            if document_qnty and packing and (is_qr or has_explicit_bottles):
+                represented = (box * packing) + loose
+                if represented != document_qnty:
+                    old_box, old_loose = box, loose
+                    box = document_qnty // packing
+                    loose = document_qnty % packing
+                    logger.info(
+                        "purchase_quantity_reconciled jobId=%s itemCode=%s sourceBox=%s sourceLoose=%s qnty=%s packing=%s box=%s loose=%s",
+                        job_id,
+                        mapped,
+                        old_box,
+                        old_loose,
+                        document_qnty,
+                        packing,
+                        box,
+                        loose,
+                    )
+
             qnty = document_qnty or ((box * packing + loose) if packing else (box + loose))
 
+            # Commercial values come from Madhushala Item Master exactly like
+            # the normal Purchase screen; source document prices are fallback
+            # only when the master response does not provide them.
             purchase_rate = _money(_dict_value(master, "purchaseRate", "rate", "itemRate"))
             purchase_case_rate = _money(_dict_value(master, "purchaseRateCase", "boxRate", "caseRate"))
             loose_rate = purchase_rate or raw_money("looseRate", "bottleRate", fallback=0)
@@ -134,9 +183,12 @@ class DocumentPurchaseAdapter:
             rate = purchase_rate or raw_money("rate", fallback=row["rate"] or 0) or box_rate
             mrp = _money(_dict_value(master, "mrp", "itemMrp", "mrpPerUnit")) or raw_money("mrp", fallback=row["mrp"] or 0)
 
-            amount = raw_money("itemAmount", "amount", "lineAmount", "totalAmount", fallback=row["amount"])
+            # QR transport pages can contain duty/fee amounts that are not the
+            # purchase line amount. For QR imports derive the provisional line
+            # from Madhushala rates; Calculate remains authoritative afterwards.
+            amount = 0.0 if is_qr else raw_money("itemAmount", "amount", "lineAmount", "totalAmount", fallback=row["amount"])
             if not amount:
-                if box_rate and box:
+                if box_rate and (box or loose):
                     amount = _money((box_rate * box) + (loose_rate * loose))
                 elif rate and qnty:
                     amount = _money(rate * qnty)
@@ -172,14 +224,14 @@ class DocumentPurchaseAdapter:
                 "t3Amt": raw_money("t3Amt", "t3", fallback=_dict_value(master, "t3Amt") or 0),
                 "t4Amt": raw_money("t4Amt", "t4", fallback=_dict_value(master, "t4Amt") or 0),
                 "etd": raw_money("etd", fallback=_dict_value(master, "etd") or 0),
-                # AI Purchase contract expects these ledger fields to be empty;
-                # BILLWISE ledgers belong in taxes[].
+                # AI Purchase save payload uses empty item input-ledger strings;
+                # BILLWISE ledgers are represented in taxes[].
                 "cgstInptLdgr": "",
                 "sgstInptLdgr": "",
                 "cessInptLdgr": "",
                 "adCessInptLdgr": "",
                 "igstInptLdgr": "",
-                # Calculation-only helpers removed before Purchase Save.
+                # Calculation-only helpers; stripped before /purchase/save.
                 "packing": packing,
                 "t1Rate": raw_money("t1Rate", fallback=_dict_value(master, "t1Rate") or 0),
                 "t2Rate": raw_money("t2Rate", fallback=_dict_value(master, "t2Rate") or 0),
