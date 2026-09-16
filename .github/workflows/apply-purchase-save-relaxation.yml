@@ -28,22 +28,29 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
 
           service = Path('madhushala-excise-bridge/app/modules/document_import/service.py')
           text = service.read_text(encoding='utf-8')
-          old = 'from app.modules.document_import.normalizer import normalize_extracted_document\n'
-          new = old + 'from app.modules.document_import.purchase_context import build_purchase_context\n'
-          assert old in text and 'purchase_context import build_purchase_context' not in text
-          text = text.replace(old, new, 1)
 
-          old = '''        required = ["yearCode", "trnDate", "docDate", "docNo", "supplierCode", "storeCode", "purchaseAccCode", "userCode"]
-                  clean_header = {name: str(header.get(name) or "").strip() for name in required}
-                  missing = [name for name, value in clean_header.items() if not value]
-                  if missing:
-                      raise HTTPException(status_code=400, detail=f"Missing purchase fields: {', '.join(missing)}")
-          '''
-          old = old.replace('                  ', '        ')
-          new = '''        header = dict(header or {})
+          import_line = 'from app.modules.document_import.normalizer import normalize_extracted_document\n'
+          assert import_line in text
+          assert 'from app.modules.document_import.purchase_context import build_purchase_context\n' not in text
+          text = text.replace(
+              import_line,
+              import_line + 'from app.modules.document_import.purchase_context import build_purchase_context\n',
+              1,
+          )
+
+          old = (
+              '        required = ["yearCode", "trnDate", "docDate", "docNo", "supplierCode", "storeCode", "purchaseAccCode", "userCode"]\n'
+              '        clean_header = {name: str(header.get(name) or "").strip() for name in required}\n'
+              '        missing = [name for name, value in clean_header.items() if not value]\n'
+              '        if missing:\n'
+              '            raise HTTPException(status_code=400, detail=f"Missing purchase fields: {\', \'.join(missing)}")\n'
+          )
+          new = dedent('''\
+                  header = dict(header or {})
                   context_defaults: dict[str, Any] = {}
                   master_fields = ("supplierCode", "storeCode", "purchaseAccCode", "userCode")
                   if any(not str(header.get(name) or "").strip() for name in master_fields):
@@ -56,8 +63,8 @@ jobs:
                           if isinstance(defaults, dict):
                               context_defaults = defaults
                       except Exception:
-                          # Master-data lookup is a convenience only. The Madhushala
-                          # purchase/save API is the authority on what it requires.
+                          # Master-data lookup is only a convenience. The Madhushala
+                          # purchase/save API remains the authority on required fields.
                           context_defaults = {}
 
                   def header_text(name: str, fallback: Any = "") -> str:
@@ -84,80 +91,84 @@ jobs:
                       "purchaseAccCode": header_text("purchaseAccCode", context_defaults.get("purchaseAccCode")),
                       "userCode": header_text("userCode", context_defaults.get("userCode")),
                   }
-          '''
-          new = new.replace('                  ', '        ')
+          ''')
+          new = ''.join(('        ' + line if line.strip() else line) for line in new.splitlines(keepends=True))
           assert old in text, 'save_purchase validation block not found'
           text = text.replace(old, new, 1)
 
-          marker = '''            "taxes": header.get("taxes") if isinstance(header.get("taxes"), list) else [],
-                  }
-                  client = self._client_for_session(session)
-          '''.replace('                  ', '        ')
-          replacement = '''            "taxes": header.get("taxes") if isinstance(header.get("taxes"), list) else [],
-                  }
-                  # Swagger does not declare these purchase-header properties as
-                  # required. Do not send empty strings (especially for date-time
-                  # values); omit them and let the Madhushala API apply/validate
-                  # its own business rules.
-                  for optional_key in (
-                      "yearCode",
-                      "docDate",
-                      "docNo",
-                      "tpPassNo",
-                      "supplierCode",
-                      "storeCode",
-                      "schemeCode",
-                      "purchaseAccCode",
-                      "userCode",
-                  ):
-                      if payload.get(optional_key) in (None, ""):
-                          payload.pop(optional_key, None)
-                  client = self._client_for_session(session)
-          '''.replace('                  ', '        ')
+          marker = (
+              '            "taxes": header.get("taxes") if isinstance(header.get("taxes"), list) else [],\n'
+              '        }\n'
+              '        client = self._client_for_session(session)\n'
+          )
+          replacement = (
+              '            "taxes": header.get("taxes") if isinstance(header.get("taxes"), list) else [],\n'
+              '        }\n'
+              '        # The live Swagger contract does not declare these header fields\n'
+              '        # as required. Omit empty values and let Madhushala validate them.\n'
+              '        for optional_key in (\n'
+              '            "yearCode",\n'
+              '            "docDate",\n'
+              '            "docNo",\n'
+              '            "tpPassNo",\n'
+              '            "supplierCode",\n'
+              '            "storeCode",\n'
+              '            "schemeCode",\n'
+              '            "purchaseAccCode",\n'
+              '            "userCode",\n'
+              '        ):\n'
+              '            if payload.get(optional_key) in (None, ""):\n'
+              '                payload.pop(optional_key, None)\n'
+              '        client = self._client_for_session(session)\n'
+          )
           assert marker in text, 'purchase payload marker not found'
           text = text.replace(marker, replacement, 1)
           service.write_text(text, encoding='utf-8')
 
           routes = Path('madhushala-excise-bridge/app/modules/document_import/routes.py')
           text = routes.read_text(encoding='utf-8')
+          assert 'from fastapi import APIRouter, Request, UploadFile, File\n' in text
           text = text.replace(
               'from fastapi import APIRouter, Request, UploadFile, File\n',
               'from fastapi import APIRouter, Request, UploadFile, File, HTTPException\n',
               1,
           )
-          import_marker = 'from app.services.session_service import session_service\n'
-          assert import_marker in text
+          marker = 'from app.services.session_service import session_service\n'
+          assert marker in text
           text = text.replace(
-              import_marker,
-              import_marker + 'from app.integrations.madhushala.client import MadhushalaApiError\n',
+              marker,
+              marker + 'from app.integrations.madhushala.client import MadhushalaApiError\n',
               1,
           )
-          old = '''    @router.post("/jobs/{job_id}/purchase/save")
-              async def save_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):
-                  session = session_service.from_request(request)
-                  return await service.save_purchase(session, job_id, payload.header)
-          '''.replace('              ', '    ')
-          new = '''    @router.post("/jobs/{job_id}/purchase/save")
-              async def save_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):
-                  session = session_service.from_request(request)
-                  try:
-                      return await service.save_purchase(session, job_id, payload.header)
-                  except MadhushalaApiError as exc:
-                      status_code = exc.status_code if exc.status_code and exc.status_code >= 400 else 502
-                      raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-          '''.replace('              ', '    ')
+          old = (
+              '    @router.post("/jobs/{job_id}/purchase/save")\n'
+              '    async def save_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):\n'
+              '        session = session_service.from_request(request)\n'
+              '        return await service.save_purchase(session, job_id, payload.header)\n'
+          )
+          new = (
+              '    @router.post("/jobs/{job_id}/purchase/save")\n'
+              '    async def save_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):\n'
+              '        session = session_service.from_request(request)\n'
+              '        try:\n'
+              '            return await service.save_purchase(session, job_id, payload.header)\n'
+              '        except MadhushalaApiError as exc:\n'
+              '            status_code = exc.status_code if exc.status_code and exc.status_code >= 400 else 502\n'
+              '            raise HTTPException(status_code=status_code, detail=str(exc)) from exc\n'
+          )
           assert old in text, 'purchase save route block not found'
           text = text.replace(old, new, 1)
           routes.write_text(text, encoding='utf-8')
 
           index = Path('madhushala-excise-bridge/app/static/index.html')
           text = index.read_text(encoding='utf-8')
-          old = '''    const missing = validatePurchaseHeader(header);
-              if (missing.length) {
-                  showToast(`Fill purchase fields first: ${missing.join(", ")}`, "error");
-                  return;
-              }
-          '''.replace('              ', '    ')
+          old = (
+              '    const missing = validatePurchaseHeader(header);\n'
+              '    if (missing.length) {\n'
+              '        showToast(`Fill purchase fields first: ${missing.join(", ")}`, "error");\n'
+              '        return;\n'
+              '    }\n'
+          )
           assert old in text, 'frontend purchase preflight block not found'
           text = text.replace(old, '', 1)
           index.write_text(text, encoding='utf-8')
@@ -171,101 +182,76 @@ jobs:
 
           tests = Path('madhushala-excise-bridge/tests/test_purchase_context.py')
           text = tests.read_text(encoding='utf-8')
-          addition = r'''
+          addition = dedent(r'''
+              @pytest.mark.asyncio
+              async def test_purchase_save_does_not_block_optional_header_fields(monkeypatch):
+                  from app.modules.document_import import service as service_module
+                  from app.modules.document_import.service import DocumentImportService
 
-          @pytest.mark.asyncio
-          async def test_purchase_save_does_not_block_optional_header_fields(monkeypatch):
-              from app.modules.document_import import service as service_module
-              from app.modules.document_import.service import DocumentImportService
+                  class DummyDb:
+                      def __enter__(self):
+                          return self
+                      def __exit__(self, exc_type, exc, tb):
+                          return False
+                      def execute(self, *args, **kwargs):
+                          return None
 
-              class DummyDb:
-                  def __enter__(self):
-                      return self
-                  def __exit__(self, exc_type, exc, tb):
-                      return False
-                  def execute(self, *args, **kwargs):
-                      return None
+                  class FakeClient:
+                      async def save_purchase(self, payload):
+                          self.payload = payload
+                          return {"ok": True}
 
-              class FakeClient:
-                  async def save_purchase(self, payload):
-                      self.payload = payload
-                      return {"ok": True}
+                  async def fake_context(session, supplier_name=""):
+                      return {"defaults": {}}
 
-              async def fake_context(session, supplier_name=""):
-                  return {"defaults": {}}
+                  async def fake_items(session, job_id):
+                      return [{
+                          "itemCode": "ITEM-1", "itemName": "Item One", "batchNo": "",
+                          "box": 1, "loose": 0, "qnty": 1, "freeQnty": 0,
+                          "rate": 10.0, "boxRate": 10.0, "looseRate": 0.0,
+                          "mrp": 12.0, "itemAmount": 10.0, "discount": 0.0,
+                          "cgst": 0.0, "sgst": 0.0, "cess": 0.0, "addCess": 0.0,
+                          "igst": 0.0, "t1Amt": 0.0, "t2Amt": 0.0, "t3Amt": 0.0,
+                          "t4Amt": 0.0, "etd": 0.0, "cgstInptLdgr": "",
+                          "sgstInptLdgr": "", "cessInptLdgr": "", "adCessInptLdgr": "",
+                          "igstInptLdgr": "", "packing": 1, "t1Rate": 0.0,
+                          "t2Rate": 0.0, "t3Rate": 0.0, "t4Rate": 0.0,
+                      }]
 
-              async def fake_items(session, job_id):
-                  return [{
-                      "itemCode": "ITEM-1",
-                      "itemName": "Item One",
-                      "batchNo": "",
-                      "box": 1,
-                      "loose": 0,
-                      "qnty": 1,
-                      "freeQnty": 0,
-                      "rate": 10.0,
-                      "boxRate": 10.0,
-                      "looseRate": 0.0,
-                      "mrp": 12.0,
-                      "itemAmount": 10.0,
-                      "discount": 0.0,
-                      "cgst": 0.0,
-                      "sgst": 0.0,
-                      "cess": 0.0,
-                      "addCess": 0.0,
-                      "igst": 0.0,
-                      "t1Amt": 0.0,
-                      "t2Amt": 0.0,
-                      "t3Amt": 0.0,
-                      "t4Amt": 0.0,
-                      "etd": 0.0,
-                      "cgstInptLdgr": "",
-                      "sgstInptLdgr": "",
-                      "cessInptLdgr": "",
-                      "adCessInptLdgr": "",
-                      "igstInptLdgr": "",
-                      "packing": 1,
-                      "t1Rate": 0.0,
-                      "t2Rate": 0.0,
-                      "t3Rate": 0.0,
-                      "t4Rate": 0.0,
-                  }]
+                  service = DocumentImportService(object())
+                  service.get_job = lambda session, job_id: {
+                      "id": job_id,
+                      "source_type": "QR_HTML",
+                      "invoice_date": "",
+                      "invoice_number": "",
+                      "supplier_name": "",
+                  }
+                  service._purchase_items_for_job = fake_items
+                  fake_client = FakeClient()
+                  service._client_for_session = lambda session: fake_client
+                  monkeypatch.setattr(service_module, "build_purchase_context", fake_context)
+                  monkeypatch.setattr(service_module, "conn", lambda: DummyDb())
 
-              service = DocumentImportService(object())
-              service.get_job = lambda session, job_id: {
-                  "id": job_id,
-                  "source_type": "QR_HTML",
-                  "invoice_date": "",
-                  "invoice_number": "",
-                  "supplier_name": "",
-              }
-              service._purchase_items_for_job = fake_items
-              fake_client = FakeClient()
-              service._client_for_session = lambda session: fake_client
-              monkeypatch.setattr(service_module, "build_purchase_context", fake_context)
-              monkeypatch.setattr(service_module, "conn", lambda: DummyDb())
+                  result = await service.save_purchase(
+                      {"shop_code": "SHOP-A", "company_code": "2"},
+                      "job-12345678",
+                      {},
+                  )
 
-              result = await service.save_purchase(
-                  {"shop_code": "SHOP-A", "company_code": "2"},
-                  "job-12345678",
-                  {},
-              )
-
-              assert result["success"] is True
-              assert "docDate" not in fake_client.payload
-              assert "supplierCode" not in fake_client.payload
-              assert "storeCode" not in fake_client.payload
-              assert fake_client.payload["trnDate"]
-              assert fake_client.payload["yearCode"]
+                  assert result["success"] is True
+                  assert "docDate" not in fake_client.payload
+                  assert "supplierCode" not in fake_client.payload
+                  assert "storeCode" not in fake_client.payload
+                  assert fake_client.payload["trnDate"]
+                  assert fake_client.payload["yearCode"]
 
 
-          def test_frontend_does_not_block_purchase_save_on_optional_headers():
-              html = open("app/static/index.html", encoding="utf-8").read()
-              helper = open("app/static/purchase-context.js", encoding="utf-8").read()
-              assert "Fill purchase fields first:" not in html
-              assert "if (showFriendlyMissing()) return;" not in helper
-          '''
-          addition = addition.replace('\n          ', '\n').lstrip('\n')
+              def test_frontend_does_not_block_purchase_save_on_optional_headers():
+                  html = open("app/static/index.html", encoding="utf-8").read()
+                  helper = open("app/static/purchase-context.js", encoding="utf-8").read()
+                  assert "Fill purchase fields first:" not in html
+                  assert "if (showFriendlyMissing()) return;" not in helper
+          ''').lstrip()
           if 'test_purchase_save_does_not_block_optional_header_fields' not in text:
               text = text.rstrip() + '\n\n' + addition
           tests.write_text(text, encoding='utf-8')
