@@ -16,7 +16,7 @@ class PurchaseTransactionService:
     The process-local lock protects the current single-container deployment.
     The durable transaction row makes the state explicit and can later be
     moved behind PostgreSQL row locks / Redis distributed locks without
-    changing DocumentImportService's orchestration contract.
+    changing the document-import orchestration contract.
     """
 
     def __init__(self) -> None:
@@ -49,6 +49,30 @@ class PurchaseTransactionService:
                 (job_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def events(self, job_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        with conn() as db:
+            rows = db.execute(
+                """
+                SELECT id, transaction_id, job_id, stage, status, duration_ms,
+                       details_json, created_at
+                FROM purchase_events
+                WHERE job_id=?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (job_id, max(1, min(int(limit), 500))),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["details"] = json.loads(item.pop("details_json") or "{}")
+            except Exception:
+                item["details"] = {}
+                item.pop("details_json", None)
+            result.append(item)
+        return result
 
     def ensure(
         self,
