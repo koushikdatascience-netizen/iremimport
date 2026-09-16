@@ -2,9 +2,9 @@
     const fieldConfig = [
         {id: "purchase-supplier-code", key: "supplierCode", optionKey: "suppliers", label: "Supplier", prompt: "Select Supplier", persist: false, required: true},
         {id: "purchase-store-code", key: "storeCode", optionKey: "storages", label: "Store", prompt: "Select Store", persist: true, required: true},
-        {id: "purchase-scheme-code", key: "schemeCode", optionKey: "schemes", label: "Scheme", prompt: "Select Scheme", persist: true, required: true},
-        {id: "purchase-acc-code", key: "purchaseAccCode", optionKey: "accounts", label: "Purchase A/c", prompt: "Select Purchase A/c", persist: true, required: false},
-        {id: "purchase-user-code", key: "userCode", optionKey: "users", label: "User", prompt: "Select User", persist: true, required: false},
+        {id: "purchase-scheme-code", key: "schemeCode", optionKey: "schemes", label: "Scheme", prompt: "Select Scheme", persist: true, required: false},
+        {id: "purchase-acc-code", key: "purchaseAccCode", optionKey: "accounts", label: "Purchase A/c", prompt: "Select Purchase A/c", persist: true, required: true},
+        {id: "purchase-user-code", key: "userCode", optionKey: "users", label: "User", prompt: "Select User", persist: true, required: true},
     ];
 
     const pageParams = new URLSearchParams(window.location.search);
@@ -30,10 +30,10 @@
         const select = document.createElement("select");
         select.id = "purchase-scheme-code";
         select.name = "schemeCode";
-        select.required = true;
+        select.required = false;
         const placeholder = document.createElement("option");
         placeholder.value = "";
-        placeholder.textContent = "Select Scheme";
+        placeholder.textContent = "None";
         select.appendChild(placeholder);
         label.appendChild(select);
         const accountField = document.getElementById("purchase-acc-code")?.closest("label");
@@ -100,13 +100,15 @@
             select.className = current.className;
             select.setAttribute("aria-label", config.label);
             current.replaceWith(select);
+        } else {
+            select.required = Boolean(config.required);
         }
 
         const desired = previousValue || clean(preferredValue);
         select.innerHTML = "";
         const placeholder = document.createElement("option");
         placeholder.value = "";
-        placeholder.textContent = config.prompt;
+        placeholder.textContent = config.required ? config.prompt : "None";
         select.appendChild(placeholder);
 
         options.forEach((item) => {
@@ -177,15 +179,6 @@
         }
     }
 
-    function financialYearCode(dateValue) {
-        const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(clean(dateValue));
-        if (!match) return "";
-        let year = Number(match[1]);
-        const month = Number(match[2]);
-        if (month < 4) year -= 1;
-        return `${year}-${String((year + 1) % 100).padStart(2, "0")}`;
-    }
-
     function setField(id, value, force = false) {
         const field = document.getElementById(id);
         const next = clean(value);
@@ -200,17 +193,14 @@
         if (!saved.docNo) setField("purchase-doc-no", documentData.invoiceNumber);
         if (!saved.docDate) setField("purchase-doc-date", documentData.invoiceDate, true);
         if (!saved.tpPassNo) setField("purchase-tp-pass-no", documentData.transportPassNo, true);
-
-        if (!saved.yearCode && documentData.invoiceDate) {
-            setField("purchase-year-code", financialYearCode(documentData.invoiceDate), true);
-        }
+        // Match the current Madhushala Purchase screen: yearCode is allowed to
+        // remain empty and is not invented from the document date client-side.
     }
 
     function requiredPurchaseFields() {
-        return [
-            {id: "purchase-tp-pass-no", label: "TP Pass No"},
-            ...fieldConfig.filter((field) => field.required).map((field) => ({id: field.id, label: field.label})),
-        ];
+        return fieldConfig
+            .filter((field) => field.required)
+            .map((field) => ({id: field.id, label: field.label}));
     }
 
     function currentMissingFields() {
@@ -220,7 +210,7 @@
     function showFriendlyMissing() {
         const missing = currentMissingFields();
         if (!missing.length) return false;
-        const message = `Madhushala requires: ${missing.map((field) => field.label).join(", ")}`;
+        const message = `Purchase requires: ${missing.map((field) => field.label).join(", ")}`;
         if (typeof window.showToast === "function") window.showToast(message, "error");
         else window.alert(message);
         document.getElementById(missing[0].id)?.focus();
