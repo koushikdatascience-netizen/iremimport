@@ -12,6 +12,7 @@ import httpx
 
 from app.config import settings
 from app.observability import get_correlation_id
+from app.services.excise_tax_tags import apply_excise_tax_tags
 
 
 logger = logging.getLogger("madhushala-excise-bridge.madhushala")
@@ -81,6 +82,7 @@ class MadhushalaClient:
         self.base_url = base_url.rstrip("/")
         self.shop_code = shop_code
         self.token = self._normalize_token(token)
+        self._excise_tax_tags_cache: list[dict[str, Any]] | None = None
 
     @staticmethod
     def _normalize_token(token: str) -> str:
@@ -220,14 +222,39 @@ class MadhushalaClient:
 
         raise MadhushalaApiError(str(last_error or "Madhushala request failed"))
 
+    async def _get_excise_tax_tags(self) -> list[dict[str, Any]]:
+        """Load TaxTag once per client/batch using the same endpoint as Madhushala UI."""
+        if self._excise_tax_tags_cache is not None:
+            return self._excise_tax_tags_cache
+        data = await self._request(
+            "GET",
+            "/api/TaxTag/ShowTaxTag",
+            headers=self._auth_headers("application/json"),
+        )
+        rows = [row for row in self._list_payload(data, "taxTags", "taxTagList") if isinstance(row, dict)]
+        self._excise_tax_tags_cache = rows
+        logger.info("excise_tax_tags_loaded shopCode=%s count=%s", self.shop_code, len(rows))
+        return rows
+
     async def save_excise_item(self, payload: dict[str, str]) -> dict[str, Any]:
         headers = self._auth_headers("application/json")
         headers["Content-Type"] = "application/json"
+        tax_tags = await self._get_excise_tax_tags()
+        request_payload = apply_excise_tax_tags(payload, tax_tags)
+        logger.info(
+            "excise_item_tax_values shopCode=%s item=%s t1=%s t2=%s t3=%s t4=%s",
+            self.shop_code,
+            request_payload.get("itemName"),
+            request_payload.get("t1"),
+            request_payload.get("t2"),
+            request_payload.get("t3"),
+            request_payload.get("t4"),
+        )
         return await self._request(
             "POST",
             "/api/excise-import/ExciseItemMasterSave",
             params={"shopCode": self.shop_code},
-            json_body=payload,
+            json_body=request_payload,
             headers=headers,
         )
 
