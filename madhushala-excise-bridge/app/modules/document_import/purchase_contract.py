@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import copy
 import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from fastapi import HTTPException
-
-from app.config import settings
 
 
 def _key(value: Any) -> str:
@@ -63,119 +60,57 @@ def _response_container(response: Any) -> dict[str, Any] | None:
     return response
 
 
-def _company_code(row: Any) -> str:
-    if isinstance(row, (str, int)):
-        return str(row).strip()
-    if not isinstance(row, dict):
-        return ""
-    return str(
-        _dict_value(
-            row,
-            "companyCode",
-            "company_code",
-            "code",
-            "value",
-            "id",
-            "companyId",
-        )
-        or ""
-    ).strip()
-
-
-async def _resolve_purchase_company(reference_service: Any, session: dict[str, Any]) -> str:
-    """Resolve the company from the Madhushala companies accessible to this token.
-
-    Older bridge sessions could silently fall back to DEFAULT_COMPANY_CODE (usually
-    ``2``). That can make mapping appear healthy while Item Master later fails with
-    a 403 because the current Madhushala token cannot access that company. Purchase
-    validation must therefore verify the session company against the live company
-    scope before any Item Master/Calculate/Save call.
-    """
-    requested = str(session.get("company_code") or "").strip()
-    companies_loader = getattr(reference_service, "companies", None)
-    if not callable(companies_loader):
-        if requested:
-            return requested
-        raise HTTPException(status_code=500, detail="Madhushala company resolver is not available")
-
-    try:
-        rows = await companies_loader(session)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Could not load Madhushala accessible companies before purchase validation: {exc}",
-        ) from exc
-
-    accessible = list(dict.fromkeys(code for code in (_company_code(row) for row in (rows or [])) if code))
-
-    if requested and requested in accessible:
-        return requested
-
-    if len(accessible) == 1:
-        resolved = accessible[0]
-        session["company_code"] = resolved
-        return resolved
-
-    if not accessible:
-        raise HTTPException(
-            status_code=403,
-            detail="The current Madhushala login has no accessible company for Purchase.",
-        )
-
-    if requested:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"Company '{requested}' is not within your accessible Madhushala scope. "
-                "Create the integration session with one of the accessible Purchase companies."
-            ),
-        )
-
-    raise HTTPException(
-        status_code=409,
-        detail="Multiple Madhushala companies are accessible. Select a company before validating Purchase.",
-    )
-
-
 async def load_item_master_details(reference_service: Any, session: dict[str, Any], item_codes: list[str]) -> dict[str, dict[str, Any]]:
-    """Load the full Item Master record for every mapped purchase item.
+    """Load mapped purchase items without changing the integration company scope.
 
-    Production always calls the item-detail endpoint so Calculate receives the
-    same full Item Master values as manual Purchase. Unit tests may monkeypatch
-    ``reference_service.items``; honoring that injected loader keeps tests fully
-    offline without weakening the production path.
+    The purchase mapping catalogue is already loaded for the session company. Use
+    the reference-data service so the same company, token and catalogue are reused.
+    That service may enrich an item through the detail endpoint, but when Madhushala
+    rejects that detail call while the catalogue row is available it falls back to
+    the catalogue record for the same company. We never try a different company.
     """
     codes = list(dict.fromkeys(str(code or "").strip() for code in item_codes if str(code or "").strip()))
     if not codes:
         return {}
 
+    company_before = str(session.get("company_code") or "").strip()
     items_loader = getattr(reference_service, "items", None)
-    if callable(items_loader) and getattr(items_loader, "__module__", "") != "app.services.reference_data_service":
-        injected = await items_loader(session, codes)
-        return {str(code): dict(value) for code, value in (injected or {}).items() if isinstance(value, dict)}
+    if not callable(items_loader):
+        raise HTTPException(status_code=500, detail="Madhushala Item Master loader is not available")
 
-    company_code = await _resolve_purchase_company(reference_service, session)
-    client = reference_service.client_for_session(session)
-    semaphore = asyncio.Semaphore(max(1, settings.MADHUSHALA_ITEM_FETCH_CONCURRENCY))
+    try:
+        loaded = await items_loader(session, codes)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not load Madhushala Item Master for company {company_before or '[blank]'}: {exc}",
+        ) from exc
 
-    async def load(code: str) -> tuple[str, dict[str, Any]]:
-        async with semaphore:
-            try:
-                detail = _unwrap_item(await client.get_item(code, company_code))
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Could not load Madhushala Item Master detail for item {code}: {exc}",
-                ) from exc
-            if not detail:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Madhushala Item Master returned no detail for item {code}",
-                )
-            return code, detail
+    company_after = str(session.get("company_code") or "").strip()
+    if company_after != company_before:
+        raise HTTPException(
+            status_code=500,
+            detail="Purchase company scope changed while loading Item Master; request was blocked.",
+        )
 
-    pairs = await asyncio.gather(*(load(code) for code in codes))
-    return {code: detail for code, detail in pairs}
+    result: dict[str, dict[str, Any]] = {}
+    missing: list[str] = []
+    for code in codes:
+        detail = _unwrap_item((loaded or {}).get(code) if isinstance(loaded, dict) else None)
+        if detail:
+            result[code] = detail
+        else:
+            missing.append(code)
+
+    if missing:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Madhushala Item Master returned no detail for item(s): {', '.join(missing)}",
+        )
+
+    return result
 
 
 def build_item_master_calculation_request(
