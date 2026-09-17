@@ -11,13 +11,24 @@ def test_mapping_keeps_purchase_details_visible_and_persisted():
     assert '/static/purchase-context.js' in script
 
 
-def test_saved_document_mapping_is_presented_as_current_mapping():
+def test_saved_document_mapping_is_presented_as_mapped_and_remappable():
     script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
 
-    assert 'Current Mapping' in script
-    assert 'Already saved for this extracted row' in script
-    assert 'This row is already mapped. Use Change Mapping only if you need to replace it.' in script
-    assert 'Mapped: ${mapped}/${rows.length} | Left: ${left}' in script
+    assert '<span class="eyebrow">Mapped</span>' in script
+    assert 'saved Madhushala item for the extracted purchase row' in script
+    assert 'Already mapped. Use Change / Re-map only if the saved item is wrong.' in script
+    assert 'Extracted: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left}' in script
+    assert 'Change / Re-map' in script
+
+
+def test_fully_mapped_qr_still_exposes_mapping_review():
+    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+
+    assert 'Review QR Item Mappings' in script
+    assert 'button.hidden = false' in script
+    assert 'Review/change mappings if needed' in script
+    assert 'originalRenderQrReview' in script
+    assert 'keepDocumentMappingReviewAvailable(payload, {qr: true})' in script
 
 
 def test_document_mapping_search_is_not_overwritten_by_background_refresh():
