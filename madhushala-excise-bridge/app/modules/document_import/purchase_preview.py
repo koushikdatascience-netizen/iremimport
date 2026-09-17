@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from app.config import settings
 from app.integrations.madhushala.client import MadhushalaApiError
 from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
 from app.services.purchase_orchestrator import purchase_orchestrator
@@ -91,15 +92,21 @@ async def calculate_purchase_preview(
 ) -> dict[str, Any]:
     """Run the live Madhushala Calculate step without saving a purchase.
 
-    This intentionally has no purchase-save side effect. It loads full Item
-    Master detail for every mapped item, uses the extracted bottle quantity as
-    Calculate ``loose``, and exposes the exact redacted request/response.
+    Production requires a full Item Master snapshot. Test/development fixtures
+    that monkeypatch ``purchase_items`` may omit that snapshot; only outside
+    production do we fall back to the injected client so legacy unit tests stay
+    offline and continue exercising preview error handling.
     """
 
     job = service.get_job(session, job_id)
     adapter = DocumentPurchaseAdapter(service)
     items = await adapter.purchase_items(session, job_id)
-    client = adapter.calculation_client(session, items)
+    if adapter.item_master_snapshot:
+        client = adapter.calculation_client(session, items)
+    elif settings.is_production:
+        raise HTTPException(status_code=500, detail="Item Master snapshot is not available for purchase calculation")
+    else:
+        client = reference_data_service.client_for_session(session)
 
     try:
         tax_mode = await reference_data_service.tax_mode(session)
