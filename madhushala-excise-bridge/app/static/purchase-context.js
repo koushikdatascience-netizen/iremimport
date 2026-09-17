@@ -17,9 +17,23 @@
     let contextPromise = null;
     let contextHint = null;
     let initialized = false;
+    let latestJobId = pageParams.get("jobId") || "";
+    let latestSupplierName = "";
+    let validatedFingerprint = "";
 
     function clean(value) {
         return String(value ?? "").trim();
+    }
+
+    function structuredMessage(detail, fallback = "Request failed") {
+        if (!detail) return fallback;
+        if (typeof detail === "string") return detail;
+        if (typeof detail?.message === "string" && detail.message.trim()) return detail.message.trim();
+        try {
+            return JSON.stringify(detail, null, 2);
+        } catch {
+            return fallback;
+        }
     }
 
     function ensureSchemeField() {
@@ -169,7 +183,7 @@
                     payload = {detail: text};
                 }
             }
-            if (!response.ok) throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
+            if (!response.ok) throw new Error(structuredMessage(payload.detail || payload.error, `HTTP ${response.status}`));
             applyContext(payload);
             return payload;
         })();
@@ -187,13 +201,24 @@
         if (force || !clean(field.value)) field.value = next;
     }
 
+    function forceYearCode(value = "") {
+        const field = document.getElementById("purchase-year-code");
+        if (field) field.value = clean(value);
+    }
+
     function applyDocumentDefaults(payload) {
         const documentData = payload?.extractedDocument || {};
         const saved = savedJobHeader(payload);
+        latestJobId = clean(payload?.job?.id) || latestJobId;
+        latestSupplierName = clean(documentData?.supplierName) || latestSupplierName;
 
         if (!saved.docNo) setField("purchase-doc-no", documentData.invoiceNumber);
         if (!saved.docDate) setField("purchase-doc-date", documentData.invoiceDate, true);
         if (!saved.tpPassNo) setField("purchase-tp-pass-no", documentData.transportPassNo, true);
+        // The observed manual Madhushala Purchase request sends yearCode="".
+        // Preserve an explicitly saved value, otherwise remove app.js's
+        // automatically invented financial-year default.
+        forceYearCode(saved.yearCode || "");
     }
 
     function requiredPurchaseFields() {
@@ -235,6 +260,7 @@
             window.collectPurchaseHeader = function collectRequiredPurchaseHeader() {
                 return {
                     ...originalCollect.apply(this, arguments),
+                    yearCode: clean(document.getElementById("purchase-year-code")?.value),
                     schemeCode: clean(document.getElementById("purchase-scheme-code")?.value),
                 };
             };
@@ -244,6 +270,7 @@
         if (typeof originalApply === "function") {
             window.applyPurchaseHeader = function applyRequiredPurchaseHeader(header = {}) {
                 const result = originalApply.apply(this, arguments);
+                forceYearCode(header.yearCode || "");
                 setField("purchase-scheme-code", header.schemeCode || "", true);
                 return result;
             };
@@ -333,6 +360,198 @@
         sync();
     }
 
+    function ensureValidationStyle() {
+        if (document.getElementById("purchase-validation-style")) return;
+        const style = document.createElement("style");
+        style.id = "purchase-validation-style";
+        style.textContent = `
+            .purchase-validate-button { margin-right: 8px; }
+            .purchase-validation-status {
+                display: block;
+                width: 100%;
+                margin-top: 8px;
+                font-size: 12px;
+                line-height: 1.4;
+                white-space: pre-wrap;
+            }
+            .purchase-validation-status.ok { color: #177245; }
+            .purchase-validation-status.error { color: #a12622; }
+            .purchase-validation-status.pending { color: #765c00; }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function purchaseJobId() {
+        return clean(latestJobId || pageParams.get("jobId"));
+    }
+
+    function purchaseHeaderForJob(jobId) {
+        if (typeof window.collectPurchaseHeader === "function") {
+            return window.collectPurchaseHeader();
+        }
+        if (typeof window.loadPurchaseHeader === "function") {
+            return window.loadPurchaseHeader(jobId);
+        }
+        return {};
+    }
+
+    function headerFingerprint(jobId, header) {
+        const normalized = {
+            jobId,
+            yearCode: clean(header?.yearCode),
+            trnDate: clean(header?.trnDate),
+            docDate: clean(header?.docDate),
+            docNo: clean(header?.docNo),
+            tpPassNo: clean(header?.tpPassNo),
+            supplierCode: clean(header?.supplierCode),
+            storeCode: clean(header?.storeCode),
+            schemeCode: clean(header?.schemeCode),
+            purchaseAccCode: clean(header?.purchaseAccCode),
+            userCode: clean(header?.userCode),
+            taxMode: clean(header?.taxMode),
+            narration: clean(header?.narration),
+        };
+        return JSON.stringify(normalized);
+    }
+
+    function validationElements(source) {
+        const suffix = source === "mapping" ? "mapping" : "review";
+        return {
+            save: document.getElementById(source === "mapping" ? "save-purchase-from-mapping" : "save-purchase"),
+            validate: document.getElementById(`validate-purchase-${suffix}`),
+            status: document.getElementById(`purchase-validation-status-${suffix}`),
+        };
+    }
+
+    function setValidationUi(source, state, message = "") {
+        const elements = validationElements(source);
+        if (elements.status) {
+            elements.status.className = `purchase-validation-status ${state || ""}`.trim();
+            elements.status.textContent = message;
+        }
+        if (elements.validate) {
+            elements.validate.disabled = state === "pending";
+            elements.validate.textContent = state === "ok" ? "Validated ✓" : (state === "pending" ? "Validating…" : "Validate Purchase");
+        }
+        if (elements.save) elements.save.disabled = state !== "ok";
+    }
+
+    function invalidatePurchaseValidation(message = "Validate against Madhushala before saving.") {
+        validatedFingerprint = "";
+        setValidationUi("review", "", message);
+        setValidationUi("mapping", "", message);
+    }
+
+    function ensureValidationControls() {
+        ensureValidationStyle();
+        [
+            ["review", "save-purchase"],
+            ["mapping", "save-purchase-from-mapping"],
+        ].forEach(([source, saveId]) => {
+            const save = document.getElementById(saveId);
+            if (!save) return;
+            const suffix = source === "mapping" ? "mapping" : "review";
+            let validate = document.getElementById(`validate-purchase-${suffix}`);
+            if (!validate) {
+                validate = document.createElement("button");
+                validate.type = "button";
+                validate.id = `validate-purchase-${suffix}`;
+                validate.className = "purchase-validate-button";
+                validate.textContent = "Validate Purchase";
+                validate.addEventListener("click", () => {
+                    void validatePurchase(source, {showSuccessToast: true});
+                });
+                save.insertAdjacentElement("beforebegin", validate);
+            }
+            let status = document.getElementById(`purchase-validation-status-${suffix}`);
+            if (!status) {
+                status = document.createElement("span");
+                status.id = `purchase-validation-status-${suffix}`;
+                status.className = "purchase-validation-status";
+                status.textContent = "Validate against Madhushala before saving.";
+                save.insertAdjacentElement("afterend", status);
+            }
+            if (!validatedFingerprint) save.disabled = true;
+        });
+    }
+
+    function renderValidationPayload(payload) {
+        const purchase = payload?.purchasePayload || {};
+        const count = Array.isArray(purchase.items) ? purchase.items.length : 0;
+        const summary = `Madhushala validated ${count} item${count === 1 ? "" : "s"} | Gross ${purchase.grossAmount ?? 0} | Tax ${purchase.taxAmount ?? 0} | Net ${purchase.netAmount ?? 0}`;
+        const actionSummary = document.getElementById("document-action-summary");
+        if (actionSummary) actionSummary.textContent = summary;
+        const json = document.getElementById("document-json");
+        if (json) json.textContent = JSON.stringify(payload, null, 2);
+        return summary;
+    }
+
+    async function validatePurchase(source = "review", {showSuccessToast = false} = {}) {
+        ensureValidationControls();
+        const jobId = purchaseJobId();
+        if (!jobId) {
+            const message = "No document job is ready for purchase validation.";
+            setValidationUi(source, "error", message);
+            if (typeof window.showToast === "function") window.showToast(message, "error");
+            return false;
+        }
+
+        try {
+            await fetchPurchaseContext(source === "mapping" ? "" : latestSupplierName);
+        } catch {
+            // The preview endpoint will return the precise master/contract error.
+        }
+        if (showFriendlyMissing()) {
+            setValidationUi(source, "error", "Complete the required Purchase master fields first.");
+            return false;
+        }
+
+        saveProfile();
+        if (typeof window.persistPurchaseHeader === "function") window.persistPurchaseHeader();
+        const header = purchaseHeaderForJob(jobId);
+        setValidationUi(source, "pending", "Calling Madhushala Calculate. No purchase will be saved by this validation step.");
+
+        try {
+            const response = await fetch(`${basePath}/api/v1/document-import/jobs/${encodeURIComponent(jobId)}/purchase/calculate-preview`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${sessionToken}`,
+                },
+                body: JSON.stringify({header}),
+            });
+            const text = await response.text();
+            let payload = {};
+            if (text) {
+                try {
+                    payload = JSON.parse(text);
+                } catch {
+                    payload = {detail: text};
+                }
+            }
+            if (!response.ok) {
+                const detail = payload?.detail || payload?.error || payload;
+                const message = structuredMessage(detail, `HTTP ${response.status}`);
+                const json = document.getElementById("document-json");
+                if (json) json.textContent = JSON.stringify(payload, null, 2);
+                setValidationUi(source, "error", message);
+                if (typeof window.showToast === "function") window.showToast(message, "error");
+                return false;
+            }
+
+            validatedFingerprint = headerFingerprint(jobId, header);
+            const summary = renderValidationPayload(payload);
+            setValidationUi(source, "ok", summary);
+            if (showSuccessToast && typeof window.showToast === "function") window.showToast(summary, "success");
+            return true;
+        } catch (error) {
+            const message = error?.message || "Purchase validation failed";
+            setValidationUi(source, "error", message);
+            if (typeof window.showToast === "function") window.showToast(message, "error");
+            return false;
+        }
+    }
+
     function installHooks() {
         installHeaderHooks();
 
@@ -340,8 +559,12 @@
         if (typeof originalRender === "function") {
             window.renderDocumentReview = function purchaseAwareRender(payload) {
                 const result = originalRender.apply(this, arguments);
+                latestJobId = clean(payload?.job?.id) || latestJobId;
+                latestSupplierName = clean(payload?.extractedDocument?.supplierName) || latestSupplierName;
                 applyDocumentDefaults(payload);
-                void fetchPurchaseContext(payload?.extractedDocument?.supplierName || "").catch(() => {});
+                invalidatePurchaseValidation();
+                ensureValidationControls();
+                void fetchPurchaseContext(latestSupplierName).catch(() => {});
                 return result;
             };
         }
@@ -350,15 +573,19 @@
         if (typeof originalSave === "function") {
             window.savePurchaseFromJob = async function purchaseAwareSave(source = "review") {
                 try {
-                    await fetchPurchaseContext(
-                        source === "mapping" ? "" : window.currentDocumentResult?.extractedDocument?.supplierName || "",
-                    );
+                    await fetchPurchaseContext(source === "mapping" ? "" : latestSupplierName);
                 } catch {
                     // The bridge will provide a precise error if master lookup is unavailable.
                 }
                 if (showFriendlyMissing()) return;
                 saveProfile();
                 if (typeof window.persistPurchaseHeader === "function") window.persistPurchaseHeader();
+
+                // Re-run live Calculate immediately before every save. Even if a
+                // previous validation succeeded, this prevents stale mappings or
+                // edited header values from bypassing Madhushala validation.
+                const validated = await validatePurchase(source, {showSuccessToast: false});
+                if (!validated) return;
                 return originalSave.call(this, source);
             };
         }
@@ -368,6 +595,9 @@
             window.resetDocumentImport = function purchaseAwareReset() {
                 const result = originalReset.apply(this, arguments);
                 clearDocumentSpecificFields();
+                latestJobId = "";
+                latestSupplierName = "";
+                invalidatePurchaseValidation();
                 void fetchPurchaseContext("").catch(() => {});
                 return result;
             };
@@ -379,6 +609,8 @@
             if (showFriendlyMissing()) {
                 event.preventDefault();
                 event.stopImmediatePropagation();
+            } else {
+                invalidatePurchaseValidation();
             }
         }, true);
     }
@@ -387,6 +619,7 @@
         if (pageParams.get("view") !== "mapping") return;
         const jobId = clean(pageParams.get("jobId"));
         if (!jobId) return;
+        latestJobId = jobId;
         try {
             if (typeof window.loadPurchaseHeader === "function" && typeof window.applyPurchaseHeader === "function") {
                 window.applyPurchaseHeader(window.loadPurchaseHeader(jobId));
@@ -406,13 +639,21 @@
         ensureSchemeField();
         installHooks();
         restoreMappingHeader();
+        ensureValidationControls();
+        invalidatePurchaseValidation();
         if (isMappingView) installMappingSearchVisibility();
-        document.getElementById("purchase-form")?.addEventListener("change", (event) => {
+
+        const form = document.getElementById("purchase-form");
+        form?.addEventListener("input", () => invalidatePurchaseValidation());
+        form?.addEventListener("change", (event) => {
             if (fieldConfig.some((field) => field.persist && field.id === event.target?.id)) saveProfile();
             if (isMappingView && typeof window.persistPurchaseHeader === "function") window.persistPurchaseHeader();
+            invalidatePurchaseValidation();
         });
+
         void fetchPurchaseContext("").then(() => {
             restoreMappingHeader();
+            ensureValidationControls();
             if (isMappingView) installMappingSearchVisibility();
         }).catch(() => {
             // Keep the form usable; the bridge will report required master lookup failures.
@@ -422,6 +663,8 @@
     window.__purchaseContext = {
         initialize: initializePurchaseContext,
         refresh: fetchPurchaseContext,
+        validate: validatePurchase,
+        invalidateValidation: invalidatePurchaseValidation,
     };
 
     if (document.readyState === "loading") {
