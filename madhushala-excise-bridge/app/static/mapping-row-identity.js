@@ -13,6 +13,126 @@
         return (workspace?.unmappedItems || []).find((item) => mappingRowKey(item) === String(key));
     }
 
+    function ensureMappingPurchaseStyles() {
+        if (document.getElementById("mapping-purchase-details-style")) return;
+        const style = document.createElement("style");
+        style.id = "mapping-purchase-details-style";
+        style.textContent = `
+            .mapping-purchase-details {
+                flex: 0 0 auto;
+                margin: 10px 14px 0;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: #fff;
+                overflow: hidden;
+            }
+            .mapping-purchase-details-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                min-height: 38px;
+                padding: 7px 10px;
+                border-bottom: 1px solid var(--line);
+                background: var(--warm);
+            }
+            .mapping-purchase-details-header strong {
+                font-size: 12px;
+            }
+            .mapping-purchase-details-header span {
+                color: var(--muted);
+                font-size: 10px;
+                font-weight: 700;
+            }
+            .mapping-purchase-details .purchase-form {
+                grid-template-columns: repeat(6, minmax(120px, 1fr));
+                gap: 7px;
+                padding: 8px 10px;
+                border: 0;
+                border-radius: 0;
+                background: #fff;
+            }
+            .mapping-purchase-details .purchase-form label {
+                font-size: 10px;
+            }
+            .mapping-purchase-details .purchase-form input,
+            .mapping-purchase-details .purchase-form select {
+                height: 30px;
+                font-size: 11px;
+            }
+            .mapping-purchase-details .purchase-form .wide {
+                grid-column: span 2;
+            }
+            .current-mapping-card {
+                border-color: #b7dcc4 !important;
+                background: #f3fbf6 !important;
+            }
+            @media (max-width: 1100px) {
+                .mapping-purchase-details .purchase-form {
+                    grid-template-columns: repeat(3, minmax(120px, 1fr));
+                }
+            }
+            @media (max-width: 760px) {
+                .mapping-purchase-details .purchase-form {
+                    grid-template-columns: 1fr;
+                }
+                .mapping-purchase-details .purchase-form .wide {
+                    grid-column: auto;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function mountPurchaseFormForMapping() {
+        if (!mappingMode) return;
+        const mappingView = document.getElementById("mapping-view");
+        const form = document.getElementById("purchase-form");
+        if (!mappingView || !form) return;
+
+        ensureMappingPurchaseStyles();
+        let panel = document.getElementById("mapping-purchase-details");
+        if (!panel) {
+            panel = document.createElement("section");
+            panel.id = "mapping-purchase-details";
+            panel.className = "mapping-purchase-details";
+            const header = document.createElement("div");
+            header.className = "mapping-purchase-details-header";
+            header.innerHTML = "<strong>Purchase Details</strong><span>These values stay with this document while you map items.</span>";
+            const host = document.createElement("div");
+            host.id = "mapping-purchase-form-host";
+            panel.append(header, host);
+            const layout = mappingView.querySelector(".mapping-layout");
+            mappingView.insertBefore(panel, layout || mappingView.firstChild);
+        }
+
+        const host = document.getElementById("mapping-purchase-form-host");
+        if (host && form.parentElement !== host) host.appendChild(form);
+        form.hidden = false;
+
+        try {
+            if (typeof loadPurchaseHeader === "function" && typeof applyPurchaseHeader === "function") {
+                applyPurchaseHeader(loadPurchaseHeader(currentDocumentJobId));
+            }
+        } catch {
+            // The server-side purchase resolver will still validate any missing fields.
+        }
+    }
+
+    function ensurePurchaseContextOnMapping() {
+        if (!mappingMode) return;
+        if (window.__purchaseContext?.initialize) {
+            window.__purchaseContext.initialize();
+            return;
+        }
+        if (document.querySelector('script[data-mapping-purchase-context="true"]')) return;
+        const script = document.createElement("script");
+        script.src = apiUrl("/static/purchase-context.js");
+        script.dataset.mappingPurchaseContext = "true";
+        script.onload = () => window.__purchaseContext?.initialize?.();
+        document.head.appendChild(script);
+    }
+
     mappedItemForRow = function mappedItemForUniqueRow(item) {
         const code = selectedMappings.get(mappingRowKey(item)) || item.selectedItemCode || "";
         if (!code) return null;
@@ -23,13 +143,23 @@
         return rowForKey(selectedExciseCode);
     };
 
+    function setDocumentListTitle() {
+        if (!isDocumentWorkspace()) return;
+        const title = document.querySelector("#mapping-view .list-title span:first-child");
+        if (title) title.textContent = "Extracted Items";
+    }
+
     updateSummary = function updateUniqueRowSummary() {
-        const left = (workspace.unmappedItems || []).filter(
+        const rows = workspace.unmappedItems || [];
+        const left = rows.filter(
             (item) => !selectedMappings.get(mappingRowKey(item)) && !item.selectedItemCode,
         ).length;
+        const mapped = Math.max(0, rows.length - left);
         setText(
             document.getElementById("mapping-summary"),
-            `${workspace.documentMapping ? "Document rows" : "Selected"}: ${selectedMappings.size} | Left: ${left}`,
+            isDocumentWorkspace()
+                ? `Mapped: ${mapped}/${rows.length} | Left: ${left}`
+                : `Selected: ${selectedMappings.size} | Left: ${left}`,
         );
         const submit = document.getElementById("submit-mappings");
         if (submit) submit.disabled = selectedMappings.size === 0;
@@ -38,11 +168,12 @@
     renderWorkspace = function renderUniqueDocumentRows() {
         const list = document.getElementById("unmapped-items");
         if (!list) return;
+        setDocumentListTitle();
         setText(document.getElementById("unmapped-count"), String(workspace.unmappedItems.length));
 
         if (!workspace.unmappedItems.length) {
             list.className = "list-body empty";
-            list.textContent = "No unmapped items";
+            list.textContent = "No items";
             renderSelectedExcise(null);
             updateSummary();
             return;
@@ -89,6 +220,68 @@
         updateSummary();
     };
 
+    renderSelectedExcise = function renderDocumentMappingSelection(item) {
+        const card = document.getElementById("best-match-card");
+        const search = document.getElementById("madhushala-search");
+        if (!item) {
+            renderCandidates([]);
+            setHidden(card, true);
+            return;
+        }
+
+        const mapped = mappedItemForRow(item);
+        if (mapped) {
+            if (card) {
+                card.className = "best-match-card current-mapping-card";
+                card.hidden = false;
+                card.innerHTML = `
+                    <div>
+                        <span class="eyebrow">Current Mapping</span>
+                        <h3>${escapeHtml(mapped.itemCode || "")} - ${escapeHtml(mapped.itemName || "Mapped item")}</h3>
+                        <p>Already saved for this extracted row</p>
+                    </div>
+                    <button type="button" id="change-current-mapping" class="secondary">Change Mapping</button>`;
+                document.getElementById("change-current-mapping")?.addEventListener("click", () => {
+                    if (search) search.value = "";
+                    renderCandidates(item.suggestions || []);
+                    search?.focus();
+                });
+            }
+            if (search) search.placeholder = "Search only if you want to change this mapping";
+            if (!search?.value?.trim()) {
+                const container = document.getElementById("suggestions");
+                if (container) {
+                    container.className = "candidate-list empty";
+                    container.textContent = "This row is already mapped. Use Change Mapping only if you need to replace it.";
+                }
+            } else {
+                runSearch();
+            }
+            return;
+        }
+
+        if (card) card.className = "best-match-card";
+        if (search) search.placeholder = "Search name, code, barcode or ML";
+        const best = item.suggestions?.[0];
+        if (best) {
+            if (!card) return;
+            card.hidden = false;
+            card.innerHTML = `
+                <div>
+                    <span class="eyebrow">Best Match</span>
+                    <h3>${itemLabel(best.item)}</h3>
+                    <p>ML ${best.item.ml || "-"} | ${Math.round(best.score)}%</p>
+                </div>
+                <button type="button" id="confirm-best-match">Correct</button>
+                <button type="button" id="choose-another" class="secondary">Change</button>`;
+            document.getElementById("confirm-best-match")?.addEventListener("click", () => selectMadhushalaItem(best.item.itemCode, best.score));
+            document.getElementById("choose-another")?.addEventListener("click", () => search?.focus());
+        } else {
+            setHidden(card, true);
+        }
+        renderCandidates(item.suggestions || []);
+    };
+
     selectMadhushalaItem = function selectForUniqueDocumentRow(itemCode, score = null) {
         const exciseItem = currentExciseItem();
         if (!exciseItem) {
@@ -101,6 +294,8 @@
         const apply = () => {
             selectedMappings.set(rowKey, String(itemCode));
             showToast("Selected", "success");
+            const search = document.getElementById("madhushala-search");
+            if (search) search.value = "";
             renderWorkspace();
         };
         if (issues.length) showGuardrailModal(issues, apply);
@@ -112,19 +307,46 @@
         const preserveState = options.preserveState !== false;
         const previousSelected = preserveState ? selectedExciseCode : null;
         const search = document.getElementById("madhushala-search");
-        const previousSearch = preserveState ? search?.value || "" : "";
         try {
             const query = normalizedJobId ? `?jobId=${encodeURIComponent(normalizedJobId)}` : "?latestOnly=true";
             workspace = await api(`/mapping/workspace${query}`);
             currentDocumentJobId = normalizedJobId || sanitizeJobId(workspace?.jobId) || currentDocumentJobId;
             const keys = new Set((workspace.unmappedItems || []).map(mappingRowKey));
             selectedExciseCode = previousSelected && keys.has(String(previousSelected)) ? previousSelected : null;
-            if (search) search.value = previousSearch;
+
+            // Never restore a stale search value captured before the request. The user
+            // may have typed while the request was in flight; keep the live DOM value.
+            const liveSearch = preserveState ? (search?.value || "") : "";
+            if (!preserveState && search) search.value = "";
             renderWorkspace();
-            if (previousSearch) runSearch();
+            if (liveSearch.trim()) {
+                if (search) search.value = liveSearch;
+                runSearch();
+            }
         } catch (error) {
             if (!options.quiet) showToast(error.message || "Could not load mapping", "error");
         }
+    };
+
+    startMappingAutoRefresh = function startStableMappingAutoRefresh() {
+        // Document mappings are changed by this page itself, so polling every three
+        // seconds only causes UI churn and can interfere with search typing.
+        if (sanitizeJobId(currentDocumentJobId)) return;
+        if (mappingRefreshTimer) return;
+        mappingRefreshTimer = window.setInterval(async () => {
+            const search = document.getElementById("madhushala-search");
+            if (
+                mappingRefreshInFlight
+                || document.getElementById("mapping-view")?.hidden
+                || document.activeElement === search
+            ) return;
+            mappingRefreshInFlight = true;
+            try {
+                await loadWorkspace(currentDocumentJobId, {quiet: true, preserveState: true});
+            } finally {
+                mappingRefreshInFlight = false;
+            }
+        }, 3000);
     };
 
     saveMappings = async function saveUniqueDocumentMappings() {
@@ -180,11 +402,20 @@
         }
     };
 
+    const originalInitMapping = initMapping;
+    initMapping = function initMappingWithPurchaseDetails() {
+        mountPurchaseFormForMapping();
+        ensurePurchaseContextOnMapping();
+        return originalInitMapping();
+    };
+
     // If the user chooses items and clicks Save Purchase directly, persist the
-    // pending row selections first. Purchase creation only needs mapped_item_code;
-    // an Excise item code is optional for document/QR rows.
+    // current purchase fields and pending row selections before creating Purchase.
     const originalSavePurchaseFromJob = savePurchaseFromJob;
     savePurchaseFromJob = async function savePurchaseAfterPendingMappings(source = "review") {
+        if (source === "mapping" && typeof persistPurchaseHeader === "function") {
+            persistPurchaseHeader();
+        }
         if (source === "mapping" && selectedMappings.size > 0) {
             const saved = await saveMappings();
             if (!saved) return;
@@ -201,5 +432,8 @@
         submit.addEventListener("click", () => void saveMappings());
     }
 
-    window.__mappingRowIdentity = {mappingRowKey};
+    window.__mappingRowIdentity = {
+        mappingRowKey,
+        mountPurchaseFormForMapping,
+    };
 })();
