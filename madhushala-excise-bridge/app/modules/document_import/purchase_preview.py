@@ -91,15 +91,15 @@ async def calculate_purchase_preview(
 ) -> dict[str, Any]:
     """Run the live Madhushala Calculate step without saving a purchase.
 
-    This intentionally has no purchase-save side effect. It uses the same mapped
-    document items and the same payload rules as the production Purchase flow,
-    then exposes the exact redacted request/response for troubleshooting.
+    This intentionally has no purchase-save side effect. It loads full Item
+    Master detail for every mapped item, uses the extracted bottle quantity as
+    Calculate ``loose``, and exposes the exact redacted request/response.
     """
 
     job = service.get_job(session, job_id)
     adapter = DocumentPurchaseAdapter(service)
     items = await adapter.purchase_items(session, job_id)
-    client = reference_data_service.client_for_session(session)
+    client = adapter.calculation_client(session, items)
 
     try:
         tax_mode = await reference_data_service.tax_mode(session)
@@ -111,8 +111,6 @@ async def calculate_purchase_preview(
     payload: dict[str, Any] = {
         "shopCode": str(session.get("shop_code") or "").strip(),
         "companyCode": str(session.get("company_code") or "").strip(),
-        # Match the observed manual Madhushala Purchase contract. Do not invent
-        # a financial year when the caller did not explicitly provide one.
         "yearCode": str(header.get("yearCode") or "").strip(),
         "trnDate": str(header.get("trnDate") or date.today().isoformat()).strip(),
         "docDate": str(header.get("docDate") or job.get("invoice_date") or "").strip(),
