@@ -134,6 +134,32 @@ def test_auto_process_capture_without_token_needs_token():
     assert "token" in status["message"].lower()
 
 
+def test_excise_item_save_happens_before_unmapped_lookup():
+    events = []
+
+    class FakeClient:
+        async def save_excise_item(self, payload):
+            events.append("save")
+            return {}
+
+        async def get_unmapped_items(self):
+            events.append("unmapped")
+            return [{"exciseItemCode": 55, "itemName": "Test Item"}]
+
+    service = MappingService()
+    code, action, _ = asyncio.run(
+        service._create_or_reuse_excise_item(
+            FakeClient(),
+            {"itemName": "Test Item"},
+            [],
+        )
+    )
+
+    assert events == ["save", "unmapped"]
+    assert code == 55
+    assert action == "submitted_resolved"
+
+
 def test_workspace_filters_full_unmapped_api_to_latest_capture_items(tmp_path):
     class FakeClient:
         async def get_unmapped_items(self):
@@ -149,6 +175,9 @@ def test_workspace_filters_full_unmapped_api_to_latest_capture_items(tmp_path):
             ]
 
         async def save_excise_item(self, payload):
+            # Madhushala owns de-duplication and returns the existing/new Excise code.
+            if str(payload.get("itemName", "")).startswith("Existing Item"):
+                return {"itemCode": 303, "itemName": payload["itemName"]}
             return {"itemCode": 202, "itemName": payload["itemName"]}
 
     service = MappingService()
@@ -209,5 +238,3 @@ def test_dropdown_search_requires_meaningful_word_match():
     assert score_dropdown_search(old_monk, "om") > score_dropdown_search(royal_green, "om")
     assert score_dropdown_search(after_dark, "after") > score_dropdown_search(old_monk, "after")
     assert score_dropdown_search(royal_green, "aft") == 0
-
-
