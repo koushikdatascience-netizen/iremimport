@@ -63,6 +63,80 @@ def _response_container(response: Any) -> dict[str, Any] | None:
     return response
 
 
+def _company_code(row: Any) -> str:
+    if isinstance(row, (str, int)):
+        return str(row).strip()
+    if not isinstance(row, dict):
+        return ""
+    return str(
+        _dict_value(
+            row,
+            "companyCode",
+            "company_code",
+            "code",
+            "value",
+            "id",
+            "companyId",
+        )
+        or ""
+    ).strip()
+
+
+async def _resolve_purchase_company(reference_service: Any, session: dict[str, Any]) -> str:
+    """Resolve the company from the Madhushala companies accessible to this token.
+
+    Older bridge sessions could silently fall back to DEFAULT_COMPANY_CODE (usually
+    ``2``). That can make mapping appear healthy while Item Master later fails with
+    a 403 because the current Madhushala token cannot access that company. Purchase
+    validation must therefore verify the session company against the live company
+    scope before any Item Master/Calculate/Save call.
+    """
+    requested = str(session.get("company_code") or "").strip()
+    companies_loader = getattr(reference_service, "companies", None)
+    if not callable(companies_loader):
+        if requested:
+            return requested
+        raise HTTPException(status_code=500, detail="Madhushala company resolver is not available")
+
+    try:
+        rows = await companies_loader(session)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not load Madhushala accessible companies before purchase validation: {exc}",
+        ) from exc
+
+    accessible = list(dict.fromkeys(code for code in (_company_code(row) for row in (rows or [])) if code))
+
+    if requested and requested in accessible:
+        return requested
+
+    if len(accessible) == 1:
+        resolved = accessible[0]
+        session["company_code"] = resolved
+        return resolved
+
+    if not accessible:
+        raise HTTPException(
+            status_code=403,
+            detail="The current Madhushala login has no accessible company for Purchase.",
+        )
+
+    if requested:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Company '{requested}' is not within your accessible Madhushala scope. "
+                "Create the integration session with one of the accessible Purchase companies."
+            ),
+        )
+
+    raise HTTPException(
+        status_code=409,
+        detail="Multiple Madhushala companies are accessible. Select a company before validating Purchase.",
+    )
+
+
 async def load_item_master_details(reference_service: Any, session: dict[str, Any], item_codes: list[str]) -> dict[str, dict[str, Any]]:
     """Load the full Item Master record for every mapped purchase item.
 
@@ -80,8 +154,8 @@ async def load_item_master_details(reference_service: Any, session: dict[str, An
         injected = await items_loader(session, codes)
         return {str(code): dict(value) for code, value in (injected or {}).items() if isinstance(value, dict)}
 
+    company_code = await _resolve_purchase_company(reference_service, session)
     client = reference_service.client_for_session(session)
-    company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
     semaphore = asyncio.Semaphore(max(1, settings.MADHUSHALA_ITEM_FETCH_CONCURRENCY))
 
     async def load(code: str) -> tuple[str, dict[str, Any]]:
