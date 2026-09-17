@@ -220,7 +220,11 @@ async def test_orchestrator_mirrors_current_itemwise_save_payload(monkeypatch):
     async def fake_tax_mode(_session):
         return "ITEMWISE"
 
+    async def fake_items(_session, _codes):
+        return {"100003": dict(_calculation_item())}
+
     monkeypatch.setattr(reference_data_service, "tax_mode", fake_tax_mode)
+    monkeypatch.setattr(reference_data_service, "items", fake_items)
 
     captured: dict[str, object] = {}
 
@@ -284,10 +288,15 @@ async def test_orchestrator_mirrors_current_itemwise_save_payload(monkeypatch):
 
     calc = captured["calculate"]
     assert calc["items"][0]["itemCode"] == "100003"
-    assert calc["items"][0]["loose"] == 48
-    assert calc["items"][0]["box"] == 0
-    assert calc["items"][0]["boxRate"] == 0
-    assert calc["items"][0]["mrp"] == 0
+    assert calc["items"][0]["packing"] == 48
+    assert calc["items"][0]["box"] == 1
+    assert calc["items"][0]["loose"] == 0
+    assert calc["items"][0]["looseRate"] == 10.42
+    assert calc["items"][0]["boxRate"] == 500.0
+    assert calc["items"][0]["mrp"] == 280.0
+    assert calc["items"][0]["t1Amt"] == 100.0
+    assert calc["items"][0]["t1Rate"] == 1.0
+    assert calc["items"][0]["etd"] == 10.0
     assert calc["salesTaxRate"] == 0
     assert calc["salesTaxIncludingFree"] is False
 
