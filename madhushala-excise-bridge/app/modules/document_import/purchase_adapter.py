@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.db import conn, now_iso
+from app.modules.document_import.purchase_contract import ItemMasterCalculateClient, load_item_master_details
 from app.services.purchase_orchestrator import purchase_orchestrator
 from app.services.reference_data_service import reference_data_service
 
@@ -49,13 +50,14 @@ class DocumentPurchaseAdapter:
     """Translate a mapped import job into Madhushala Purchase inputs.
 
     Document/QR data owns physical document facts and quantities. Madhushala
-    Item Master owns commercial/tax metadata. This boundary lets the upstream
-    Purchase implementation evolve without coupling extraction code to its
-    accounting rules.
+    Item Master owns commercial/tax metadata. The full Item Master detail is
+    loaded before Calculate; imported bottle quantity is the only quantity input
+    that overrides Item Master-derived commercial values.
     """
 
     def __init__(self, document_service: Any):
         self.document_service = document_service
+        self.item_master_snapshot: dict[str, dict[str, Any]] = {}
 
     def _mapped_code(self, db: Any, session: dict[str, Any], row: Any) -> str:
         mapped = str(row["mapped_item_code"] or "").strip()
@@ -90,10 +92,15 @@ class DocumentPurchaseAdapter:
         if not row_codes:
             raise HTTPException(status_code=400, detail="No items available for purchase save")
 
-        # The Purchase dropdown is the same Item Master source used by the
-        # current Madhushala Purchase screen. Rich dropdown rows are used
-        # directly; only incomplete/cache-miss items need a detail API call.
-        item_master = await reference_data_service.items(session, [code for _, code in row_codes])
+        # Do not rely on the Purchase dropdown summary here. Calculate requires
+        # the full Item Master record for each mapped item, so call /api/items/{id}
+        # first and retain that exact snapshot for the Calculate client facade.
+        item_master = await load_item_master_details(
+            reference_data_service,
+            session,
+            [code for _, code in row_codes],
+        )
+        self.item_master_snapshot = item_master
         items: list[dict[str, Any]] = []
 
         for row, mapped in row_codes:
@@ -139,10 +146,9 @@ class DocumentPurchaseAdapter:
                 fallback=0,
             )
 
-            # UP's "Cases / Mono Cartons" is not always a Madhushala case.
-            # Madhushala's grid defines Quantity = Case * ItemMaster.Packing +
-            # Loose. When the transport pass gives an explicit bottle total,
-            # preserve that physical total and translate it into Case/Loose.
+            # Source QR/PDF owns the physical bottle total. Preserve the normal
+            # Save representation here; Calculate itself will always receive
+            # box=0 and loose=<extracted bottle quantity> via ItemMasterCalculateClient.
             has_explicit_bottles = any(
                 _key(alias) in normalized_raw
                 for alias in (
@@ -173,25 +179,28 @@ class DocumentPurchaseAdapter:
 
             qnty = document_qnty or ((box * packing + loose) if packing else (box + loose))
 
-            # Commercial values come from Madhushala Item Master exactly like
-            # the normal Purchase screen; source document prices are fallback
-            # only when the master response does not provide them.
-            purchase_rate = _money(_dict_value(master, "purchaseRate", "rate", "itemRate"))
-            purchase_case_rate = _money(_dict_value(master, "purchaseRateCase", "boxRate", "caseRate"))
-            loose_rate = purchase_rate or raw_money("looseRate", "bottleRate", fallback=0)
-            box_rate = purchase_case_rate or raw_money("boxRate", "caseRate", fallback=row["rate"] or 0)
-            rate = purchase_rate or raw_money("rate", fallback=row["rate"] or 0) or box_rate
-            mrp = _money(_dict_value(master, "mrp", "itemMrp", "mrpPerUnit")) or raw_money("mrp", fallback=row["mrp"] or 0)
+            # Commercial values are seeded from Item Master. Calculate remains
+            # authoritative for the final amounts that are merged into Save.
+            purchase_rate = _money(
+                _dict_value(master, "purchaseRate", "purchaseRateLoose", "looseRate", "rate", "itemRate")
+            )
+            purchase_case_rate = _money(
+                _dict_value(master, "purchaseRateCase", "boxRate", "caseRate", "purchaseCaseRate")
+            )
+            if not purchase_rate and purchase_case_rate and packing:
+                purchase_rate = _money(purchase_case_rate / packing)
+            if not purchase_case_rate and purchase_rate and packing:
+                purchase_case_rate = _money(purchase_rate * packing)
+            loose_rate = purchase_rate
+            box_rate = purchase_case_rate
+            rate = purchase_rate or box_rate
+            mrp = _money(_dict_value(master, "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
 
-            # QR transport pages can contain duty/fee amounts that are not the
-            # purchase line amount. For QR imports derive the provisional line
-            # from Madhushala rates; Calculate remains authoritative afterwards.
-            amount = 0.0 if is_qr else raw_money("itemAmount", "amount", "lineAmount", "totalAmount", fallback=row["amount"])
-            if not amount:
-                if box_rate and (box or loose):
-                    amount = _money((box_rate * box) + (loose_rate * loose))
-                elif rate and qnty:
-                    amount = _money(rate * qnty)
+            amount = 0.0
+            if box_rate and (box or loose):
+                amount = _money((box_rate * box) + (loose_rate * loose))
+            elif rate and qnty:
+                amount = _money(rate * qnty)
 
             item_name = str(
                 _dict_value(master, "itemName", "name", "label", "text")
@@ -209,44 +218,50 @@ class DocumentPurchaseAdapter:
                 "qnty": qnty,
                 "freeQnty": raw_int("freeQnty", "freeQty", "free", fallback=0),
                 "rate": rate,
-                "boxRate": box_rate or rate,
+                "boxRate": box_rate,
                 "looseRate": loose_rate,
                 "mrp": mrp,
                 "itemAmount": amount,
-                "discount": raw_money("discount", "disc", fallback=_dict_value(master, "purchaseDiscountAmount") or 0),
-                "cgst": raw_money("cgst", fallback=_dict_value(master, "cgst") or 0),
-                "sgst": raw_money("sgst", fallback=_dict_value(master, "sgst") or 0),
-                "cess": raw_money("cess", fallback=_dict_value(master, "cess") or 0),
-                "addCess": raw_money("addCess", "adCess", fallback=_dict_value(master, "addCess", "adCess") or 0),
-                "igst": raw_money("igst", fallback=_dict_value(master, "igst") or 0),
-                "t1Amt": raw_money("t1Amt", "t1", fallback=_dict_value(master, "t1Amt") or 0),
-                "t2Amt": raw_money("t2Amt", "t2", fallback=_dict_value(master, "t2Amt") or 0),
-                "t3Amt": raw_money("t3Amt", "t3", fallback=_dict_value(master, "t3Amt") or 0),
-                "t4Amt": raw_money("t4Amt", "t4", fallback=_dict_value(master, "t4Amt") or 0),
-                "etd": raw_money("etd", fallback=_dict_value(master, "etd") or 0),
-                # AI Purchase save payload uses empty item input-ledger strings;
-                # BILLWISE ledgers are represented in taxes[].
+                "discount": _money(_dict_value(master, "purchaseDiscountAmount", "purchaseDiscount", "discountAmount", "discount")),
+                "cgst": _money(_dict_value(master, "cgst", "cgstAmount")),
+                "sgst": _money(_dict_value(master, "sgst", "sgstAmount")),
+                "cess": _money(_dict_value(master, "cess", "cessAmount")),
+                "addCess": _money(_dict_value(master, "addCess", "adCess", "addCessAmount", "adCessAmount")),
+                "igst": _money(_dict_value(master, "igst", "igstAmount")),
+                "t1Amt": _money(_dict_value(master, "t1Amt", "t1Amount", "t1")),
+                "t2Amt": _money(_dict_value(master, "t2Amt", "t2Amount", "t2")),
+                "t3Amt": _money(_dict_value(master, "t3Amt", "t3Amount", "t3")),
+                "t4Amt": _money(_dict_value(master, "t4Amt", "t4Amount", "t4")),
+                "etd": _money(_dict_value(master, "etd", "etdAmount")),
                 "cgstInptLdgr": "",
                 "sgstInptLdgr": "",
                 "cessInptLdgr": "",
                 "adCessInptLdgr": "",
                 "igstInptLdgr": "",
-                # Calculation-only helpers; stripped before /purchase/save.
                 "packing": packing,
-                "t1Rate": raw_money("t1Rate", fallback=_dict_value(master, "t1Rate") or 0),
-                "t2Rate": raw_money("t2Rate", fallback=_dict_value(master, "t2Rate") or 0),
-                "t3Rate": raw_money("t3Rate", fallback=_dict_value(master, "t3Rate") or 0),
-                "t4Rate": raw_money("t4Rate", fallback=_dict_value(master, "t4Rate") or 0),
+                "t1Rate": _money(_dict_value(master, "t1Rate", "tax1Rate")),
+                "t2Rate": _money(_dict_value(master, "t2Rate", "tax2Rate")),
+                "t3Rate": _money(_dict_value(master, "t3Rate", "tax3Rate")),
+                "t4Rate": _money(_dict_value(master, "t4Rate", "tax4Rate")),
             }
             items.append(item)
 
         logger.info("purchase_items_enriched jobId=%s itemCount=%s", job_id, len(items))
         return items
 
+    def calculation_client(self, session: dict[str, Any], items: list[dict[str, Any]]) -> ItemMasterCalculateClient:
+        if not self.item_master_snapshot:
+            raise HTTPException(status_code=500, detail="Item Master snapshot is not available for purchase calculation")
+        return ItemMasterCalculateClient(
+            reference_data_service.client_for_session(session),
+            items,
+            self.item_master_snapshot,
+        )
+
     async def save_purchase(self, session: dict[str, Any], job_id: str, header: dict[str, Any]) -> dict[str, Any]:
         job = self.document_service.get_job(session, job_id)
         items = await self.purchase_items(session, job_id)
-        client = reference_data_service.client_for_session(session)
+        client = self.calculation_client(session, items)
         try:
             result = await purchase_orchestrator.execute(
                 session=session,
