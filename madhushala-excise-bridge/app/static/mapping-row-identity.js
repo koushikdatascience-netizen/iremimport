@@ -133,6 +133,47 @@
         document.head.appendChild(script);
     }
 
+    function keepDocumentMappingReviewAvailable(payload, {qr = false} = {}) {
+        const job = payload?.job || {};
+        const summary = payload?.summary || {};
+        const jobId = sanitizeJobId(job.id || currentDocumentJobId || "");
+        const detected = Number(summary.detected ?? job.extracted_count ?? 0) || 0;
+        const recognized = Number(summary.recognized ?? job.mapped_count ?? 0) || 0;
+        const needMapping = Number(summary.needMapping ?? Math.max(0, detected - recognized)) || 0;
+        const button = document.getElementById("continue-document-mapping");
+        if (!button || !jobId || detected <= 0) return;
+
+        // Mapping is also the purchase-item review screen. Keep it available even
+        // when every row is already mapped so the operator can see what is being
+        // purchased, verify the saved Madhushala item, and change a wrong mapping.
+        button.hidden = false;
+        button.textContent = needMapping > 0
+            ? (qr ? `Map ${needMapping} QR Item${needMapping === 1 ? "" : "s"}` : `Map ${needMapping} Item${needMapping === 1 ? "" : "s"}`)
+            : (qr ? "Review QR Item Mappings" : "Review Item Mappings");
+
+        if (needMapping === 0) {
+            setText(
+                document.getElementById("document-action-summary"),
+                `${detected} products extracted | ${recognized || detected} mapped | Review/change mappings if needed`,
+            );
+        }
+    }
+
+    // The original review hid the Mapping button when needMapping === 0. That made
+    // a fully mapped QR appear to contain no extracted rows. Always expose the
+    // mapping/review screen for a real document job.
+    const originalRenderDocumentReview = renderDocumentReview;
+    renderDocumentReview = function renderDocumentReviewWithMappingReview(payload) {
+        originalRenderDocumentReview(payload);
+        keepDocumentMappingReviewAvailable(payload, {qr: currentUploadKind === "qr"});
+    };
+
+    const originalRenderQrReview = renderQrReview;
+    renderQrReview = function renderQrReviewWithMappingReview(payload) {
+        originalRenderQrReview(payload);
+        if (payload?.job) keepDocumentMappingReviewAvailable(payload, {qr: true});
+    };
+
     mappedItemForRow = function mappedItemForUniqueRow(item) {
         const code = selectedMappings.get(mappingRowKey(item)) || item.selectedItemCode || "";
         if (!code) return null;
@@ -147,6 +188,8 @@
         if (!isDocumentWorkspace()) return;
         const title = document.querySelector("#mapping-view .list-title span:first-child");
         if (title) title.textContent = "Extracted Items";
+        const mapperTitle = document.querySelector("#mapping-view .mapper-title");
+        if (mapperTitle) mapperTitle.textContent = "Madhushala Mapping / Re-map";
     }
 
     updateSummary = function updateUniqueRowSummary() {
@@ -158,7 +201,7 @@
         setText(
             document.getElementById("mapping-summary"),
             isDocumentWorkspace()
-                ? `Mapped: ${mapped}/${rows.length} | Left: ${left}`
+                ? `Extracted: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left}`
                 : `Selected: ${selectedMappings.size} | Left: ${left}`,
         );
         const submit = document.getElementById("submit-mappings");
@@ -173,7 +216,7 @@
 
         if (!workspace.unmappedItems.length) {
             list.className = "list-body empty";
-            list.textContent = "No items";
+            list.textContent = "No extracted items found for this document";
             renderSelectedExcise(null);
             updateSummary();
             return;
@@ -202,7 +245,7 @@
                 <button class="unmapped-item ${selected ? "selected" : ""}" data-row-key="${escapeHtml(rowKey)}" type="button">
                     <span class="item-code">${escapeHtml(code)}</span>
                     <span class="item-name">${escapeHtml(item.itemName)}</span>
-                    <span class="${mapped ? "map-badge done" : "map-badge"}">${mapped ? "Selected" : "Pending"}</span>
+                    <span class="${mapped ? "map-badge done" : "map-badge"}">${mapped ? "Mapped" : "Pending"}</span>
                     ${selectedExciseDetails(item)}
                 </button>`;
         }).join("");
@@ -236,11 +279,11 @@
                 card.hidden = false;
                 card.innerHTML = `
                     <div>
-                        <span class="eyebrow">Current Mapping</span>
+                        <span class="eyebrow">Mapped</span>
                         <h3>${escapeHtml(mapped.itemCode || "")} - ${escapeHtml(mapped.itemName || "Mapped item")}</h3>
-                        <p>Already saved for this extracted row</p>
+                        <p>This is the saved Madhushala item for the extracted purchase row.</p>
                     </div>
-                    <button type="button" id="change-current-mapping" class="secondary">Change Mapping</button>`;
+                    <button type="button" id="change-current-mapping" class="secondary">Change / Re-map</button>`;
                 document.getElementById("change-current-mapping")?.addEventListener("click", () => {
                     if (search) search.value = "";
                     renderCandidates(item.suggestions || []);
@@ -252,7 +295,7 @@
                 const container = document.getElementById("suggestions");
                 if (container) {
                     container.className = "candidate-list empty";
-                    container.textContent = "This row is already mapped. Use Change Mapping only if you need to replace it.";
+                    container.textContent = "Already mapped. Use Change / Re-map only if the saved item is wrong.";
                 }
             } else {
                 runSearch();
@@ -293,7 +336,7 @@
         const rowKey = mappingRowKey(exciseItem);
         const apply = () => {
             selectedMappings.set(rowKey, String(itemCode));
-            showToast("Selected", "success");
+            showToast("Mapping selected", "success");
             const search = document.getElementById("madhushala-search");
             if (search) search.value = "";
             renderWorkspace();
@@ -435,5 +478,6 @@
     window.__mappingRowIdentity = {
         mappingRowKey,
         mountPurchaseFormForMapping,
+        keepDocumentMappingReviewAvailable,
     };
 })();
