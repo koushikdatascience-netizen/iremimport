@@ -60,7 +60,7 @@ def test_calculation_request_matches_live_madhushala_contract():
             "schemeCode": "",
             "items": [item],
         },
-        {"salesTaxRate": 0, "salesTaxIncludingFree": False},
+        {"salesTaxRate": 12.5, "salesTaxIncludingFree": True},
     )
 
     assert set(request) == {
@@ -96,8 +96,13 @@ def test_calculation_request_matches_live_madhushala_contract():
         "t3Rate",
         "t4Rate",
     }
-    assert request["items"][0]["packing"] == 48
-    assert request["items"][0]["box"] == 1
+    calc_item = request["items"][0]
+    assert calc_item["itemCode"] == "100003"
+    assert calc_item["loose"] == 48
+    for field in purchase_orchestrator.CALCULATION_ZERO_ITEM_FIELDS:
+        assert calc_item[field] == 0
+    assert request["salesTaxRate"] == 0
+    assert request["salesTaxIncludingFree"] is False
 
 
 def test_final_payload_accepts_current_manual_empty_year_code():
@@ -125,6 +130,61 @@ def test_final_payload_accepts_current_manual_empty_year_code():
     }
 
     PurchaseOrchestrator._validate_final_payload(payload)
+
+
+def test_calculation_response_aliases_become_purchase_values():
+    payload = {
+        "items": [{
+            "itemCode": "100003",
+            "qnty": 6,
+            "rate": 999,
+            "mrp": 999,
+            "itemAmount": 999,
+            "discount": 999,
+        }],
+        "grossAmount": 0,
+        "taxAmount": 0,
+        "netAmount": 0,
+        "discount": 0,
+        "salesTaxOnMRP": 0,
+        "roundOff": 0,
+    }
+    purchase_orchestrator._reset_calculation_owned_values(payload)
+    purchase_orchestrator.merge_calculation(
+        payload,
+        {
+            "items": [{
+                "itemCode": "100003",
+                "quantity": 6,
+                "looseRate": 211.8,
+                "mrp": 280,
+                "amount": 1270.8,
+                "discountAmount": 5.5,
+                "t1Amount": 12.5,
+                "etdAmount": 100,
+            }],
+            "grossAmount": 1270.8,
+            "totalTaxAmount": 112.5,
+            "netAmount": 1383,
+            "totalDiscount": 5.5,
+            "roundingMinus": 0.3,
+            "roundingPlus": 0,
+        },
+    )
+
+    item = payload["items"][0]
+    assert item["qnty"] == 6
+    assert item["rate"] == 211.8
+    assert item["mrp"] == 280.0
+    assert item["itemAmount"] == 1270.8
+    assert item["discount"] == 5.5
+    assert item["t1Amt"] == 12.5
+    assert item["etd"] == 100.0
+    assert payload["grossAmount"] == 1270.8
+    assert payload["taxAmount"] == 112.5
+    assert payload["netAmount"] == 1383.0
+    assert payload["discount"] == 5.5
+    assert payload["roundOff"] == -0.3
 
 
 @pytest.mark.asyncio
@@ -170,11 +230,11 @@ async def test_orchestrator_mirrors_current_itemwise_save_payload(monkeypatch):
             return {
                 "items": [{
                     "itemCode": "100003",
-                    "qnty": 48,
-                    "rate": 10.42,
+                    "quantity": 48,
+                    "looseRate": 10.42,
                     "mrp": 280,
-                    "itemAmount": 500,
-                    "discount": 0,
+                    "amount": 500,
+                    "discountAmount": 0,
                     "cgst": 0,
                     "sgst": 0,
                     "cess": 0,
@@ -189,7 +249,7 @@ async def test_orchestrator_mirrors_current_itemwise_save_payload(monkeypatch):
                 "grossAmount": 500,
                 "taxAmount": 110,
                 "netAmount": 610,
-                "discount": 0,
+                "totalDiscount": 0,
                 "salesTaxOnMRP": 0,
                 "roundOff": 0,
             }
@@ -222,6 +282,15 @@ async def test_orchestrator_mirrors_current_itemwise_save_payload(monkeypatch):
         client=FakeClient(),
     )
 
+    calc = captured["calculate"]
+    assert calc["items"][0]["itemCode"] == "100003"
+    assert calc["items"][0]["loose"] == 48
+    assert calc["items"][0]["box"] == 0
+    assert calc["items"][0]["boxRate"] == 0
+    assert calc["items"][0]["mrp"] == 0
+    assert calc["salesTaxRate"] == 0
+    assert calc["salesTaxIncludingFree"] is False
+
     saved = captured["save"]
     assert saved["shopCode"] == "hedu_test"
     assert saved["companyCode"] == "2"
@@ -235,9 +304,16 @@ async def test_orchestrator_mirrors_current_itemwise_save_payload(monkeypatch):
     assert saved["grossAmount"] == 500.0
     assert saved["taxAmount"] == 110.0
     assert saved["netAmount"] == 610.0
+    assert saved["items"][0]["qnty"] == 48
+    assert saved["items"][0]["rate"] == 10.42
+    assert saved["items"][0]["mrp"] == 280.0
+    assert saved["items"][0]["itemAmount"] == 500.0
     assert "packing" not in saved["items"][0]
     assert "boxRate" not in saved["items"][0]
     assert result["trnNo"] == "1024"
+    assert result["calculationDebug"]["request"] == captured["calculate"]
+    assert result["calculationDebug"]["response"]["grossAmount"] == 500
+    assert result["calculationDebug"]["requestHeaders"]["Authorization"] == "[REDACTED]"
     assert ("CALCULATE", "OK") in events
     assert ("DUPLICATE_CHECK", "OK") in events
     assert ("SAVE", "OK") in events
