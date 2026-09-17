@@ -92,33 +92,47 @@ class MappingService:
         self,
         client: MadhushalaClient,
         payload: dict[str, str],
-        unmapped: list[dict[str, Any]],
+        unmapped: list[dict[str, Any]] | None = None,
     ) -> tuple[str | int | None, str, list[dict[str, Any]]]:
-        exact, normalized = self._unmapped_indexes(unmapped)
-        existing = self._find_existing_excise(payload, exact, normalized)
-        if existing:
-            code = existing.get("exciseItemCode")
-            logger.info("Excise item reused existing code=%s item=%s", code, payload.get("itemName"))
-            return code, "reused_existing", unmapped
+        """Send the item to Madhushala first; let Madhushala own deduplication.
 
+        The old bridge queried ``unmapped-items`` before saving and skipped
+        ``ExciseItemMasterSave`` when a similar item was found. The current Madhushala
+        contract requires every captured item to be posted first. We only consult the
+        unmapped list afterwards as a recovery mechanism when the save response does
+        not contain an Excise item code or an older backend reports a duplicate error.
+        """
+        current_unmapped = list(unmapped or [])
         try:
             response = await client.save_excise_item(payload)
+            response = response if isinstance(response, dict) else {}
             code = response.get("exciseItemCode") or response.get("itemCode")
-            logger.info("Excise item created code=%s item=%s", code, payload.get("itemName"))
+            logger.info("Excise item submitted code=%s item=%s", code, payload.get("itemName"))
             if code is not None:
-                unmapped = [*unmapped, {"exciseItemCode": code, "itemName": response.get("itemName") or payload.get("itemName")}]
-            return code, "created", unmapped
-        except MadhushalaApiError as exc:
-            if not self._is_duplicate_error(exc):
-                raise
+                return code, "submitted", current_unmapped
+
             refreshed = await client.get_unmapped_items()
             exact, normalized = self._unmapped_indexes(refreshed)
             existing = self._find_existing_excise(payload, exact, normalized)
             if existing:
                 code = existing.get("exciseItemCode")
-                logger.info("Excise duplicate recovered code=%s item=%s", code, payload.get("itemName"))
-                return code, "duplicate_recovered", refreshed
-            logger.warning("Excise duplicate unresolved item=%s", payload.get("itemName"))
+                logger.info("Excise item resolved after submit code=%s item=%s", code, payload.get("itemName"))
+                return code, "submitted_resolved", refreshed
+            logger.warning("Excise submit returned no code and item was not in unmapped list item=%s", payload.get("itemName"))
+            return None, "review_required", refreshed
+        except MadhushalaApiError as exc:
+            if not self._is_duplicate_error(exc):
+                raise
+            # Compatibility fallback for older Madhushala deployments. The important
+            # ordering remains Save first -> Unmapped second.
+            refreshed = await client.get_unmapped_items()
+            exact, normalized = self._unmapped_indexes(refreshed)
+            existing = self._find_existing_excise(payload, exact, normalized)
+            if existing:
+                code = existing.get("exciseItemCode")
+                logger.info("Excise duplicate resolved after save code=%s item=%s", code, payload.get("itemName"))
+                return code, "duplicate_resolved", refreshed
+            logger.warning("Excise duplicate unresolved after save item=%s", payload.get("itemName"))
             return None, "review_required", refreshed
 
     @staticmethod
@@ -170,7 +184,7 @@ class MappingService:
 
     async def prepare_latest_capture(self, capture: dict[str, Any], token: str) -> dict[str, Any]:
         client = self._client(token)
-        unmapped = await client.get_unmapped_items()
+        unmapped: list[dict[str, Any]] = []
 
         prepared = []
         latest_capture_keys = []
@@ -207,6 +221,8 @@ class MappingService:
                 }
                 self.state["imports"][canonical_key] = imported
             else:
+                # Legacy flow only. The authenticated session path below always posts
+                # every captured row as required by the current Madhushala contract.
                 imported["capturedItem"] = item
 
             imported["lastSeenBatchId"] = batch_id
@@ -214,7 +230,7 @@ class MappingService:
             imported["lastPrepareAction"] = prepare_action
             if imported.get("exciseItemCode") is not None:
                 latest_unmapped_codes.append(str(imported["exciseItemCode"]))
-            if prepare_action == "created" and imported.get("exciseItemCode") is not None:
+            if prepare_action in {"submitted", "submitted_resolved"} and imported.get("exciseItemCode") is not None:
                 latest_created_codes.append(str(imported["exciseItemCode"]))
 
             prepared.append(imported)
@@ -360,31 +376,45 @@ class MappingService:
         return {"mappedCount": len(clean), "response": response}
 
     async def prepare_session_capture(self, session: dict[str, Any], capture: dict[str, Any]) -> dict[str, Any]:
+        """Post every captured WB Excise row first, then use mapping APIs.
+
+        Madhushala owns item-master deduplication. A local import row is only useful as
+        recovery metadata; it must never suppress ``ExciseItemMasterSave``.
+        """
         shop_code = session["shop_code"]
         client = self._client_for_session(session)
-        unmapped = await client.get_unmapped_items()
         prepared: list[dict[str, Any]] = []
         latest_codes: list[str] = []
+        unmapped_cache: list[dict[str, Any]] = []
 
-        with conn() as db:
-            for item in capture.get("items", []):
-                canonical_key = item["canonicalKey"]
-                payload = self.build_excise_payload(item)
+        for item in capture.get("items", []):
+            canonical_key = item["canonicalKey"]
+            payload = self.build_excise_payload(item)
+            existing_code = ""
+            with conn() as db:
                 row = db.execute(
                     "SELECT * FROM imports WHERE shop_code=? AND canonical_key=?",
                     (shop_code, canonical_key),
                 ).fetchone()
-
                 if row:
-                    excise_item_code = row["excise_item_code"]
-                else:
-                    excise_item_code, prepare_action, unmapped = await self._create_or_reuse_excise_item(
-                        client, payload, unmapped
-                    )
+                    existing_code = str(row["excise_item_code"] or "").strip()
 
-                if excise_item_code is not None:
-                    latest_codes.append(str(excise_item_code))
+            # Required ordering: ExciseItemMasterSave first for EVERY captured item.
+            excise_item_code, prepare_action, refreshed = await self._create_or_reuse_excise_item(
+                client, payload, unmapped_cache
+            )
+            if refreshed:
+                unmapped_cache = refreshed
+            if excise_item_code is None and existing_code:
+                # If an older backend reports a duplicate that is already mapped and
+                # therefore absent from unmapped-items, retain our previously confirmed code.
+                excise_item_code = existing_code
+                prepare_action = "submitted_existing_code"
 
+            if excise_item_code is not None:
+                latest_codes.append(str(excise_item_code))
+
+            with conn() as db:
                 db.execute(
                     """
                     INSERT INTO imports(
@@ -409,14 +439,23 @@ class MappingService:
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
-                prepared.append(
-                    {
-                        "canonicalKey": canonical_key,
-                        "exciseItemCode": excise_item_code,
-                        "itemName": payload["itemName"],
-                        "capturedItem": item,
-                    }
-                )
+
+            logger.info(
+                "excise_capture_prepared shopCode=%s item=%s action=%s exciseItemCode=%s",
+                shop_code,
+                payload["itemName"],
+                prepare_action,
+                excise_item_code,
+            )
+            prepared.append(
+                {
+                    "canonicalKey": canonical_key,
+                    "exciseItemCode": excise_item_code,
+                    "itemName": payload["itemName"],
+                    "capturedItem": item,
+                    "prepareAction": prepare_action,
+                }
+            )
 
         return {"preparedCount": len(prepared), "latestUnmappedExciseCodes": latest_codes, "items": prepared}
 
@@ -512,6 +551,8 @@ class MappingService:
                 "latestOnly": latest_only,
             }
 
+        # For portal import this is intentionally AFTER ExciseItemMasterSave. Madhushala
+        # is the source of truth for which submitted rows still require mapping.
         unmapped = await client.get_unmapped_items()
         latest_codes: set[str] = set()
 
@@ -600,10 +641,11 @@ class MappingService:
             "dropdownCount": len(madhushala_items),
             "latestOnly": latest_only,
         }
+
     async def prepare_document_job(self, session: dict[str, Any], job_id: str) -> dict[str, Any]:
         shop_code = session["shop_code"]
         client = self._client_for_session(session)
-        unmapped = await client.get_unmapped_items()
+        unmapped: list[dict[str, Any]] = []
         prepared = 0
         now = datetime.now(timezone.utc).isoformat()
 
@@ -617,22 +659,29 @@ class MappingService:
                 raise HTTPException(status_code=404, detail="Import job not found")
 
             rows = db.execute("SELECT * FROM import_items WHERE job_id=?", (job_id,)).fetchall()
-            for row in rows:
-                item = {
-                    "rawName": row["raw_name"],
-                    "brand": row["brand"],
-                    "ml": row["ml"],
-                    "packing": row["packing"],
-                    "mrp": row["mrp"],
-                    "rate": row["rate"],
-                    "barcode": row["barcode"],
-                }
-                payload = self.build_excise_payload(item)
-                excise_item_code, prepare_action, unmapped = await self._create_or_reuse_excise_item(
-                    client, payload, unmapped
-                )
-                mapped_item_code = ""
-                if excise_item_code is not None:
+
+        for row in rows:
+            item = {
+                "rawName": row["raw_name"],
+                "brand": row["brand"],
+                "ml": row["ml"],
+                "packing": row["packing"],
+                "mrp": row["mrp"],
+                "rate": row["rate"],
+                "barcode": row["barcode"],
+            }
+            payload = self.build_excise_payload(item)
+            excise_item_code, prepare_action, unmapped = await self._create_or_reuse_excise_item(
+                client, payload, unmapped
+            )
+            existing_mapped = str(row["mapped_item_code"] or "").strip()
+            existing_excise_code = str(row["excise_item_code"] or "").strip()
+            if excise_item_code is None and existing_excise_code:
+                excise_item_code = existing_excise_code
+
+            mapped_item_code = existing_mapped
+            with conn() as db:
+                if not mapped_item_code and excise_item_code is not None:
                     mapped = db.execute(
                         "SELECT madhushala_item_code FROM mappings WHERE shop_code=? AND excise_item_code=?",
                         (shop_code, str(excise_item_code)),
@@ -647,7 +696,7 @@ class MappingService:
                     """,
                     (str(excise_item_code or ""), mapping_status, mapped_item_code, now, row["id"]),
                 )
-                prepared += 1
+            prepared += 1
         return {"preparedCount": prepared}
 
     async def save_session_mappings(
