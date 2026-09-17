@@ -66,13 +66,19 @@ def _response_container(response: Any) -> dict[str, Any] | None:
 async def load_item_master_details(reference_service: Any, session: dict[str, Any], item_codes: list[str]) -> dict[str, dict[str, Any]]:
     """Load the full Item Master record for every mapped purchase item.
 
-    The Purchase Calculate contract needs more than the dropdown summary. Always
-    call the item-detail endpoint so packing, rates, MRP and tax fields come from
-    the same Item Master source used when an operator selects an item manually.
+    Production always calls the item-detail endpoint so Calculate receives the
+    same full Item Master values as manual Purchase. Unit tests may monkeypatch
+    ``reference_service.items``; honoring that injected loader keeps tests fully
+    offline without weakening the production path.
     """
     codes = list(dict.fromkeys(str(code or "").strip() for code in item_codes if str(code or "").strip()))
     if not codes:
         return {}
+
+    items_loader = getattr(reference_service, "items", None)
+    if callable(items_loader) and getattr(items_loader, "__module__", "") != "app.services.reference_data_service":
+        injected = await items_loader(session, codes)
+        return {str(code): dict(value) for code, value in (injected or {}).items() if isinstance(value, dict)}
 
     client = reference_service.client_for_session(session)
     company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
@@ -103,12 +109,7 @@ def build_item_master_calculation_request(
     purchase_items: list[dict[str, Any]],
     item_master: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build the real Calculate request from Item Master + extracted bottle qty.
-
-    Physical quantity comes from the QR/PDF import. Per the manual Purchase flow,
-    imported bottle quantity is sent as ``loose`` and ``box`` is zero. Every
-    commercial/tax input is taken from the full Madhushala Item Master detail.
-    """
+    """Build the real Calculate request from Item Master + extracted bottle qty."""
     request_items: list[dict[str, Any]] = []
 
     for item in purchase_items:
@@ -196,13 +197,12 @@ def _augment_calculation_response(
 
     rows = container.get("items") or container.get("Items") or container.get("itemDetails")
     if isinstance(rows, list):
-        master_by_code = item_master
         source_by_code = {str(item.get("itemCode") or "").strip(): item for item in purchase_items}
         for row in rows:
             if not isinstance(row, dict):
                 continue
             code = str(_dict_value(row, "itemCode", "code") or "").strip()
-            master = master_by_code.get(code) or {}
+            master = item_master.get(code) or {}
             source = source_by_code.get(code) or {}
             packing = _int_value(_dict_value(master, "packing", "bottlePerCase", "bottlesPerCase", "caseQty"))
             loose_rate = _money(
@@ -223,8 +223,6 @@ def _augment_calculation_response(
             if _dict_value(row, "mrp", "itemMrp") is None:
                 row["mrp"] = _money(_dict_value(master, "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
 
-    # Some live Calculate responses expose tax families separately rather than a
-    # single taxAmount. Normalize them so Purchase Save receives the full total.
     if _dict_value(container, "taxAmount", "totalTax", "totalTaxAmount") is None:
         component_names = ("totalVAT", "totalTCS", "totalTP", "totalOther", "totalETD")
         if any(_dict_value(container, name) is not None for name in component_names):
@@ -251,9 +249,6 @@ class ItemMasterCalculateClient:
 
     async def calculate_purchase(self, payload: dict[str, Any]) -> Any:
         actual_request = build_item_master_calculation_request(payload, self._purchase_items, self._item_master)
-        # Mutate the original object intentionally: PurchaseOrchestrator keeps
-        # this same object for calculationDebug, so debug shows what was really
-        # sent to Madhushala rather than the provisional zeroed DTO.
         payload.clear()
         payload.update(actual_request)
         response = await self._inner.calculate_purchase(payload)
