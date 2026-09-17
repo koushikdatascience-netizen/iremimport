@@ -10,6 +10,7 @@ from app.integrations.madhushala.client import MadhushalaApiError
 from app.modules.document_import.service import DocumentImportService
 from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
 from app.modules.document_import.purchase_context import build_purchase_context, up_supplier_hint
+from app.modules.document_import.purchase_preview import calculate_purchase_preview
 from app.modules.document_import.purchase_required import resolve_required_purchase_header
 from app.modules.document_import.qr_decoder import decode_qr_upload
 from app.modules.document_import.document_mapping import save_document_row_mappings
@@ -95,6 +96,28 @@ def create_router(service: DocumentImportService) -> APIRouter:
             "transaction": purchase_transaction_service.get(job_id),
             "events": purchase_transaction_service.events(job_id),
         }
+
+    @router.post("/jobs/{job_id}/purchase/calculate-preview")
+    async def preview_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):
+        """Validate the current mapped document against live Madhushala Calculate.
+
+        This endpoint intentionally never invokes /api/purchase/save. It exists so
+        the browser can verify the exact financial calculation and surface the
+        redacted request/response before the user is allowed to submit Purchase.
+        """
+        session = session_service.from_request(request)
+        correlation = request.headers.get("X-Correlation-ID") or f"purchase-preview-{job_id}"
+        token = set_correlation_id(correlation)
+        try:
+            header = await resolve_required_purchase_header(
+                service,
+                session,
+                job_id,
+                payload.header,
+            )
+            return await calculate_purchase_preview(service, session, job_id, header)
+        finally:
+            reset_correlation_id(token)
 
     @router.post("/jobs/{job_id}/purchase/save")
     async def save_purchase(job_id: str, payload: PurchaseSaveRequest, request: Request):
