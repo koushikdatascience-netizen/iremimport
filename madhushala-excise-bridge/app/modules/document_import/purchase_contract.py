@@ -60,15 +60,62 @@ def _response_container(response: Any) -> dict[str, Any] | None:
     return response
 
 
-async def load_item_master_details(reference_service: Any, session: dict[str, Any], item_codes: list[str]) -> dict[str, dict[str, Any]]:
-    """Load mapped purchase items without changing the integration company scope.
+def _commercial_values(master: dict[str, Any]) -> tuple[float, float, float, int]:
+    loose_rate = _money(
+        _dict_value(
+            master,
+            "purchaseRate",
+            "purchaseRateLoose",
+            "looseRate",
+            "unitRate",
+            "rate",
+            "itemRate",
+        )
+    )
+    box_rate = _money(_dict_value(master, "purchaseRateCase", "boxRate", "caseRate", "purchaseCaseRate"))
+    mrp = _money(_dict_value(master, "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
+    packing = _int_value(_dict_value(master, "packing", "bottlePerCase", "bottlesPerCase", "caseQty"))
+    return loose_rate, box_rate, mrp, packing
 
-    The purchase mapping catalogue is already loaded for the session company. Use
-    the reference-data service so the same company, token and catalogue are reused.
-    That service may enrich an item through the detail endpoint, but when Madhushala
-    rejects that detail call while the catalogue row is available it falls back to
-    the catalogue record for the same company. We never try a different company.
+
+def validate_item_master_commercials(
+    item_master: dict[str, dict[str, Any]],
+    item_codes: list[str],
+) -> None:
+    """Block Calculate/Save when a mapped row is only a dropdown summary.
+
+    The document contributes only the extracted bottle quantity. Purchase rate,
+    case rate, MRP, packing and tax metadata must come from Madhushala Item Master.
+    A dropdown row that only contains packing/ETD/tax tags is not sufficient.
     """
+    for code in item_codes:
+        master = item_master.get(str(code)) or {}
+        loose_rate, box_rate, mrp, packing = _commercial_values(master)
+        missing: list[str] = []
+        if not packing:
+            missing.append("packing")
+        if loose_rate <= 0 and box_rate <= 0:
+            missing.append("purchase rate")
+        if mrp <= 0:
+            missing.append("MRP")
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "stage": "ITEM_MASTER",
+                    "message": (
+                        f"Mapped item {code} is missing authoritative Item Master "
+                        f"{', '.join(missing)}. Purchase Calculate/Save was blocked."
+                    ),
+                    "itemCode": str(code),
+                    "missing": missing,
+                    "masterSnapshot": master,
+                },
+            )
+
+
+async def load_item_master_details(reference_service: Any, session: dict[str, Any], item_codes: list[str]) -> dict[str, dict[str, Any]]:
+    """Load mapped purchase items without changing the integration company scope."""
     codes = list(dict.fromkeys(str(code or "").strip() for code in item_codes if str(code or "").strip()))
     if not codes:
         return {}
@@ -110,6 +157,7 @@ async def load_item_master_details(reference_service: Any, session: dict[str, An
             detail=f"Madhushala Item Master returned no detail for item(s): {', '.join(missing)}",
         )
 
+    validate_item_master_commercials(result, codes)
     return result
 
 
@@ -118,31 +166,14 @@ def build_item_master_calculation_request(
     purchase_items: list[dict[str, Any]],
     item_master: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build the real Calculate request from Item Master + extracted bottle qty."""
+    """Build Calculate request: extracted quantity only, all other values from Item Master."""
     request_items: list[dict[str, Any]] = []
 
     for item in purchase_items:
         code = str(item.get("itemCode") or "").strip()
         master = item_master.get(code) or {}
         quantity = _int_value(item.get("qnty") if item.get("qnty") not in (None, "") else item.get("loose"))
-        packing = _int_value(_dict_value(master, "packing", "bottlePerCase", "bottlesPerCase", "caseQty"))
-
-        loose_rate = _money(
-            _dict_value(
-                master,
-                "purchaseRate",
-                "purchaseRateLoose",
-                "looseRate",
-                "unitRate",
-                "rate",
-                "itemRate",
-            )
-        )
-        box_rate = _money(_dict_value(master, "purchaseRateCase", "boxRate", "caseRate", "purchaseCaseRate"))
-        if not loose_rate and box_rate and packing:
-            loose_rate = _money(box_rate / packing)
-        if not box_rate and loose_rate and packing:
-            box_rate = _money(loose_rate * packing)
+        loose_rate, box_rate, mrp, packing = _commercial_values(master)
 
         request_items.append(
             {
@@ -152,7 +183,7 @@ def build_item_master_calculation_request(
                 "free": _int_value(item.get("freeQnty")),
                 "boxRate": box_rate,
                 "looseRate": loose_rate,
-                "mrp": _money(_dict_value(master, "mrp", "itemMrp", "mrpPerUnit", "saleRate")),
+                "mrp": mrp,
                 "discount": _money(
                     _dict_value(
                         master,
@@ -195,7 +226,7 @@ def _augment_calculation_response(
     purchase_items: list[dict[str, Any]],
     item_master: dict[str, dict[str, Any]],
 ) -> Any:
-    """Keep Calculate authoritative while preserving master fields it omits."""
+    """Keep Calculate authoritative while preserving exact Item Master values it omits."""
     if not isinstance(response, dict):
         return response
 
@@ -213,15 +244,7 @@ def _augment_calculation_response(
             code = str(_dict_value(row, "itemCode", "code") or "").strip()
             master = item_master.get(code) or {}
             source = source_by_code.get(code) or {}
-            packing = _int_value(_dict_value(master, "packing", "bottlePerCase", "bottlesPerCase", "caseQty"))
-            loose_rate = _money(
-                _dict_value(master, "purchaseRate", "purchaseRateLoose", "looseRate", "unitRate", "rate", "itemRate")
-            )
-            box_rate = _money(_dict_value(master, "purchaseRateCase", "boxRate", "caseRate", "purchaseCaseRate"))
-            if not loose_rate and box_rate and packing:
-                loose_rate = _money(box_rate / packing)
-            if not box_rate and loose_rate and packing:
-                box_rate = _money(loose_rate * packing)
+            loose_rate, box_rate, mrp, _ = _commercial_values(master)
 
             if _dict_value(row, "quantity", "qnty", "qty") is None:
                 row["quantity"] = _int_value(source.get("qnty"))
@@ -230,7 +253,7 @@ def _augment_calculation_response(
             if _dict_value(row, "boxRate", "caseRate") is None:
                 row["boxRate"] = box_rate
             if _dict_value(row, "mrp", "itemMrp") is None:
-                row["mrp"] = _money(_dict_value(master, "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
+                row["mrp"] = mrp
 
     if _dict_value(container, "taxAmount", "totalTax", "totalTaxAmount") is None:
         component_names = ("totalVAT", "totalTCS", "totalTP", "totalOther", "totalETD")
@@ -257,6 +280,10 @@ class ItemMasterCalculateClient:
         return getattr(self._inner, name)
 
     async def calculate_purchase(self, payload: dict[str, Any]) -> Any:
+        validate_item_master_commercials(
+            self._item_master,
+            [str(item.get("itemCode") or "").strip() for item in self._purchase_items],
+        )
         actual_request = build_item_master_calculation_request(payload, self._purchase_items, self._item_master)
         payload.clear()
         payload.update(actual_request)
