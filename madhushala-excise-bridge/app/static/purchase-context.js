@@ -250,6 +250,89 @@
         }
     }
 
+    function installMappingSearchVisibility() {
+        if (pageParams.get("view") !== "mapping") return;
+        if (!document.getElementById("mapping-search-visibility-style")) {
+            const style = document.createElement("style");
+            style.id = "mapping-search-visibility-style";
+            style.textContent = `
+                #mapping-view .mapping-layout {
+                    min-height: 0 !important;
+                    align-items: stretch !important;
+                }
+                #mapping-view .unmapped-list,
+                #mapping-view .mapper {
+                    height: 100% !important;
+                    min-height: 0 !important;
+                }
+                #mapping-view .list-body,
+                #mapping-view .candidate-list {
+                    height: auto !important;
+                    min-height: 0 !important;
+                    max-height: none !important;
+                }
+                #mapping-view .list-body {
+                    flex: 1 1 auto !important;
+                }
+                #mapping-view .results-panel {
+                    min-height: 0 !important;
+                    overflow: hidden !important;
+                }
+                #mapping-view.mapping-search-active .mapping-purchase-details #mapping-purchase-form-host {
+                    display: none !important;
+                }
+                #mapping-view.mapping-search-active .mapping-purchase-details-header {
+                    border-bottom: 0 !important;
+                }
+                #mapping-view.mapping-search-active .best-match-card {
+                    display: none !important;
+                }
+                #mapping-view.mapping-search-active .mapping-layout {
+                    min-height: 250px !important;
+                }
+                #mapping-view.mapping-search-active .candidate-list {
+                    min-height: 150px !important;
+                }
+                #mapping-view.mapping-search-active .candidate {
+                    height: 48px !important;
+                    min-height: 48px !important;
+                    max-height: 48px !important;
+                    padding: 6px 9px !important;
+                    border-color: #dfe3e7 !important;
+                }
+                #mapping-view.mapping-search-active .candidate strong {
+                    font-size: 12px !important;
+                    line-height: 1.2 !important;
+                }
+                #mapping-view.mapping-search-active .candidate small {
+                    font-size: 10px !important;
+                    line-height: 1.15 !important;
+                }
+                #mapping-view.mapping-search-active .results-title {
+                    padding: 7px 10px !important;
+                    font-size: 11px !important;
+                    color: var(--heading) !important;
+                    background: #fff9e5 !important;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        const mappingView = document.getElementById("mapping-view");
+        const search = document.getElementById("madhushala-search");
+        if (!mappingView || !search || search.dataset.visibilityBound === "true") return;
+        search.dataset.visibilityBound = "true";
+
+        const sync = () => {
+            const active = document.activeElement === search || clean(search.value).length > 0;
+            mappingView.classList.toggle("mapping-search-active", active);
+        };
+        search.addEventListener("focus", sync);
+        search.addEventListener("input", sync);
+        search.addEventListener("blur", () => window.setTimeout(sync, 120));
+        sync();
+    }
+
     function installHooks() {
         installHeaderHooks();
 
@@ -323,12 +406,14 @@
         ensureSchemeField();
         installHooks();
         restoreMappingHeader();
+        if (isMappingView) installMappingSearchVisibility();
         document.getElementById("purchase-form")?.addEventListener("change", (event) => {
             if (fieldConfig.some((field) => field.persist && field.id === event.target?.id)) saveProfile();
             if (isMappingView && typeof window.persistPurchaseHeader === "function") window.persistPurchaseHeader();
         });
         void fetchPurchaseContext("").then(() => {
             restoreMappingHeader();
+            if (isMappingView) installMappingSearchVisibility();
         }).catch(() => {
             // Keep the form usable; the bridge will report required master lookup failures.
         });
