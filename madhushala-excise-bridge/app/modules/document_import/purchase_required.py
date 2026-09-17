@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from fastapi import HTTPException
@@ -24,6 +25,12 @@ _REQUIRED_LABELS = {
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _date_only(value: Any) -> str:
+    text = _text(value)
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})", text)
+    return match.group(1) if match else text
 
 
 def _raw_value(job_id: str, *aliases: str) -> str:
@@ -92,9 +99,19 @@ async def resolve_required_purchase_header(
     The observed manual Purchase payload permits yearCode, tpPassNo and
     schemeCode to be empty. Supplier, Store, Purchase A/c and User are the
     master values that must be resolved before submitting the import.
+
+    QR/PDF extraction owns source-document facts. In particular a QR purchase
+    must use the invoice/document date encoded by the transport pass rather than
+    replacing it with the browser's current date.
     """
     job = service.get_job(session, job_id)
     resolved = dict(header or {})
+
+    source_doc_date = _date_only(job.get("invoice_date"))
+    if str(job.get("source_type") or "").strip().upper() == "QR_HTML" and source_doc_date:
+        resolved["docDate"] = source_doc_date
+    elif not _text(resolved.get("docDate")) and source_doc_date:
+        resolved["docDate"] = source_doc_date
 
     if not _text(resolved.get("tpPassNo")):
         resolved["tpPassNo"] = _transport_pass_from_job(job, job_id)
@@ -113,8 +130,6 @@ async def resolve_required_purchase_header(
             if not _text(resolved.get(name)) and _text(defaults.get(name)):
                 resolved[name] = _text(defaults[name])
 
-    # Match the current manual Purchase JSON contract. These members are sent
-    # as empty strings when unused rather than removed from the request.
     resolved.setdefault("yearCode", "")
     resolved.setdefault("tpPassNo", "")
     resolved.setdefault("schemeCode", "")
