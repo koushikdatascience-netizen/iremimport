@@ -487,7 +487,6 @@ class PurchaseOrchestrator:
                 "taxes": header.get("taxes") if isinstance(header.get("taxes"), list) else [],
             }
             self._apply_qr_bottle_quantity(job, payload)
-            self._reset_calculation_owned_values(payload)
 
             tx = purchase_transaction_service.ensure(
                 job_id=job_id,
@@ -505,8 +504,19 @@ class PurchaseOrchestrator:
             )
 
             item_codes = [str(item.get("itemCode") or "").strip() for item in payload["items"]]
-            master_items = await reference_data_service.items(session, item_codes)
+            try:
+                master_items = await reference_data_service.items(session, item_codes)
+            except Exception as exc:
+                # purchase_adapter already enriched these rows from Item Master. A
+                # refresh/cache lookup failure must not erase that known master data.
+                logger.warning("purchase_item_master_refresh_fallback jobId=%s error=%s", job_id, exc)
+                master_items = {}
+
             calc_request = self.build_calculation_request(payload, header, master_items)
+            # Do not allow the pre-calculation Item Master values to become the
+            # final Purchase Save values. Calculate response remains authoritative.
+            self._reset_calculation_owned_values(payload)
+
             calc_started = time.perf_counter()
             duplicate_task = None
             if payload["supplierCode"] and payload["docNo"]:
