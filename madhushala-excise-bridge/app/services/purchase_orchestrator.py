@@ -27,6 +27,14 @@ def _money(value: Any) -> float:
         return 0.0
 
 
+def _number(value: Any) -> float:
+    """Keep Item Master calculation precision instead of forcing 2 decimals."""
+    try:
+        return float(Decimal(str(value or 0)))
+    except Exception:
+        return 0.0
+
+
 def _int_value(value: Any) -> int:
     try:
         return max(0, int(Decimal(str(value or 0))))
@@ -48,16 +56,8 @@ def _dict_value(row: dict[str, Any], *aliases: str) -> Any:
 
 
 class PurchaseOrchestrator:
-    """Mirror Madhushala's current Purchase business flow for imported bills.
+    """Mirror Madhushala's Purchase business flow for imported bills."""
 
-    Browser-only bootstrap/master screens are not replayed sequentially here.
-    Stable reference data is cached by ``reference_data_service``; the live
-    transaction path uses Madhushala's own Calculate API and then Save API.
-    """
-
-    # yearCode is intentionally not required here. The current Madhushala
-    # Purchase screen sends yearCode="" and lets its backend/session context
-    # resolve the effective year.
     REQUIRED_TEXT_FIELDS = (
         "shopCode",
         "companyCode",
@@ -158,27 +158,74 @@ class PurchaseOrchestrator:
         "roundOff": ("roundOff",),
     }
 
-    def build_calculation_request(self, payload: dict[str, Any], header: dict[str, Any]) -> dict[str, Any]:
-        """Build Madhushala's Calculate shape with only itemCode + bottle quantity populated.
+    @staticmethod
+    def _master_or_item(
+        master: dict[str, Any],
+        item: dict[str, Any],
+        master_aliases: tuple[str, ...],
+        item_key: str,
+    ) -> Any:
+        value = _dict_value(master, *master_aliases) if master else None
+        if value in (None, ""):
+            value = item.get(item_key)
+        return value
 
-        Madhushala Calculate is authoritative for commercial/tax values. ASP.NET's
-        request DTO uses non-nullable numeric/boolean fields, so unused numeric
-        properties must be sent as zero (not JSON null) and the boolean as false.
-        ``loose`` carries the actual bottle quantity being purchased; all other
-        item calculation inputs stay at their DTO defaults.
+    def build_calculation_request(
+        self,
+        payload: dict[str, Any],
+        header: dict[str, Any],
+        master_items: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Build Madhushala's PurchaseCalculationRequest.
+
+        Production execution supplies ``master_items`` from Madhushala Item Master.
+        QR contributes the mapped item identity and physical bottle quantity; Item
+        Master contributes packing, rates, MRP, taxes, T1-T4 and ETD. The optional
+        no-master branch is kept for compatibility with older unit callers.
         """
         calc_items: list[dict[str, Any]] = []
         for item in payload.get("items") or []:
-            bottle_quantity = item.get("qnty")
-            if bottle_quantity in (None, ""):
-                bottle_quantity = item.get("loose")
-            calc_item = {
-                "itemCode": str(item.get("itemCode") or "").strip(),
-                "loose": _int_value(bottle_quantity),
-            }
-            for field in self.CALCULATION_ZERO_ITEM_FIELDS:
-                calc_item[field] = 0
-            calc_items.append(calc_item)
+            item_code = str(item.get("itemCode") or "").strip()
+
+            if master_items is None:
+                bottle_quantity = item.get("qnty")
+                if bottle_quantity in (None, ""):
+                    bottle_quantity = item.get("loose")
+                calc_item = {
+                    "itemCode": item_code,
+                    "loose": _int_value(bottle_quantity),
+                }
+                for field in self.CALCULATION_ZERO_ITEM_FIELDS:
+                    calc_item[field] = 0
+                calc_items.append(calc_item)
+                continue
+
+            master = master_items.get(item_code, {}) if isinstance(master_items, dict) else {}
+            calc_items.append({
+                "itemCode": item_code,
+                "packing": _int_value(self._master_or_item(master, item, ("packing", "bottlePerCase", "bottlesPerCase", "caseQty"), "packing")),
+                "box": _int_value(item.get("box")),
+                "loose": _int_value(item.get("loose")),
+                "free": _int_value(item.get("freeQnty")),
+                "looseRate": _number(self._master_or_item(master, item, ("purchaseRate", "looseRate", "rate", "itemRate"), "looseRate")),
+                "boxRate": _number(self._master_or_item(master, item, ("purchaseRateCase", "boxRate", "caseRate"), "boxRate")),
+                "mrp": _number(self._master_or_item(master, item, ("mrp", "itemMrp", "mrpPerUnit"), "mrp")),
+                "discount": _number(self._master_or_item(master, item, ("purchaseDiscountAmount", "purchaseDiscount", "discount"), "discount")),
+                "cgst": _number(self._master_or_item(master, item, ("cgst", "cgstAmount"), "cgst")),
+                "sgst": _number(self._master_or_item(master, item, ("sgst", "sgstAmount"), "sgst")),
+                "cess": _number(self._master_or_item(master, item, ("cess", "cessAmount"), "cess")),
+                "addCess": _number(self._master_or_item(master, item, ("addCess", "adCess", "addCessAmount", "adCessAmount"), "addCess")),
+                "igst": _number(self._master_or_item(master, item, ("igst", "igstAmount"), "igst")),
+                "t1Amt": _number(self._master_or_item(master, item, ("t1Amt", "t1Amount", "t1"), "t1Amt")),
+                "t2Amt": _number(self._master_or_item(master, item, ("t2Amt", "t2Amount", "t2"), "t2Amt")),
+                "t3Amt": _number(self._master_or_item(master, item, ("t3Amt", "t3Amount", "t3"), "t3Amt")),
+                "t4Amt": _number(self._master_or_item(master, item, ("t4Amt", "t4Amount", "t4"), "t4Amt")),
+                "t1Rate": _number(self._master_or_item(master, item, ("t1Rate",), "t1Rate")),
+                "t2Rate": _number(self._master_or_item(master, item, ("t2Rate",), "t2Rate")),
+                "t3Rate": _number(self._master_or_item(master, item, ("t3Rate",), "t3Rate")),
+                "t4Rate": _number(self._master_or_item(master, item, ("t4Rate",), "t4Rate")),
+                "etd": _number(self._master_or_item(master, item, ("etd", "etdAmount"), "etd")),
+            })
 
         return {
             "shopCode": payload["shopCode"],
@@ -207,11 +254,7 @@ class PurchaseOrchestrator:
         return []
 
     def _reset_calculation_owned_values(self, payload: dict[str, Any]) -> None:
-        """Prevent Item Master/source-document financial values from leaking into Save.
-
-        Quantity identity remains intact, but fields Madhushala Calculate owns begin
-        at zero and are filled only from the Calculate response.
-        """
+        """Ensure final Save financial values are populated by Calculate response."""
         for item in payload.get("items") or []:
             for field in self.CALCULATION_OWNED_ITEM_FIELDS:
                 item[field] = 0
@@ -225,6 +268,18 @@ class PurchaseOrchestrator:
                 item[field] = ""
         for field in ("grossAmount", "taxAmount", "netAmount", "discount", "salesTaxOnMRP", "roundOff"):
             payload[field] = 0
+
+    @staticmethod
+    def _apply_qr_bottle_quantity(job: dict[str, Any], payload: dict[str, Any]) -> None:
+        """For QR imports the QR bottle count is Purchase ``loose``; box is unused."""
+        if str(job.get("source_type") or "").strip().upper() != "QR_HTML":
+            return
+        for item in payload.get("items") or []:
+            bottles = _int_value(item.get("qnty"))
+            if not bottles:
+                bottles = _int_value(item.get("loose"))
+            item["box"] = 0
+            item["loose"] = bottles
 
     def merge_calculation(self, payload: dict[str, Any], response: Any) -> None:
         """Merge Madhushala Calculate output and treat it as the financial source of truth."""
@@ -265,9 +320,6 @@ class PurchaseOrchestrator:
                 if value is not None:
                     payload[field] = _money(value)
 
-            # Some Calculate responses expose the rounding components rather than
-            # a single roundOff property. Preserve Madhushala's values and only
-            # translate them into the Purchase Save field.
             if _dict_value(candidate, "roundOff") is None:
                 rounding_plus = _dict_value(candidate, "roundingPlus")
                 rounding_minus = _dict_value(candidate, "roundingMinus")
@@ -316,7 +368,6 @@ class PurchaseOrchestrator:
         return result
 
     async def _build_billwise_taxes(self, session: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, Any]]:
-        # Prefer taxes[] produced by Madhushala Calculate if it supplies them.
         existing = payload.get("taxes")
         if isinstance(existing, list) and existing:
             return existing
@@ -398,8 +449,6 @@ class PurchaseOrchestrator:
 
             doc_date = str(header.get("docDate") or job.get("invoice_date") or "").strip()
             trn_date = str(header.get("trnDate") or date.today().isoformat()).strip()
-            # Match the current manual Purchase screen. It sends yearCode="";
-            # do not invent a financial year unless a caller explicitly gives it.
             year_code = str(header.get("yearCode") or "").strip()
 
             try:
@@ -437,6 +486,7 @@ class PurchaseOrchestrator:
                 "items": items,
                 "taxes": header.get("taxes") if isinstance(header.get("taxes"), list) else [],
             }
+            self._apply_qr_bottle_quantity(job, payload)
             self._reset_calculation_owned_values(payload)
 
             tx = purchase_transaction_service.ensure(
@@ -454,7 +504,9 @@ class PurchaseOrchestrator:
                 doc_no=payload["docNo"],
             )
 
-            calc_request = self.build_calculation_request(payload, header)
+            item_codes = [str(item.get("itemCode") or "").strip() for item in payload["items"]]
+            master_items = await reference_data_service.items(session, item_codes)
+            calc_request = self.build_calculation_request(payload, header, master_items)
             calc_started = time.perf_counter()
             duplicate_task = None
             if payload["supplierCode"] and payload["docNo"]:
@@ -517,9 +569,6 @@ class PurchaseOrchestrator:
             else:
                 payload["taxes"] = []
 
-            # These values are needed only by PurchaseCalculationRequest. The
-            # current PurchaseRequest/ItemRequest sent by the manual screen does
-            # not include them as item properties.
             for item in payload["items"]:
                 for helper_key in ("packing", "boxRate", "looseRate", "t1Rate", "t2Rate", "t3Rate", "t4Rate"):
                     item.pop(helper_key, None)
@@ -533,8 +582,6 @@ class PurchaseOrchestrator:
             try:
                 response = await client.save_purchase(payload)
             except Exception as exc:
-                # Never blindly retry Purchase Save. A network failure can happen
-                # after Madhushala commits the accounting transaction.
                 status = "UNKNOWN" if isinstance(exc, MadhushalaApiError) and exc.status_code is None else "FAILED"
                 purchase_transaction_service.update(job_id, status, error=str(exc))
                 purchase_transaction_service.record_event(tx_id, job_id, "SAVE", status, details={"error": str(exc)})
