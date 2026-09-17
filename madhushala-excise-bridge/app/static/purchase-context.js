@@ -16,6 +16,7 @@
     let latestContext = null;
     let contextPromise = null;
     let contextHint = null;
+    let initialized = false;
 
     function clean(value) {
         return String(value ?? "").trim();
@@ -193,8 +194,6 @@
         if (!saved.docNo) setField("purchase-doc-no", documentData.invoiceNumber);
         if (!saved.docDate) setField("purchase-doc-date", documentData.invoiceDate, true);
         if (!saved.tpPassNo) setField("purchase-tp-pass-no", documentData.transportPassNo, true);
-        // Match the current Madhushala Purchase screen: yearCode is allowed to
-        // remain empty and is not invented from the document date client-side.
     }
 
     function requiredPurchaseFields() {
@@ -267,15 +266,16 @@
         const originalSave = window.savePurchaseFromJob;
         if (typeof originalSave === "function") {
             window.savePurchaseFromJob = async function purchaseAwareSave(source = "review") {
-                if (source !== "mapping") {
-                    try {
-                        await fetchPurchaseContext(window.currentDocumentResult?.extractedDocument?.supplierName || "");
-                    } catch {
-                        // The bridge will provide a precise error if master lookup is unavailable.
-                    }
-                    if (showFriendlyMissing()) return;
+                try {
+                    await fetchPurchaseContext(
+                        source === "mapping" ? "" : window.currentDocumentResult?.extractedDocument?.supplierName || "",
+                    );
+                } catch {
+                    // The bridge will provide a precise error if master lookup is unavailable.
                 }
+                if (showFriendlyMissing()) return;
                 saveProfile();
+                if (typeof window.persistPurchaseHeader === "function") window.persistPurchaseHeader();
                 return originalSave.call(this, source);
             };
         }
@@ -300,15 +300,48 @@
         }, true);
     }
 
-    document.addEventListener("DOMContentLoaded", () => {
-        if (!window.location.pathname.endsWith("/document-import")) return;
+    function restoreMappingHeader() {
+        if (pageParams.get("view") !== "mapping") return;
+        const jobId = clean(pageParams.get("jobId"));
+        if (!jobId) return;
+        try {
+            if (typeof window.loadPurchaseHeader === "function" && typeof window.applyPurchaseHeader === "function") {
+                window.applyPurchaseHeader(window.loadPurchaseHeader(jobId));
+            }
+        } catch {
+            // Keep the mapping page usable even if storage is unavailable.
+        }
+    }
+
+    function initializePurchaseContext() {
+        if (initialized) return;
+        const isDocumentImport = window.location.pathname.endsWith("/document-import");
+        const isMappingView = pageParams.get("view") === "mapping";
+        if (!isDocumentImport && !isMappingView) return;
+        initialized = true;
+
         ensureSchemeField();
         installHooks();
+        restoreMappingHeader();
         document.getElementById("purchase-form")?.addEventListener("change", (event) => {
             if (fieldConfig.some((field) => field.persist && field.id === event.target?.id)) saveProfile();
+            if (isMappingView && typeof window.persistPurchaseHeader === "function") window.persistPurchaseHeader();
         });
-        void fetchPurchaseContext("").catch(() => {
+        void fetchPurchaseContext("").then(() => {
+            restoreMappingHeader();
+        }).catch(() => {
             // Keep the form usable; the bridge will report required master lookup failures.
         });
-    });
+    }
+
+    window.__purchaseContext = {
+        initialize: initializePurchaseContext,
+        refresh: fetchPurchaseContext,
+    };
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initializePurchaseContext, {once: true});
+    } else {
+        initializePurchaseContext();
+    }
 })();
