@@ -486,6 +486,17 @@
         return summary;
     }
 
+    async function savePendingMappingsForValidation(source) {
+        if (source !== "mapping") return true;
+        const submit = document.getElementById("submit-mappings");
+        if (!submit || submit.disabled || typeof window.saveMappings !== "function") return true;
+        setValidationUi(source, "pending", "Saving pending item mappings before Madhushala validation…");
+        const saved = await window.saveMappings();
+        if (saved) return true;
+        setValidationUi(source, "error", "Pending item mappings could not be saved. Purchase validation was not run.");
+        return false;
+    }
+
     async function validatePurchase(source = "review", {showSuccessToast = false} = {}) {
         ensureValidationControls();
         const jobId = purchaseJobId();
@@ -495,6 +506,8 @@
             if (typeof window.showToast === "function") window.showToast(message, "error");
             return false;
         }
+
+        if (!await savePendingMappingsForValidation(source)) return false;
 
         try {
             await fetchPurchaseContext(source === "mapping" ? "" : latestSupplierName);
