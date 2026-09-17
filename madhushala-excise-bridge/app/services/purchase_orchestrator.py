@@ -85,51 +85,107 @@ class PurchaseOrchestrator:
         ("ETD", "etd"),
     )
 
+    CALCULATION_ZERO_ITEM_FIELDS = (
+        "box",
+        "free",
+        "boxRate",
+        "looseRate",
+        "mrp",
+        "discount",
+        "cgst",
+        "sgst",
+        "cess",
+        "addCess",
+        "igst",
+        "t1Amt",
+        "t2Amt",
+        "t3Amt",
+        "t4Amt",
+        "etd",
+        "packing",
+        "t1Rate",
+        "t2Rate",
+        "t3Rate",
+        "t4Rate",
+    )
+
+    CALCULATION_OWNED_ITEM_FIELDS = (
+        "rate",
+        "mrp",
+        "itemAmount",
+        "discount",
+        "cgst",
+        "sgst",
+        "cess",
+        "addCess",
+        "igst",
+        "t1Amt",
+        "t2Amt",
+        "t3Amt",
+        "t4Amt",
+        "etd",
+    )
+
+    CALCULATION_ITEM_ALIASES = {
+        "qnty": ("qnty", "quantity", "qty"),
+        "rate": ("rate", "looseRate", "unitRate"),
+        "mrp": ("mrp", "itemMrp"),
+        "itemAmount": ("itemAmount", "amount", "lineAmount"),
+        "discount": ("discount", "discountAmount"),
+        "cgst": ("cgst", "cgstAmount"),
+        "sgst": ("sgst", "sgstAmount"),
+        "cess": ("cess", "cessAmount"),
+        "addCess": ("addCess", "adCess", "addCessAmount", "adCessAmount"),
+        "igst": ("igst", "igstAmount"),
+        "t1Amt": ("t1Amt", "t1Amount"),
+        "t2Amt": ("t2Amt", "t2Amount"),
+        "t3Amt": ("t3Amt", "t3Amount"),
+        "t4Amt": ("t4Amt", "t4Amount"),
+        "etd": ("etd", "etdAmount"),
+        "cgstInptLdgr": ("cgstInptLdgr", "cgstInputLedger"),
+        "sgstInptLdgr": ("sgstInptLdgr", "sgstInputLedger"),
+        "cessInptLdgr": ("cessInptLdgr", "cessInputLedger"),
+        "adCessInptLdgr": ("adCessInptLdgr", "addCessInptLdgr", "addCessInputLedger"),
+        "igstInptLdgr": ("igstInptLdgr", "igstInputLedger"),
+    }
+
+    CALCULATION_TOTAL_ALIASES = {
+        "grossAmount": ("grossAmount", "totalGrossPlus"),
+        "taxAmount": ("taxAmount", "totalTax", "totalTaxAmount"),
+        "netAmount": ("netAmount", "net"),
+        "discount": ("discount", "totalDiscount"),
+        "salesTaxOnMRP": ("salesTaxOnMRP",),
+        "roundOff": ("roundOff",),
+    }
+
     def build_calculation_request(self, payload: dict[str, Any], header: dict[str, Any]) -> dict[str, Any]:
-        """Build the exact PurchaseCalculationRequest shape from live Swagger."""
-        calc_items = []
+        """Build Madhushala's Calculate shape with only itemCode + bottle quantity populated.
+
+        Madhushala Calculate is authoritative for commercial/tax values. ASP.NET's
+        request DTO uses non-nullable numeric/boolean fields, so unused numeric
+        properties must be sent as zero (not JSON null) and the boolean as false.
+        ``loose`` carries the actual bottle quantity being purchased; all other
+        item calculation inputs stay at their DTO defaults.
+        """
+        calc_items: list[dict[str, Any]] = []
         for item in payload.get("items") or []:
-            calc_items.append({
-                "itemCode": item.get("itemCode", ""),
-                "box": _int_value(item.get("box")),
-                "loose": _int_value(item.get("loose")),
-                "free": _int_value(item.get("freeQnty")),
-                "boxRate": _money(item.get("boxRate") if item.get("boxRate") not in (None, "") else item.get("rate")),
-                "looseRate": _money(item.get("looseRate")),
-                "mrp": _money(item.get("mrp")),
-                "discount": _money(item.get("discount")),
-                "cgst": _money(item.get("cgst")),
-                "sgst": _money(item.get("sgst")),
-                "cess": _money(item.get("cess")),
-                "addCess": _money(item.get("addCess")),
-                "igst": _money(item.get("igst")),
-                "t1Amt": _money(item.get("t1Amt")),
-                "t2Amt": _money(item.get("t2Amt")),
-                "t3Amt": _money(item.get("t3Amt")),
-                "t4Amt": _money(item.get("t4Amt")),
-                "etd": _money(item.get("etd")),
-                "packing": _int_value(item.get("packing") or item.get("qnty")),
-                "t1Rate": _money(item.get("t1Rate")),
-                "t2Rate": _money(item.get("t2Rate")),
-                "t3Rate": _money(item.get("t3Rate")),
-                "t4Rate": _money(item.get("t4Rate")),
-            })
+            bottle_quantity = item.get("qnty")
+            if bottle_quantity in (None, ""):
+                bottle_quantity = item.get("loose")
+            calc_item = {
+                "itemCode": str(item.get("itemCode") or "").strip(),
+                "loose": _int_value(bottle_quantity),
+            }
+            for field in self.CALCULATION_ZERO_ITEM_FIELDS:
+                calc_item[field] = 0
+            calc_items.append(calc_item)
+
         return {
             "shopCode": payload["shopCode"],
             "companyCode": payload["companyCode"],
             "schemeCode": payload.get("schemeCode", ""),
-            "salesTaxRate": _money(
-                header.get("salesTaxRate")
-                if header.get("salesTaxRate") not in (None, "")
-                else settings.PURCHASE_DEFAULT_SALES_TAX_RATE
-            ),
-            "salesTaxIncludingFree": bool(
-                header.get("salesTaxIncludingFree")
-                if header.get("salesTaxIncludingFree") is not None
-                else header.get("saletaxIncludingFree")
-                if header.get("saletaxIncludingFree") is not None
-                else settings.PURCHASE_DEFAULT_SALES_TAX_INCLUDING_FREE
-            ),
+            "salesTaxRate": 0,
+            "salesTaxIncludingFree": False,
             "items": calc_items,
         }
 
@@ -150,25 +206,51 @@ class PurchaseOrchestrator:
                 return [item for item in items if isinstance(item, dict)]
         return []
 
+    def _reset_calculation_owned_values(self, payload: dict[str, Any]) -> None:
+        """Prevent Item Master/source-document financial values from leaking into Save.
+
+        Quantity identity remains intact, but fields Madhushala Calculate owns begin
+        at zero and are filled only from the Calculate response.
+        """
+        for item in payload.get("items") or []:
+            for field in self.CALCULATION_OWNED_ITEM_FIELDS:
+                item[field] = 0
+            for field in (
+                "cgstInptLdgr",
+                "sgstInptLdgr",
+                "cessInptLdgr",
+                "adCessInptLdgr",
+                "igstInptLdgr",
+            ):
+                item[field] = ""
+        for field in ("grossAmount", "taxAmount", "netAmount", "discount", "salesTaxOnMRP", "roundOff"):
+            payload[field] = 0
+
     def merge_calculation(self, payload: dict[str, Any], response: Any) -> None:
-        """Merge live Calculate output without assuming an undocumented wrapper."""
+        """Merge Madhushala Calculate output and treat it as the financial source of truth."""
         calculated = self._calculated_items(response)
-        by_code = {str(item.get("itemCode") or item.get("code") or "").strip(): item for item in calculated}
-        merge_fields = (
-            "qnty", "rate", "mrp", "itemAmount", "discount", "cgst", "sgst", "cess", "addCess", "igst",
-            "t1Amt", "t2Amt", "t3Amt", "t4Amt", "etd", "cgstInptLdgr", "sgstInptLdgr", "cessInptLdgr",
-            "adCessInptLdgr", "igstInptLdgr",
-        )
+        by_code = {
+            str(_dict_value(item, "itemCode", "code") or "").strip(): item
+            for item in calculated
+        }
+
         for index, item in enumerate(payload.get("items") or []):
-            calc = by_code.get(str(item.get("itemCode") or "").strip()) or (calculated[index] if index < len(calculated) else None)
+            calc = by_code.get(str(item.get("itemCode") or "").strip()) or (
+                calculated[index] if index < len(calculated) else None
+            )
             if not calc:
                 continue
-            for field in merge_fields:
-                value = calc.get(field)
-                if value is None and field == "addCess":
-                    value = calc.get("addcess") or calc.get("adCess")
-                if value is not None:
-                    item[field] = value if field.endswith("Ldgr") else _money(value)
+
+            for field, aliases in self.CALCULATION_ITEM_ALIASES.items():
+                value = _dict_value(calc, *aliases)
+                if value is None:
+                    continue
+                if field.endswith("Ldgr"):
+                    item[field] = str(value or "").strip()
+                elif field == "qnty":
+                    item[field] = _int_value(value)
+                else:
+                    item[field] = _money(value)
 
         candidates = [response] if isinstance(response, dict) else []
         if isinstance(response, dict):
@@ -176,13 +258,22 @@ class PurchaseOrchestrator:
                 nested = response.get(key)
                 if isinstance(nested, dict):
                     candidates.append(nested)
+
         for candidate in candidates:
-            for field in ("grossAmount", "taxAmount", "netAmount", "discount", "salesTaxOnMRP", "roundOff"):
-                value = candidate.get(field)
-                if value is None:
-                    value = candidate.get(field[:1].upper() + field[1:])
+            for field, aliases in self.CALCULATION_TOTAL_ALIASES.items():
+                value = _dict_value(candidate, *aliases)
                 if value is not None:
                     payload[field] = _money(value)
+
+            # Some Calculate responses expose the rounding components rather than
+            # a single roundOff property. Preserve Madhushala's values and only
+            # translate them into the Purchase Save field.
+            if _dict_value(candidate, "roundOff") is None:
+                rounding_plus = _dict_value(candidate, "roundingPlus")
+                rounding_minus = _dict_value(candidate, "roundingMinus")
+                if rounding_plus is not None or rounding_minus is not None:
+                    payload["roundOff"] = _money(_money(rounding_plus) - _money(rounding_minus))
+
             taxes = candidate.get("taxes") or candidate.get("Taxes")
             if isinstance(taxes, list):
                 payload["taxes"] = taxes
@@ -319,7 +410,6 @@ class PurchaseOrchestrator:
             if tax_mode not in {"ITEMWISE", "BILLWISE"}:
                 tax_mode = "ITEMWISE"
 
-            gross = _money(sum(_money(item.get("itemAmount")) for item in items))
             payload = {
                 "shopCode": str(session.get("shop_code") or "").strip(),
                 "companyCode": str(session.get("company_code") or "").strip(),
@@ -337,20 +427,17 @@ class PurchaseOrchestrator:
                 "billType": "AI",
                 "pType": "purchase",
                 "taxMode": tax_mode,
-                "grossAmount": _money(header.get("grossAmount") if header.get("grossAmount") is not None else gross),
-                "taxAmount": _money(header.get("taxAmount") or 0),
-                "netAmount": _money(header.get("netAmount") if header.get("netAmount") is not None else gross),
-                "discount": _money(header.get("discount") or 0),
-                "salesTaxOnMRP": _money(header.get("salesTaxOnMRP") or 0),
-                "roundOff": _money(header.get("roundOff") or 0),
-                "saletaxIncludingFree": bool(
-                    header.get("saletaxIncludingFree")
-                    if header.get("saletaxIncludingFree") is not None
-                    else settings.PURCHASE_DEFAULT_SALES_TAX_INCLUDING_FREE
-                ),
+                "grossAmount": 0,
+                "taxAmount": 0,
+                "netAmount": 0,
+                "discount": 0,
+                "salesTaxOnMRP": 0,
+                "roundOff": 0,
+                "saletaxIncludingFree": False,
                 "items": items,
                 "taxes": header.get("taxes") if isinstance(header.get("taxes"), list) else [],
             }
+            self._reset_calculation_owned_values(payload)
 
             tx = purchase_transaction_service.ensure(
                 job_id=job_id,
@@ -484,6 +571,16 @@ class PurchaseOrchestrator:
                 "trnNo": trn_no,
                 "purchasePayload": payload,
                 "calculation": calculation,
+                "calculationDebug": {
+                    "requestUrl": "/api/purchase/calculate",
+                    "requestHeaders": {
+                        "accept": "application/json",
+                        "Content-Type": "application/json",
+                        "Authorization": "[REDACTED]",
+                    },
+                    "request": calc_request,
+                    "response": calculation,
+                },
                 "duplicateCheck": duplicate_response,
                 "madhushalaResponse": response,
                 "transaction": purchase_transaction_service.get(job_id),
