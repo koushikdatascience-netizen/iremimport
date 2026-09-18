@@ -175,9 +175,9 @@ def test_pdf_and_image_normalization_keep_only_identity_and_quantity_for_purchas
 
         assert row.rawName == "100 PIPER 750 ML"
         assert row.ml == 750
-        assert row.quantity == 18.0
-        assert row.box is None
-        assert row.loose == 18
+        assert row.quantity == 8.0
+        assert row.box == 2
+        assert row.loose == 6
 
         # PDF/image commercial values are audit-only. The purchase path must
         # source them later from Madhushala Item Master, exactly like QR.
@@ -519,13 +519,15 @@ def test_up_excise_transport_pass_qr_exact_url_and_table_shape(client, monkeypat
     normalized = payload["normalizedItems"]
     assert normalized[0]["rawName"] == "ROYAL STAG PREMIER WHISKY"
     assert normalized[0]["ml"] == 750
-    assert normalized[0]["packing"] == 12
-    assert normalized[0]["quantity"] == 24.0
-    assert normalized[0]["box"] is None
+    assert normalized[0]["packing"] is None
+    assert normalized[0]["quantity"] == 26.0
+    assert normalized[0]["box"] == 2
     assert normalized[0]["loose"] == 24
     assert normalized[1]["rawName"] == "100 PIPERS DELUXE SCOTCH WHISKY"
     assert normalized[1]["ml"] == 180
-    assert normalized[1]["packing"] == 48
+    assert normalized[1]["packing"] is None
+    assert normalized[1]["box"] == 1
+    assert normalized[1]["loose"] == 48
 
     items = client.get(
         f"/api/v1/document-import/jobs/{payload['job']['id']}/items",
@@ -537,9 +539,9 @@ def test_up_excise_transport_pass_qr_exact_url_and_table_shape(client, monkeypat
     assert raw["transportPassNo"] == "WHOLESALE1501-FL2-RETAIL995782-FL4C-LUCK-Jun26_00000674"
     assert raw["transportPassType"] == "FG"
     assert raw["transportPassYear"] == "2026"
-    assert raw["box"] == 0
+    assert raw["box"] == 2
     assert raw["loose"] == 24
-    assert raw["quantity"] == 24
+    assert raw["quantity"] == 26
     assert raw["qnty"] == 24
     assert raw["bulkLitres"] == "18.00"
 
@@ -578,9 +580,9 @@ def test_up_excise_transport_pass_qr_reads_script_embedded_rows():
     assert len(normalized) == 1
     assert normalized[0].rawName == "Tenjaku Blended Whisky"
     assert normalized[0].ml == 700
-    assert normalized[0].packing == 12
-    assert normalized[0].quantity == 12.0
-    assert normalized[0].box is None
+    assert normalized[0].packing is None
+    assert normalized[0].quantity == 13.0
+    assert normalized[0].box == 1
     assert normalized[0].loose == 12
 
 def test_shop_cannot_read_other_shop_job(client, monkeypatch):
@@ -775,7 +777,8 @@ def test_pdf_upload_surfaces_missing_quantity_in_review_before_mapping(client, m
     payload = response.json()
     assert payload["job"]["status"] == "REVIEW_REQUIRED"
     assert payload["summary"]["needsAttention"] == 1
-    assert payload["reviewItems"][0]["quantity"] is None
+    assert payload["reviewItems"][0]["box"] == 0
+    assert payload["reviewItems"][0]["loose"] == 0
     assert payload["reviewItems"][0]["valid"] is False
     assert called["prepare"] is False
 
@@ -850,7 +853,8 @@ def test_review_confirm_persists_edits_then_starts_mapping(client, monkeypatch):
                     "name": "ROYAL STAG DELUXE WHISKY EDITED",
                     "brand": "ROYAL STAG",
                     "ml": 750,
-                    "quantity": 5,
+                    "box": 1,
+                    "loose": 5,
                 }
             ]
         },
@@ -860,15 +864,73 @@ def test_review_confirm_persists_edits_then_starts_mapping(client, monkeypatch):
     assert called["prepare"] == 1
     assert confirmed["job"]["status"] == "MAPPING_REQUIRED"
     assert confirmed["reviewItems"][0]["name"] == "ROYAL STAG DELUXE WHISKY EDITED"
-    assert confirmed["reviewItems"][0]["quantity"] == 5
+    assert confirmed["reviewItems"][0]["box"] == 1
+    assert confirmed["reviewItems"][0]["loose"] == 5
 
     items = client.get(
         f"/api/v1/document-import/jobs/{payload['job']['id']}/items",
         headers=auth(session),
     ).json()["items"]
     assert items[0]["raw_name"] == "ROYAL STAG DELUXE WHISKY EDITED"
-    assert items[0]["quantity"] == 5.0
+    assert items[0]["quantity"] == 6.0
+    assert items[0]["box"] == 1
+    assert items[0]["loose"] == 5
     raw = json.loads(items[0]["raw_data_json"])
-    assert raw["quantity"] == 5
+    assert raw["quantity"] == 6
     assert raw["loose"] == 5
-    assert raw["box"] == 0
+    assert raw["box"] == 1
+
+
+def test_pymupdf_state_adapters_emit_canonical_box_loose():
+    from app.modules.document_import.pdf_extractor import (
+        _extract_jharkhand,
+        _extract_telangana,
+        _extract_west_bengal,
+    )
+
+    telangana_rows = [[
+        "1", "5016", "", "KING FISHER PREMIUM LAGER BEER", "", "Beer", "G",
+        "12 / 650 ml", "7", "", "3", "1,501.00 / 125.08", "", "10,507.00",
+    ]]
+    products, _, _ = _extract_telangana(
+        "GOVERNMENT OF TELANGANA\nICDC001160126020077\nInvoice Date: 16-Jan-2026",
+        [(1, "GOVERNMENT OF TELANGANA ORIGINAL", [telangana_rows])],
+    )
+    assert len(products) == 1
+    assert products[0].ml == 650
+    assert products[0].box == 7
+    assert products[0].loose == 3
+
+    jharkhand_rows = [[
+        "Comodity Group", "Kind Of Intoxicant", "Label Name", "Unit",
+        "Physical Qty", "StockQty", "Qty", "Strength", "LPL", "BL",
+    ], [
+        "1", "whisky", "ROYAL STAG DELUXE WHISKY", "750ML",
+        "0", "754", "2.00", "9.00-BL", "", "1498.24",
+    ]]
+    products, _, _ = _extract_jharkhand(
+        "Government Of Jharkhand\nExcise Permit No: DHA-2026-2027/6267\nIssued Date 01/09/2026",
+        [(2, "INVOICE DETAIL", [jharkhand_rows])],
+    )
+    assert len(products) == 1
+    assert products[0].box == 2
+    assert products[0].loose == 0
+
+    wb_rows = [
+        [
+            "Kind of Foreign Liquor(IMFL/OSBI/OS)", "Category", "Brand Name", "Measure",
+            "Strength", "Batch No. & Date", "Quantity", "", "", "", "Amount",
+        ],
+        ["", "", "", "", "", "", "In Cases", "In Bottles", "In B.L", "In LPL", ""],
+        [
+            "IMFL", "Whisky", "MCDOWELLS NO 1 LUXURY WHISKY", "180 Ml.",
+            "25 Under Proof", "265-1 & July,2026", "3 - 0", "144", "25.92", "19.44", "16848.00",
+        ],
+    ]
+    products, _, _ = _extract_west_bengal(
+        "ORIGINAL\nWest Bengal Excise Foreign Liquor Form No 3\nTransport Pass No. : tFLDR/2026-2027/07015578/P\nDate : 17/08/2026",
+        [(1, "ORIGINAL", [wb_rows])],
+    )
+    assert len(products) == 1
+    assert products[0].box == 3
+    assert products[0].loose == 144
