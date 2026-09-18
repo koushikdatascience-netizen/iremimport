@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from app.db import conn, now_iso
 from app.modules.document_import.purchase_contract import ItemMasterCalculateClient, load_item_master_details
-from app.modules.document_import.quantity import extract_physical_quantity
+from app.modules.document_import.quantity import resolve_document_quantity
 from app.services.purchase_orchestrator import purchase_orchestrator
 from app.services.reference_data_service import reference_data_service
 
@@ -144,7 +144,7 @@ class DocumentPurchaseAdapter:
                 # QR bottle totals: document identity + one physical unit count.
                 # Mapping must never change that count.
                 persisted_qnty = _int_value(row["quantity"])
-                recovered_qnty = extract_physical_quantity(raw)
+                recovered_qnty = resolve_document_quantity(raw)
                 document_qnty = persisted_qnty or recovered_qnty
 
                 # Self-heal older/current jobs that were extracted correctly but

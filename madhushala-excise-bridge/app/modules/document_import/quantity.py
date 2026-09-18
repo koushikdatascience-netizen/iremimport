@@ -121,3 +121,41 @@ def extract_physical_quantity(value: Any) -> int:
                 return parsed
 
     return 0
+
+
+def resolve_document_quantity(value: Any) -> int:
+    """Resolve canonical physical quantity for a PDF/image extraction row.
+
+    First use explicitly named quantity fields. Then repair the specific
+    LlamaParse continuation-page column shift seen on scanned invoices where:
+      - sourcePage > 1
+      - quantity/loose/box are missing
+      - packing contains a small positive count
+      - commercial columns (rate/boxRate/looseRate/mrp/discount) are empty
+
+    The guarded fallback intentionally does *not* treat packing as quantity in
+    ordinary rows, because real case packing must come from Item Master later.
+    """
+    explicit = extract_physical_quantity(value)
+    if explicit > 0:
+        return explicit
+    if not isinstance(value, dict):
+        return 0
+
+    source_page = _positive_int(value.get("sourcePage"))
+    packing = _positive_int(value.get("packing"))
+    if source_page < 2 or packing <= 0:
+        return 0
+
+    for key in ("quantity", "qty", "qnty", "loose", "box"):
+        if _positive_int(value.get(key)) > 0:
+            return 0
+
+    commercial_fields = ("rate", "boxRate", "looseRate", "mrp", "discount")
+    if any(value.get(key) not in (None, "") for key in commercial_fields):
+        return 0
+
+    # A continuation-page physical count can be larger than a normal case
+    # packing, so avoid an artificially tiny threshold. The surrounding
+    # signature is the safety condition.
+    return packing

@@ -355,6 +355,24 @@ class DocumentImportService:
                 self._update_job(job_id, status="FAILED", error="No valid product rows were extracted")
                 raise HTTPException(status_code=422, detail="No valid product rows were extracted")
 
+            # Quantity validation belongs to extraction/normalization, before
+            # persistence and before any Excise/Madhushala mapping. A document
+            # job is not allowed to become READY with an unknown physical count.
+            if source_type in {"DOCUMENT_PDF", "DOCUMENT_IMAGE"}:
+                missing_quantity = [
+                    item.rawName
+                    for item in normalized
+                    if not item.quantity or float(item.quantity) <= 0
+                ]
+                if missing_quantity:
+                    detail = (
+                        "Extraction could not determine a positive physical quantity for: "
+                        + ", ".join(missing_quantity[:5])
+                        + ". Please correct/re-upload the source document before mapping."
+                    )
+                    self._update_job(job_id, status="FAILED", error=detail)
+                    raise HTTPException(status_code=422, detail=detail)
+
             self._persist_items(job_id, normalized)
             self._update_job(job_id, status="CHECKING_MAPPING", extracted_count=len(normalized))
             await self.mapping_service.prepare_document_job(session, job_id)

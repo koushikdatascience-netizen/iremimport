@@ -646,3 +646,127 @@ def test_pdf_normalization_accepts_generic_physical_stock_bottle_field():
     assert rows[0].quantity == 18.0
     assert rows[0].loose == 18
     assert rows[0].box is None
+
+
+def test_pdf_continuation_page_repairs_llamaparse_packing_quantity_shift():
+    document = ExtractedDocument(
+        documentType="invoice",
+        items=[
+            ExtractedProduct(
+                itemName="JOHNNIE WALKER RED LABEL BLENDED SCOTCH WHISKY",
+                brand="JOHNNIE WALKER",
+                ml="750 ML",
+                packing=1,
+                quantity=None,
+                box=None,
+                loose=None,
+                rate=None,
+                boxRate=None,
+                looseRate=None,
+                mrp=None,
+                discount=None,
+                amount=12584.22,
+                **{"sourcePage": 2},
+            ),
+            ExtractedProduct(
+                itemName="STERLING RESERVE B7 ORIGINAL BLENDED WHISKY",
+                brand="STERLING RESERVE",
+                ml="375 ML",
+                packing=4,
+                quantity=None,
+                box=None,
+                loose=None,
+                rate=None,
+                boxRate=None,
+                looseRate=None,
+                mrp=None,
+                discount=None,
+                amount=12697.11,
+                **{"sourcePage": 2},
+            ),
+        ],
+    )
+
+    rows = normalize_extracted_document(document, "DOCUMENT_PDF")
+    assert rows[0].quantity == 1.0
+    assert rows[0].loose == 1
+    assert rows[1].quantity == 4.0
+    assert rows[1].loose == 4
+    # Extracted packing remains audit-only; Madhushala Item Master supplies
+    # real packing later.
+    assert rows[0].packing is None
+    assert rows[1].packing is None
+
+
+def test_pdf_first_page_real_packing_is_not_mistaken_for_quantity():
+    document = ExtractedDocument(
+        documentType="invoice",
+        items=[
+            ExtractedProduct(
+                itemName="SOME WHISKY 180 ML",
+                brand="SOME WHISKY",
+                ml=180,
+                packing=48,
+                quantity=None,
+                rate=None,
+                boxRate=None,
+                looseRate=None,
+                mrp=None,
+                discount=None,
+                **{"sourcePage": 1},
+            )
+        ],
+    )
+
+    rows = normalize_extracted_document(document, "DOCUMENT_PDF")
+    assert rows[0].quantity is None
+    assert rows[0].loose is None
+
+
+def test_pdf_upload_fails_during_extraction_when_quantity_still_missing(client, monkeypatch):
+    from app.main import document_import_service
+    from app.modules.document_import import service as service_module
+
+    def fake_local_extract(_path):
+        return None, {
+            "engine": "pymupdf",
+            "usable": False,
+            "reason": "insufficient_text_layer",
+        }
+
+    async def fake_scanned_pages(self, temp_path, filename):
+        return ExtractedDocument(
+            documentType="invoice",
+            supplierName="Supplier",
+            items=[
+                ExtractedProduct(
+                    itemName="UNRESOLVED WHISKY 750 ML",
+                    brand="UNRESOLVED",
+                    ml=750,
+                    packing=12,
+                    quantity=None,
+                    **{"sourcePage": 1},
+                )
+            ],
+        )
+
+    called = {"prepare": False}
+
+    async def should_not_prepare(*_args, **_kwargs):
+        called["prepare"] = True
+        raise AssertionError("Mapping must not run when extraction quantity is missing")
+
+    monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local_extract)
+    monkeypatch.setattr(service_module.LlamaCloudClient, "extract_scanned_pdf_pages", fake_scanned_pages)
+    monkeypatch.setattr(document_import_service.mapping_service, "prepare_document_job", should_not_prepare)
+
+    session = create_session(client)
+    response = client.post(
+        "/api/v1/document-import/upload/pdf",
+        headers=auth(session),
+        files={"file": ("missing-qty.pdf", b"%PDF-1.4 missing-qty", "application/pdf")},
+    )
+
+    assert response.status_code == 422
+    assert "Extraction could not determine a positive physical quantity" in response.json()["detail"]
+    assert called["prepare"] is False

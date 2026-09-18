@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.services.normalizer import normalize_brand, parse_decimal, parse_int, parse_ml
-from app.modules.document_import.quantity import extract_physical_quantity
+from app.modules.document_import.quantity import resolve_document_quantity
 from app.modules.document_import.schemas import ExtractedDocument, NormalizedImportItem
 
 
@@ -53,7 +53,7 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
             physical_quantity = (
                 parse_int(item.quantity)
                 or parse_int(item.loose)
-                or extract_physical_quantity(raw)
+                or resolve_document_quantity(raw)
                 or None
             )
             items.append(
