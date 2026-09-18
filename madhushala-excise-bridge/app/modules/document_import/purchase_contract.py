@@ -145,7 +145,7 @@ def build_item_master_calculation_request(
                 "boxRate": box_rate,
                 "looseRate": loose_rate,
                 "mrp": mrp,
-                "discount": None,
+                "discount": 0.0,
                 "cgst": _money(_dict_value(master, "cgst", "cgstAmount")),
                 "sgst": _money(_dict_value(master, "sgst", "sgstAmount")),
                 "cess": _money(_dict_value(master, "cess", "cessAmount")),
