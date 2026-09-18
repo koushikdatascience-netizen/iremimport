@@ -39,9 +39,12 @@ async def test_purchase_item_lookup_prefers_full_item_master_over_dropdown_summa
             return detail
 
     monkeypatch.setattr(service, "client_for_session", lambda _session: Client())
+    async def _set_json(*args, **kwargs):
+        return None
+
     monkeypatch.setattr(
         "app.services.reference_data_service.cache_service.set_json",
-        lambda *args, **kwargs: None,
+        _set_json,
     )
 
     result = await service.item(session, "100003", [dropdown])
