@@ -511,6 +511,7 @@ def _document_from_payload(
             "packing",
             "quantity",
             "box",
+            "loose",
             "confidence",
         }
         extras = {key: value for key, value in raw.items() if key not in excluded}
