@@ -593,3 +593,30 @@ def test_shop_cannot_read_other_shop_job(client, monkeypatch):
     job_id = service._create_job(row_a, "DOCUMENT_PDF", "a.pdf")
     with pytest.raises(HTTPException):
         service.get_job(row_b, job_id)
+
+
+def test_pdf_normalization_promotes_nested_physical_qty_to_loose_quantity():
+    document = ExtractedDocument(
+        documentType="invoice",
+        items=[
+            ExtractedProduct(
+                itemName="ROYAL STAG 180ML",
+                brand="ROYAL STAG 180ML",
+                ml=180,
+                quantity=None,
+                **{
+                    "rawPdfRow": {
+                        "Brand Name": "ROYAL STAG 180ML",
+                        "Physical Qty": "36",
+                    }
+                },
+            )
+        ],
+    )
+
+    rows = normalize_extracted_document(document, "DOCUMENT_PDF")
+    assert len(rows) == 1
+    assert rows[0].rawName == "ROYAL STAG 180ML"
+    assert rows[0].quantity == 36.0
+    assert rows[0].loose == 36
+    assert rows[0].rawData["rawPdfRow"]["Physical Qty"] == "36"

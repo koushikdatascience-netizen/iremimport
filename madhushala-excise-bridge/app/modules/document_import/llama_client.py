@@ -71,8 +71,11 @@ PRODUCT_SCHEMA: dict[str, Any] = {
 EXTRACTION_PROMPT = (
     "Extract the document header and liquor/product rows accurately. At document level prioritize "
     "supplierName, invoiceNumber/document or permit number, and invoiceDate/document date. For each "
-    "product row preserve the original itemName and capture the physical bottle/unit quantity in "
-    "quantity. Capture ML/size when clearly visible or present in the product name. Do not convert "
+    "product row preserve the original itemName/brand and ALWAYS capture the visible physical "
+    "bottle/unit count in the quantity field. Treat labels such as Physical Qty, Physical Quantity, "
+    "Qty, Quantity, Bottles, Bottle Qty, and No. of Bottles as the product quantity. Never leave "
+    "quantity null when one of those values is visible. Capture ML/size when clearly visible or "
+    "present in the product name. Do not convert "
     "physical quantity into cases and do not infer commercial values. Other clearly visible row fields "
     "may be extracted for audit/review, but they are not purchase inputs. Use null when a value is "
     "missing or uncertain. Do not hallucinate. Ignore totals, summary rows and page headers as products."

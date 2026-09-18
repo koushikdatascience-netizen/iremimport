@@ -630,3 +630,96 @@ async def test_pdf_purchase_blocks_save_when_extracted_quantity_is_missing(monke
     assert exc_info.value.status_code == 422
     assert "positive bottle quantity" in str(exc_info.value.detail)
     db.close()
+
+
+@pytest.mark.asyncio
+async def test_pdf_purchase_recovers_nested_physical_qty_and_keeps_extracted_name_without_master_discount(monkeypatch):
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript(
+        """
+        CREATE TABLE import_items (
+          id TEXT, job_id TEXT, raw_name TEXT, normalized_name TEXT,
+          packing INTEGER, quantity REAL, rate REAL, mrp REAL, amount REAL,
+          mapped_item_code TEXT, excise_item_code TEXT, raw_data_json TEXT,
+          created_at TEXT
+        );
+        CREATE TABLE mappings (
+          shop_code TEXT, excise_item_code TEXT, madhushala_item_code TEXT
+        );
+        """
+    )
+    db.execute(
+        "INSERT INTO import_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "row-physical",
+            "job-physical",
+            "SIGNATURE 180",
+            "SIGNATURE 180",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "S00017",
+            "",
+            json.dumps({
+                "brand": "SIGNATURE 180",
+                "ml": 180,
+                "rawPdfRow": {
+                    "Brand Name": "SIGNATURE 180",
+                    "Physical Qty": "24",
+                },
+            }),
+            "2026-09-18",
+        ),
+    )
+    db.commit()
+
+    @contextmanager
+    def fake_conn():
+        try:
+            yield db
+            db.commit()
+        finally:
+            pass
+
+    monkeypatch.setattr(adapter_module, "conn", fake_conn)
+
+    async def fake_items(_session, _codes):
+        return {
+            "S00017": {
+                "itemCode": "S00017",
+                "itemName": "SIGNATURE RARE AGED 180ML",
+                "packing": 48,
+                "purchaseRate": 87.39,
+                "purchaseRateCase": 0,
+                "salesRate": 290,
+                "purchaseDiscountAmount": 999,
+                "etd": 7406.64,
+            }
+        }
+
+    monkeypatch.setattr(reference_data_service, "items", fake_items)
+
+    class FakeDocumentService:
+        def get_job(self, _session, _job_id):
+            return {"source_type": "DOCUMENT_PDF"}
+
+    result = await DocumentPurchaseAdapter(FakeDocumentService()).purchase_items(
+        {"shop_code": "hedu_test2"},
+        "job-physical",
+    )
+
+    item = result[0]
+    assert item["itemName"] == "SIGNATURE 180"
+    assert item["itemCode"] == "S00017"
+    assert item["box"] == 0
+    assert item["loose"] == 24
+    assert item["qnty"] == 24
+    assert item["packing"] == 48
+    assert item["rate"] == 87.39
+    assert item["mrp"] == 290.0
+    assert item["etd"] == 7406.64
+    assert item["discount"] == 0.0
+    db.close()

@@ -46,6 +46,53 @@ def _dict_value(row: dict[str, Any] | None, *aliases: str) -> Any:
     return None
 
 
+DOCUMENT_QUANTITY_KEYS = {
+    "quantity",
+    "qty",
+    "qnty",
+    "physicalqty",
+    "physicalquantity",
+    "physicalbottleqty",
+    "physicalbottlequantity",
+    "bottleqty",
+    "bottlequantity",
+    "bottles",
+    "noofbottles",
+    "noofbottlesdispatched",
+    "bottlesdispatched",
+    "noofbottlesrequested",
+    "bottlesrequested",
+    "totalbottles",
+    "totalqty",
+    "totalquantity",
+    "dispatchqty",
+    "dispatchedqty",
+    "issuedqty",
+}
+
+
+def _raw_document_quantity(value: Any) -> int:
+    """Find a positive physical bottle/unit quantity anywhere in raw extraction data."""
+    if isinstance(value, dict):
+        # Prefer explicitly named quantity fields at the current level.
+        for name, candidate in value.items():
+            if _key(name) in DOCUMENT_QUANTITY_KEYS:
+                parsed = _int_value(candidate)
+                if parsed > 0:
+                    return parsed
+        # Then inspect nested extractor/table payloads such as rawPdfRow.
+        for candidate in value.values():
+            parsed = _raw_document_quantity(candidate)
+            if parsed > 0:
+                return parsed
+    elif isinstance(value, list):
+        for candidate in value:
+            parsed = _raw_document_quantity(candidate)
+            if parsed > 0:
+                return parsed
+    return 0
+
+
 class DocumentPurchaseAdapter:
     """Translate a mapped import job into Madhushala Purchase inputs.
 
@@ -140,8 +187,13 @@ class DocumentPurchaseAdapter:
             document_qnty = raw_int(
                 "qnty",
                 "qty",
+                "physicalQty",
+                "physicalQuantity",
+                "bottleQty",
+                "bottleQuantity",
                 "totalQty",
                 "totalQuantity",
+                "No of Bottles",
                 "No of Bottles Dispatched",
                 "Bottles Dispatched",
                 "No of Bottles Requested",
@@ -149,11 +201,16 @@ class DocumentPurchaseAdapter:
                 fallback=row["quantity"],
             )
 
-            # PDF/image normalization already persists the trusted physical
-            # quantity in import_items.quantity. Prefer that normalized value
-            # over raw extractor field names, which vary between documents.
+            # PDF/image normalization persists the trusted physical quantity in
+            # import_items.quantity. Older/current jobs can still have it only
+            # inside raw extraction JSON (for example rawPdfRow -> Physical Qty),
+            # so recover it recursively before rejecting the row.
             if is_document_upload:
-                document_qnty = _int_value(row["quantity"]) or document_qnty
+                document_qnty = (
+                    _int_value(row["quantity"])
+                    or _raw_document_quantity(raw)
+                    or document_qnty
+                )
 
             # Manual/non-document sources may preserve a valid case/loose shape.
             # QR, PDF and image imports are quantity-only sources for Purchase:
@@ -212,12 +269,21 @@ class DocumentPurchaseAdapter:
             elif rate and qnty:
                 amount = _money(rate * qnty)
 
-            item_name = str(
-                _dict_value(master, "itemName", "name", "label", "text")
+            extracted_name = str(
+                row["raw_name"]
                 or row["normalized_name"]
-                or row["raw_name"]
+                or raw_value("brand", "itemName", "labelName", "productName")
+                or ""
+            ).strip()
+            master_name = str(
+                _dict_value(master, "itemName", "name", "label", "text")
                 or mapped
             ).strip()
+
+            # For uploaded documents, preserve the brand/item identity exactly
+            # as extracted from the source document. Mapping contributes the
+            # Madhushala itemCode and all commercial/master values.
+            item_name = extracted_name if is_document_upload and extracted_name else master_name
 
             if is_document_upload and qnty <= 0:
                 missing_document_quantities.append(item_name)
@@ -235,7 +301,10 @@ class DocumentPurchaseAdapter:
                 "looseRate": loose_rate,
                 "mrp": mrp,
                 "itemAmount": amount,
-                "discount": _money(_dict_value(master, "purchaseDiscountAmount", "purchaseDiscount", "discountAmount", "discount")),
+                # Document Purchase never imports Item Master discount. The
+                # Calculate request also sends discount=0 and Madhushala remains
+                # authoritative for any calculation-time adjustments.
+                "discount": 0.0,
                 "cgst": _money(_dict_value(master, "cgst", "cgstAmount")),
                 "sgst": _money(_dict_value(master, "sgst", "sgstAmount")),
                 "cess": _money(_dict_value(master, "cess", "cessAmount")),
