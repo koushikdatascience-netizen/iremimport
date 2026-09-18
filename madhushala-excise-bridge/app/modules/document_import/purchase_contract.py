@@ -64,14 +64,13 @@ def _commercial_values(master: dict[str, Any]) -> tuple[float, float, float, int
     # Match the real Madhushala Purchase screen contract.
     #
     # boxRate   <- itemmst.purchaseRateCase
-    # looseRate <- itemmst.purchaseRate when non-zero, otherwise
-    #              purchaseRateCase / packing
+    # looseRate <- itemmst.purchaseRate when non-zero; otherwise use
+    #              itemmst.purchaseRateCase exactly as supplied.
     # mrp       <- itemmst.salesRate (legacy aliases retained for compatibility)
     packing = _int_value(_dict_value(master, "packing", "bottlePerCase", "bottlesPerCase", "caseQty"))
-    loose_rate = _money(_dict_value(master, "purchaseRate"))
+    purchase_rate = _money(_dict_value(master, "purchaseRate"))
     box_rate = _money(_dict_value(master, "purchaseRateCase"))
-    if not loose_rate and box_rate and packing:
-        loose_rate = _money(box_rate / packing)
+    loose_rate = purchase_rate if purchase_rate else box_rate
     mrp = _money(_dict_value(master, "salesRate", "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
     return loose_rate, box_rate, mrp, packing
 
