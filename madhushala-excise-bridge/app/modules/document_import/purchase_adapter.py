@@ -184,22 +184,17 @@ class DocumentPurchaseAdapter:
 
             qnty = document_qnty or ((box * packing + loose) if packing else (box + loose))
 
-            # Commercial values are seeded from Item Master. Calculate remains
-            # authoritative for the final amounts that are merged into Save.
-            purchase_rate = _money(
-                _dict_value(master, "purchaseRate", "purchaseRateLoose", "looseRate", "rate", "itemRate")
-            )
-            purchase_case_rate = _money(
-                _dict_value(master, "purchaseRateCase", "boxRate", "caseRate", "purchaseCaseRate")
-            )
-            if not purchase_rate and purchase_case_rate and packing:
-                purchase_rate = _money(purchase_case_rate / packing)
-            if not purchase_case_rate and purchase_rate and packing:
-                purchase_case_rate = _money(purchase_rate * packing)
-            loose_rate = purchase_rate
+            # Mirror the exact Madhushala Calculate contract used below:
+            #   boxRate   <- itemmst.purchaseRateCase
+            #   looseRate <- itemmst.purchaseRate when non-zero, otherwise
+            #                itemmst.purchaseRateCase directly (no division).
+            #   mrp       <- itemmst.salesRate
+            purchase_rate = _money(_dict_value(master, "purchaseRate"))
+            purchase_case_rate = _money(_dict_value(master, "purchaseRateCase"))
+            loose_rate = purchase_rate if purchase_rate else purchase_case_rate
             box_rate = purchase_case_rate
-            rate = purchase_rate or box_rate
-            mrp = _money(_dict_value(master, "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
+            rate = loose_rate or box_rate
+            mrp = _money(_dict_value(master, "salesRate", "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
 
             amount = 0.0
             if box_rate and (box or loose):
@@ -233,10 +228,10 @@ class DocumentPurchaseAdapter:
                 "cess": _money(_dict_value(master, "cess", "cessAmount")),
                 "addCess": _money(_dict_value(master, "addCess", "adCess", "addCessAmount", "adCessAmount")),
                 "igst": _money(_dict_value(master, "igst", "igstAmount")),
-                "t1Amt": _money(_dict_value(master, "t1Amt", "t1Amount", "t1")),
-                "t2Amt": _money(_dict_value(master, "t2Amt", "t2Amount", "t2")),
-                "t3Amt": _money(_dict_value(master, "t3Amt", "t3Amount", "t3")),
-                "t4Amt": _money(_dict_value(master, "t4Amt", "t4Amount", "t4")),
+                "t1Amt": _money(_dict_value(master, "vat", "t1Amt", "t1Amount", "t1")),
+                "t2Amt": _money(_dict_value(master, "tcs", "t2Amt", "t2Amount", "t2")),
+                "t3Amt": _money(_dict_value(master, "tp", "t3Amt", "t3Amount", "t3")),
+                "t4Amt": _money(_dict_value(master, "others", "t4Amt", "t4Amount", "t4")),
                 "etd": _money(_dict_value(master, "etd", "etdAmount")),
                 "cgstInptLdgr": "",
                 "sgstInptLdgr": "",
