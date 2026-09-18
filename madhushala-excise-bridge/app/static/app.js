@@ -24,6 +24,8 @@ let currentDocumentFile = null;
 let currentDocumentResult = null;
 let currentPreviewUrl = "";
 let currentUploadKind = "pdf";
+let currentReviewItems = [];
+let currentSourceUrl = "";
 let mappingRefreshTimer = null;
 let mappingRefreshInFlight = false;
 const DEFAULT_EXCISE_LOGIN_URL = "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx";
@@ -222,34 +224,17 @@ async function extractQrUrl(qrUrl) {
 
 function renderQrReview(payload) {
     currentUploadKind = "qr";
-    if (payload?.job) {
-        renderDocumentReview(payload);
-        currentUploadKind = "qr";
-        const summary = payload.summary || {};
-        const detected = summary.detected || 0;
-        const recognized = summary.recognized || 0;
-        const needMapping = summary.needMapping || 0;
-        setText(document.getElementById("document-action-summary"), `${detected} QR HTML items extracted | ${recognized} recognized | ${needMapping} require mapping`);
-        setText(document.getElementById("continue-document-mapping"), "Map QR Items");
-        setInputValue("purchase-doc-no", payload.extractedDocument?.invoiceNumber || "");
-        setInputValue("purchase-doc-date", payload.extractedDocument?.invoiceDate || "");
-        setInputValue("purchase-narration", "QR HTML import");
-        setDocumentImportState("review");
-        return;
+    if (!payload?.job) {
+        throw new Error("QR extraction did not create a reviewable import job.");
     }
-    currentDocumentResult = payload;
-    currentDocumentJobId = "";
-    setText(document.getElementById("metric-detected"), "1");
-    setText(document.getElementById("metric-recognized"), "0");
-    setText(document.getElementById("metric-unmapped"), "0");
-    setText(document.getElementById("document-action-summary"), `QR link opened: ${payload.finalUrl || payload.url || "extracted"}`);
-    setHidden(document.getElementById("purchase-form"), true);
-    setHidden(document.getElementById("save-purchase"), true);
-    setHidden(document.getElementById("continue-document-mapping"), true);
-    setText(document.getElementById("document-json"), JSON.stringify(payload, null, 2));
+    renderDocumentReview(payload);
+    currentUploadKind = "qr";
+    renderReviewSource(payload);
+    setInputValue("purchase-doc-no", payload.extractedDocument?.invoiceNumber || "");
+    setInputValue("purchase-doc-date", payload.extractedDocument?.invoiceDate || "");
+    setInputValue("purchase-narration", "QR HTML import");
     setDocumentImportState("review");
 }
-
 async function uploadQr(file) {
     if (!sessionToken) {
         setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
@@ -854,43 +839,163 @@ function renderDocumentPreview(file) {
     setText(document.getElementById("review-filesize"), formatBytes(file.size));
 }
 
+function safeSourceUrl(value) {
+    try {
+        const parsed = new URL(String(value || ""));
+        return ["http:", "https:"].includes(parsed.protocol) ? parsed.href : "";
+    } catch {
+        return "";
+    }
+}
+
+function reviewItemsFromPayload(payload) {
+    const review = Array.isArray(payload?.reviewItems) ? payload.reviewItems : [];
+    if (review.length) {
+        return review.map((item) => ({
+            id: String(item.id || ""),
+            name: String(item.name || ""),
+            brand: String(item.brand || item.name || ""),
+            ml: item.ml ?? "",
+            quantity: item.quantity ?? "",
+            issues: Array.isArray(item.issues) ? item.issues : [],
+        }));
+    }
+    return (payload?.normalizedItems || []).map((item, index) => ({
+        id: String(item.id || item.sourceItemId || ("review-" + (index + 1))),
+        name: String(item.rawName || item.itemName || ""),
+        brand: String(item.brand || item.rawName || item.itemName || ""),
+        ml: item.ml ?? "",
+        quantity: item.quantity ?? item.loose ?? "",
+        issues: [],
+    }));
+}
+
+function validateReviewItem(item) {
+    const issues = [];
+    const name = String(item.name || "").trim();
+    const brand = String(item.brand || "").trim();
+    const ml = Number(item.ml);
+    const quantity = Number(item.quantity);
+    if (!name) issues.push("Name is required");
+    if (!brand) issues.push("Brand is required");
+    if (!Number.isInteger(ml) || ml <= 0) issues.push("ML must be a positive whole number");
+    if (!Number.isInteger(quantity) || quantity <= 0) issues.push("Quantity must be a positive whole number");
+    return issues;
+}
+
+function collectReviewItems() {
+    const rows = document.querySelectorAll("#document-items-table-body tr[data-review-id]");
+    return Array.from(rows).map((row) => ({
+        id: row.dataset.reviewId || "",
+        name: row.querySelector('[data-field="name"]')?.value || "",
+        brand: row.querySelector('[data-field="brand"]')?.value || "",
+        ml: row.querySelector('[data-field="ml"]')?.value || "",
+        quantity: row.querySelector('[data-field="quantity"]')?.value || "",
+    }));
+}
+
+function updateReviewValidation() {
+    const items = collectReviewItems();
+    let invalid = 0;
+    document.querySelectorAll("#document-items-table-body tr[data-review-id]").forEach((row, index) => {
+        const issues = validateReviewItem(items[index] || {});
+        row.classList.toggle("invalid-row", issues.length > 0);
+        const target = row.querySelector(".document-row-issues");
+        if (target) target.textContent = issues.join(" • ");
+        if (issues.length) invalid += 1;
+    });
+    const valid = Math.max(0, items.length - invalid);
+    setText(document.getElementById("metric-detected"), String(items.length));
+    setText(document.getElementById("metric-recognized"), String(valid));
+    setText(document.getElementById("metric-unmapped"), String(invalid));
+
+    const message = document.getElementById("document-review-validation");
+    if (message) {
+        message.textContent = invalid
+            ? (invalid + " row" + (invalid === 1 ? "" : "s") + " need correction before mapping.")
+            : "All extracted rows are valid. You can continue to mapping.";
+        message.className = "document-review-validation " + (invalid ? "error" : "ok");
+    }
+    const continueButton = document.getElementById("continue-document-mapping");
+    if (continueButton) continueButton.disabled = Boolean(invalid || !items.length);
+    return {items, invalid};
+}
+
+function renderReviewTable(items) {
+    currentReviewItems = items;
+    const tbody = document.getElementById("document-items-table-body");
+    if (!tbody) return;
+    tbody.innerHTML = items.map((item) => {
+        const initialIssues = validateReviewItem(item);
+        return '<tr data-review-id="' + escapeHtml(item.id) + '" class="' + (initialIssues.length ? "invalid-row" : "") + '">' +
+            '<td class="name-cell"><input data-field="name" type="text" value="' + escapeHtml(item.name) + '" maxlength="300" aria-label="Product name"><span class="document-row-issues">' + escapeHtml(initialIssues.join(" • ")) + '</span></td>' +
+            '<td class="brand-cell"><input data-field="brand" type="text" value="' + escapeHtml(item.brand) + '" maxlength="300" aria-label="Brand"></td>' +
+            '<td class="number-cell"><input data-field="ml" type="number" min="1" step="1" value="' + escapeHtml(item.ml) + '" aria-label="ML"></td>' +
+            '<td class="number-cell"><input data-field="quantity" type="number" min="1" step="1" value="' + escapeHtml(item.quantity) + '" aria-label="Quantity"></td>' +
+            '</tr>';
+    }).join("");
+    updateReviewValidation();
+}
+
+function renderReviewSource(payload) {
+    currentSourceUrl = safeSourceUrl(payload?.finalUrl || payload?.url || "");
+    const panel = document.getElementById("review-source-panel");
+    const link = document.getElementById("review-source-link");
+    setHidden(panel, !currentSourceUrl);
+    if (link) {
+        link.href = currentSourceUrl || "#";
+        link.textContent = currentSourceUrl || "";
+    }
+    if (currentUploadKind === "qr" && !currentDocumentFile) {
+        const preview = document.getElementById("document-preview");
+        if (preview) {
+            preview.innerHTML = currentSourceUrl
+                ? '<div class="document-source-placeholder">QR source page extracted. Use “Open Source Page” to visually verify it.</div>'
+                : '<div class="document-source-placeholder">QR source page preview is unavailable.</div>';
+        }
+        setText(document.getElementById("review-filename"), currentSourceUrl || "QR source");
+        setText(document.getElementById("review-filetype"), "QR URL");
+        setText(document.getElementById("review-filesize"), "-");
+    }
+}
+
 function renderDocumentReview(payload) {
-    const summary = payload.summary || {};
     const job = payload.job || {};
     currentDocumentResult = payload;
     if (!["pdf", "image", "qr"].includes(currentUploadKind)) currentUploadKind = "pdf";
     currentDocumentJobId = job.id || currentDocumentJobId;
-    const detected = summary.detected || job.extracted_count || 0;
-    const recognized = summary.recognized || job.mapped_count || 0;
-    const needMapping = summary.needMapping || 0;
-    setText(document.getElementById("metric-detected"), String(detected));
-    setText(document.getElementById("metric-recognized"), String(recognized));
-    setText(document.getElementById("metric-unmapped"), String(needMapping));
-    setText(document.getElementById("document-action-summary"), `${detected} products extracted | ${recognized} recognized | ${needMapping} require mapping`);
-    setText(document.getElementById("continue-document-mapping"), "Continue to Mapping");
-    setHidden(document.getElementById("purchase-form"), false);
-    setHidden(document.getElementById("save-purchase"), Boolean(needMapping));
-    setHidden(document.getElementById("continue-document-mapping"), !needMapping);
+    const items = reviewItemsFromPayload(payload);
+    renderReviewTable(items);
+    renderReviewSource(payload);
+    setText(document.getElementById("document-action-summary"), items.length + " products extracted • Verify Name, Brand, ML and Quantity before mapping");
+    setText(document.getElementById("continue-document-mapping"), "Confirm & Continue to Mapping");
+    setHidden(document.getElementById("save-purchase"), true);
+    setHidden(document.getElementById("continue-document-mapping"), false);
     applyPurchaseHeader(loadPurchaseHeader(job.id));
     if (payload.extractedDocument?.invoiceDate) setInputValue("purchase-doc-date", payload.extractedDocument.invoiceDate);
+    if (payload.extractedDocument?.invoiceNumber) setInputValue("purchase-doc-no", payload.extractedDocument.invoiceNumber);
     setText(document.getElementById("document-json"), JSON.stringify(payload, null, 2));
+    updateReviewValidation();
 }
-
 function resetDocumentImport() {
     revokeDocumentPreview();
     currentDocumentFile = null;
     currentDocumentResult = null;
     currentDocumentJobId = "";
     currentUploadKind = "pdf";
+    currentReviewItems = [];
+    currentSourceUrl = "";
     const pdfInput = document.getElementById("pdf-file");
     if (pdfInput) pdfInput.value = "";
     const imageInput = document.getElementById("image-file");
     if (imageInput) imageInput.value = "";
     const qrInput = document.getElementById("qr-file");
     if (qrInput) qrInput.value = "";
-    setHidden(document.getElementById("purchase-form"), false);
     setHidden(document.getElementById("save-purchase"), true);
     setHidden(document.getElementById("continue-document-mapping"), false);
+    setHidden(document.getElementById("review-source-panel"), true);
+    const tbody = document.getElementById("document-items-table-body");
+    if (tbody) tbody.innerHTML = "";
     setDocumentImportState("idle", "Ready. Select a purchase PDF, purchase image, or QR image.");
 }
 
@@ -1013,6 +1118,34 @@ document.getElementById("copy-document-json")?.addEventListener("click", async (
     await navigator.clipboard.writeText(document.getElementById("document-json")?.textContent || "");
     showToast("JSON copied", "success");
 });
+document.getElementById("document-items-table-body")?.addEventListener("input", updateReviewValidation);
+document.getElementById("document-fullscreen")?.addEventListener("click", async () => {
+    const preview = document.getElementById("document-preview");
+    if (!preview?.requestFullscreen) {
+        showToast("Full screen preview is not supported by this browser.", "error");
+        return;
+    }
+    try {
+        await preview.requestFullscreen();
+    } catch (error) {
+        showToast(error.message || "Could not open full screen preview", "error");
+    }
+});
+document.getElementById("document-open-new-tab")?.addEventListener("click", () => {
+    const target = currentPreviewUrl || currentSourceUrl;
+    if (!target) {
+        showToast("No source preview is available.", "error");
+        return;
+    }
+    window.open(target, "_blank", "noopener,noreferrer");
+});
+document.getElementById("open-qr-source")?.addEventListener("click", () => {
+    if (!currentSourceUrl) {
+        showToast("QR source URL is unavailable.", "error");
+        return;
+    }
+    window.open(currentSourceUrl, "_blank", "noopener,noreferrer");
+});
 document.getElementById("purchase-form")?.addEventListener("input", persistPurchaseHeader);
 document.getElementById("save-purchase")?.addEventListener("click", () => {
     void savePurchaseFromJob("review");
@@ -1020,11 +1153,46 @@ document.getElementById("save-purchase")?.addEventListener("click", () => {
 document.getElementById("save-purchase-from-mapping")?.addEventListener("click", () => {
     void savePurchaseFromJob("mapping");
 });
-document.getElementById("continue-document-mapping")?.addEventListener("click", () => {
+async function confirmReviewAndContinue() {
     const jobId = sanitizeJobId(currentDocumentJobId);
-    if (!jobId) return;
+    if (!jobId) {
+        showToast("No reviewable import job is available.", "error");
+        return;
+    }
+    const result = updateReviewValidation();
+    const items = result.items;
+    const invalid = result.invalid;
+    if (invalid || !items.length) {
+        showToast("Correct the highlighted extracted rows before mapping.", "error");
+        return;
+    }
+
+    const button = document.getElementById("continue-document-mapping");
+    if (button) button.disabled = true;
     persistPurchaseHeader();
-    window.location.href = `${basePath}/?view=mapping&jobId=${encodeURIComponent(jobId)}&sessionId=${encodeURIComponent(sessionId)}#session=${encodeURIComponent(sessionToken)}`;
+    try {
+        const payload = await api("/api/v1/document-import/jobs/" + encodeURIComponent(jobId) + "/review/confirm", {
+            method: "POST",
+            body: JSON.stringify({
+                items: items.map((item) => ({
+                    id: item.id,
+                    name: String(item.name || "").trim(),
+                    brand: String(item.brand || "").trim(),
+                    ml: Number(item.ml),
+                    quantity: Number(item.quantity),
+                })),
+            }),
+        });
+        currentDocumentResult = Object.assign({}, currentDocumentResult || {}, payload || {});
+        window.location.href = basePath + "/?view=mapping&jobId=" + encodeURIComponent(jobId) + "&sessionId=" + encodeURIComponent(sessionId) + "#session=" + encodeURIComponent(sessionToken);
+    } catch (error) {
+        showToast(error.message || "Could not confirm extracted products", "error");
+        if (button) button.disabled = false;
+    }
+}
+
+document.getElementById("continue-document-mapping")?.addEventListener("click", () => {
+    void confirmReviewAndContinue();
 });
 document.getElementById("cancel-guardrail")?.addEventListener("click", closeGuardrailModal);
 document.getElementById("confirm-guardrail")?.addEventListener("click", () => {
