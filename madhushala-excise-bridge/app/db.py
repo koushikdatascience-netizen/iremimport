@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS import_items (
   ml INTEGER,
   packing INTEGER,
   quantity REAL,
+  box INTEGER,
+  loose INTEGER,
   rate REAL,
   mrp REAL,
   amount REAL,
@@ -248,6 +250,48 @@ def init_db():
             db.execute("ALTER TABLE captures ADD COLUMN capture_signature TEXT")
         if "response_json" not in columns:
             db.execute("ALTER TABLE captures ADD COLUMN response_json TEXT")
+
+        item_columns = {row["name"] for row in db.execute("PRAGMA table_info(import_items)").fetchall()}
+        if "box" not in item_columns:
+            db.execute("ALTER TABLE import_items ADD COLUMN box INTEGER")
+        if "loose" not in item_columns:
+            db.execute("ALTER TABLE import_items ADD COLUMN loose INTEGER")
+
+        # Backfill canonical quantities for existing jobs. New imports write
+        # box/loose directly; legacy jobs keep their old quantity as loose only
+        # when no explicit canonical quantity exists.
+        legacy_rows = db.execute(
+            """
+            SELECT id, quantity, raw_data_json, box, loose
+            FROM import_items
+            WHERE box IS NULL OR loose IS NULL
+            """
+        ).fetchall()
+        for row in legacy_rows:
+            raw = {}
+            try:
+                loaded = json.loads(row["raw_data_json"] or "{}")
+                if isinstance(loaded, dict):
+                    raw = loaded
+            except Exception:
+                raw = {}
+            try:
+                box = max(0, int(float(raw.get("canonicalBox", raw.get("box")) or 0)))
+            except Exception:
+                box = 0
+            try:
+                loose = max(0, int(float(raw.get("canonicalLoose", raw.get("loose")) or 0)))
+            except Exception:
+                loose = 0
+            if box <= 0 and loose <= 0:
+                try:
+                    loose = max(0, int(float(row["quantity"] or 0)))
+                except Exception:
+                    loose = 0
+            db.execute(
+                "UPDATE import_items SET box=COALESCE(box, ?), loose=COALESCE(loose, ?) WHERE id=?",
+                (box, loose, row["id"]),
+            )
 
         # Backfill mappings already confirmed before this migration.  Rows are
         # ordered oldest -> newest so the user's latest Change Mapping decision
