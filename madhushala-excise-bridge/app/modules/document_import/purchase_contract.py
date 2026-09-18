@@ -133,12 +133,16 @@ def build_item_master_calculation_request(
     for item in purchase_items:
         code = str(item.get("itemCode") or "").strip()
         master = item_master.get(code) or {}
-        box = _int_value(item.get("box"))
-        loose = _int_value(item.get("loose"))
-        if box <= 0 and loose <= 0:
-            # Backward compatibility for legacy callers that supplied only qnty.
+        canonical_v2 = _int_value(item.get("_canonicalQuantityVersion")) >= 2
+        if canonical_v2:
+            box = _int_value(item.get("box"))
+            loose = _int_value(item.get("loose"))
+        else:
+            box = 0
             loose = _int_value(
-                item.get("qnty") if item.get("qnty") not in (None, "") else item.get("quantity")
+                item.get("qnty")
+                if item.get("qnty") not in (None, "")
+                else item.get("loose") if item.get("loose") not in (None, "") else item.get("quantity")
             )
         loose_rate, box_rate, mrp, packing = _commercial_values(master)
 
