@@ -773,10 +773,17 @@ class DocumentImportService:
                     "reviewRequired": True,
                     "sourceFiles": len(filenames),
                 },
-                "extraction": {
-                    "engine": "batch" if len(parts) > 1 else metas[0].get("engine"),
-                    "files": metas,
-                },
+                "extraction": (
+                    {
+                        "engine": "batch",
+                        "files": metas,
+                    }
+                    if len(parts) > 1
+                    else {
+                        **metas[0],
+                        "files": metas,
+                    }
+                ),
                 "sourceFiles": filenames,
                 "extractedDocument": merged.model_dump(),
                 "normalizedItems": [item.model_dump() for item in normalized],
