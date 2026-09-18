@@ -69,16 +69,21 @@ PRODUCT_SCHEMA: dict[str, Any] = {
 }
 
 EXTRACTION_PROMPT = (
-    "Extract the document header and liquor/product rows accurately. At document level prioritize "
-    "supplierName, invoiceNumber/document or permit number, and invoiceDate/document date. For each "
-    "product row preserve the original itemName/brand and ALWAYS capture the visible physical "
-    "bottle/unit count in the quantity field. Treat labels such as Physical Qty, Physical Quantity, "
-    "Qty, Quantity, Bottles, Bottle Qty, and No. of Bottles as the product quantity. Never leave "
-    "quantity null when one of those values is visible. Capture ML/size when clearly visible or "
-    "present in the product name. Do not convert "
-    "physical quantity into cases and do not infer commercial values. Other clearly visible row fields "
-    "may be extracted for audit/review, but they are not purchase inputs. Use null when a value is "
-    "missing or uncertain. Do not hallucinate. Ignore totals, summary rows and page headers as products."
+    "Extract only the source-document facts needed for liquor purchase review. At document level extract "
+    "supplierName when visible, invoiceNumber as the invoice/document/permit/transport-pass identifier, "
+    "and invoiceDate as the source document date. For every product preserve the complete printed liquor "
+    "name in itemName and brand, and extract the ML/measure. Quantity semantics are strict: box means the "
+    "number of CASES/CARTONS explicitly shown for that product; loose means the number of individual "
+    "BOTTLES/LOOSE UNITS explicitly shown for that product. If both case and bottle columns are present, "
+    "extract both exactly as printed. If only cases are present, set box and leave loose zero/null. If only "
+    "bottles/loose units are present, set loose and leave box zero/null. Never multiply cases by packing, "
+    "never divide bottles by packing, never infer bottles-per-case, and never convert one quantity type "
+    "into the other. Do not treat stock balance, Physical Qty inventory, BL/LPL, strength, packing size, "
+    "rate, MRP, amount, or totals as purchase box/loose quantities unless the document explicitly labels "
+    "that field as the delivered/purchased cases or bottles for the row. Keep packing and commercial/tax "
+    "fields null unless needed only as raw audit context. Use quantity only as a legacy audit field; the "
+    "canonical purchase quantities are box and loose. Use null when uncertain. Do not hallucinate. Ignore "
+    "totals, summaries, signatures and repeated page headers as products."
 )
 
 
@@ -210,12 +215,26 @@ class LlamaCloudClient:
                 payload["sourcePage"] = page_number
                 merged_items.append(ExtractedProduct.model_validate(payload))
 
+        deduped_items: list[ExtractedProduct] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for item in merged_items:
+            signature = (
+                str(item.itemName or "").strip().casefold(),
+                str(item.ml or "").strip().casefold(),
+                str(item.box or 0),
+                str(item.loose or 0),
+            )
+            if signature in seen:
+                continue
+            seen.add(signature)
+            deduped_items.append(item)
+
         return ExtractedDocument(
             documentType=document_type,
             supplierName=supplier_name,
             invoiceNumber=invoice_number,
             invoiceDate=invoice_date,
-            items=merged_items,
+            items=deduped_items,
             extractionEngine="llamaparse-page-by-page",
             extractedPageCount=len(page_results),
             pageItemCounts={
