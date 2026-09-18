@@ -88,6 +88,7 @@ def test_calculate_request_preserves_reviewed_cases_and_loose_bottles():
                 "box": 7,
                 "loose": 47,
                 "qnty": 383,
+                "_canonicalQuantityVersion": 2,
                 "freeQnty": 0,
             }
         ],
