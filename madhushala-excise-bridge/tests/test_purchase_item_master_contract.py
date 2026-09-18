@@ -5,6 +5,7 @@ import pytest
 from app.modules.document_import.purchase_contract import (
     ItemMasterCalculateClient,
     build_item_master_calculation_request,
+    load_item_master_details,
 )
 from app.modules.document_import.purchase_required import resolve_required_purchase_header
 
@@ -391,3 +392,30 @@ async def test_pdf_header_uses_extracted_document_number_and_date_not_browser_de
 
     assert header["docNo"] == "003_COM_DHN_25-26/2026-2027/6267/61/6024"
     assert header["docDate"] == "2026-09-01"
+
+
+@pytest.mark.asyncio
+async def test_item_master_preflight_rejects_code_missing_from_current_company():
+    class ReferenceService:
+        items_called = False
+
+        async def catalogue(self, session):
+            assert session["company_code"] == "3"
+            return [{"itemCode": "A00001", "itemName": "AVAILABLE ITEM"}]
+
+        async def items(self, session, codes):
+            self.items_called = True
+            return {}
+
+    service = ReferenceService()
+    with pytest.raises(Exception) as exc_info:
+        await load_item_master_details(
+            service,
+            {"shop_code": "SHOP_A", "company_code": "3"},
+            ["G0004Z"],
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 409
+    assert "G0004Z" in str(exc_info.value.detail)
+    assert "company 3" in str(exc_info.value.detail)
+    assert service.items_called is False
