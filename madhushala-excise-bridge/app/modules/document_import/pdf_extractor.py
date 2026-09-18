@@ -504,10 +504,8 @@ def _candidate_row_count(
                 else:
                     looks_like_product = bool(
                         any(re.search(r"\d{2,5}\s*m\.?l\.?", value, re.IGNORECASE) for value in cleaned)
-                        and any(
-                            ("case" in _key(value) or "bottle" in _key(value) or "loose" in _key(value))
-                            for value in cleaned
-                        )
+                        and any(re.search(r"[A-Za-z]{4}", value) for value in cleaned)
+                        and any(re.search(r"\b\d+(?:\.\d+)?\b", value) for value in cleaned)
                     )
 
                 if looks_like_product:
