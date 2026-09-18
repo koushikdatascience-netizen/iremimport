@@ -470,11 +470,7 @@ def _document_from_payload(
         )
         box_count = _int_value(boxes)
         bottle_count = _int_value(bottles)
-        packing = (
-            bottle_count // box_count
-            if box_count and bottle_count and bottle_count % box_count == 0
-            else None
-        )
+        packing = None
         bulk_litres = _first_present(
             row,
             "BULK LITRES",
@@ -483,9 +479,9 @@ def _document_from_payload(
             "Total Bulk Litres",
         )
 
-        extracted_quantity = bottle_count or box_count or boxes
-        extracted_box = 0 if bottle_count else (box_count or boxes)
-        extracted_loose = bottle_count or None
+        extracted_box = box_count
+        extracted_loose = bottle_count
+        extracted_quantity = (box_count + bottle_count) or None
 
         raw = {
             **meta,
