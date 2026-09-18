@@ -3044,13 +3044,19 @@ function setText(element, text) {
 }
 
 async function api(path, options = {}) {
+    const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+    const headers = {
+        "Authorization": `Bearer ${sessionToken}`,
+        ...(options.headers || {}),
+    };
+    const hasContentType = Object.keys(headers).some((name) => name.toLowerCase() === "content-type");
+    if (!isFormData && options.body != null && !hasContentType) {
+        headers["Content-Type"] = "application/json";
+    }
+
     const response = await fetch(apiUrl(path), {
         ...options,
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${sessionToken}`,
-            ...(options.headers || {}),
-        },
+        headers,
     });
     const text = await response.text();
     let data = null;
@@ -3894,7 +3900,7 @@ async function uploadDocuments(files, kind = "pdf") {
         const payload = await api("/api/v1/document-import/upload/batch/" + encodeURIComponent(kind), {
             method: "POST",
             body: form,
-        }, true);
+        });
         if (!payload?.job) throw new Error(payload.detail || payload.error || "Document import failed");
         renderDocumentReview(payload);
         const engines = (payload.extraction?.files || [])
