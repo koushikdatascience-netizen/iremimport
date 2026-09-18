@@ -75,7 +75,8 @@ class DocumentPurchaseAdapter:
     async def purchase_items(self, session: dict[str, Any], job_id: str) -> list[dict[str, Any]]:
         job = self.document_service.get_job(session, job_id)
         source_type = str(job.get("source_type") or "").upper()
-        quantity_only_source = source_type in {"QR_HTML", "DOCUMENT_PDF", "DOCUMENT_IMAGE"}
+        is_qr = source_type == "QR_HTML"
+        is_document_upload = source_type in {"DOCUMENT_PDF", "DOCUMENT_IMAGE"}
         with conn() as db:
             rows = db.execute(
                 "SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id",
@@ -168,7 +169,8 @@ class DocumentPurchaseAdapter:
 
             if document_qnty and (
                 has_explicit_bottle_total
-                or quantity_only_source
+                or is_document_upload
+                or (is_qr and not has_valid_case_loose_shape)
             ):
                 old_box, old_loose = box, loose
                 box = 0
