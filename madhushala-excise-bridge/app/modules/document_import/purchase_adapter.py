@@ -152,8 +152,8 @@ class DocumentPurchaseAdapter:
                 if recovered_qnty and not persisted_qnty:
                     with conn() as db:
                         db.execute(
-                            "UPDATE import_items SET quantity=?, updated_at=? WHERE id=?",
-                            (float(recovered_qnty), now_iso(), row["id"]),
+                            "UPDATE import_items SET quantity=? WHERE id=?",
+                            (float(recovered_qnty), row["id"]),
                         )
 
                 box = 0
