@@ -328,11 +328,13 @@ class DocumentImportService:
             if ext == "pdf":
                 extracted, extraction_meta = extract_pdf_locally(temp_path)
                 if extracted is None:
-                    extracted = await LlamaCloudClient().extract_products(temp_path, filename)
+                    llama = LlamaCloudClient()
+                    extracted = await llama.extract_scanned_pdf_pages(temp_path, filename)
                     extraction_meta = {
                         **extraction_meta,
-                        "engine": "llamaparse",
+                        "engine": "llamaparse-page-by-page",
                         "fallbackFrom": "pymupdf",
+                        "pageItemCounts": getattr(extracted, "pageItemCounts", None),
                     }
                 else:
                     extraction_meta = {**extraction_meta, "engine": "pymupdf"}
