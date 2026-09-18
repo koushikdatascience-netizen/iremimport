@@ -460,6 +460,17 @@ class MappingService:
 
         return {"preparedCount": len(prepared), "latestUnmappedExciseCodes": latest_codes, "items": prepared}
 
+    async def company_item_codes(self, session: dict[str, Any]) -> set[str]:
+        """Return valid Madhushala item codes for the active company scope."""
+        company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
+        bill_type = str(session.get("bill_type") or settings.DEFAULT_BILL_TYPE).strip()
+        rows = await self._client_for_session(session).get_dropdown_items(company_code, bill_type)
+        return {
+            str(item.get("itemCode") or "").strip()
+            for item in (rows or [])
+            if isinstance(item, dict) and str(item.get("itemCode") or "").strip()
+        }
+
     async def workspace_for_session(
         self,
         session: dict[str, Any],
