@@ -701,29 +701,13 @@ async def extract_up_transport_pass(
     service._persist_items(job_id, normalized)
     service._update_job(
         job_id,
-        status="CHECKING_MAPPING",
+        status="REVIEW_REQUIRED",
         extracted_count=len(normalized),
+        mapped_count=0,
+        error=None,
     )
-
-    try:
-        await service.mapping_service.prepare_document_job(session, job_id)
-        workspace = await service.mapping_service.workspace_for_session(
-            session,
-            job_id=job_id,
-        )
-    except MadhushalaApiError as exc:
-        service._update_job(job_id, status="FAILED", error=str(exc))
-        status_code = 401 if exc.status_code == 401 else 403 if exc.status_code == 403 else 502
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-
-    mapping_rows = workspace.get("unmappedItems", [])
-    unmapped_count = sum(1 for row in mapping_rows if not row.get("selectedItemCode"))
-    status = "MAPPING_REQUIRED" if unmapped_count else "READY"
-    service._update_job(
-        job_id,
-        status=status,
-        mapped_count=len(normalized) - unmapped_count,
-    )
+    review_items = service.get_review_items(session, job_id)
+    attention = sum(1 for item in review_items if not item["valid"])
 
     return {
         "source": "QR_HTML",
@@ -736,11 +720,15 @@ async def extract_up_transport_pass(
         "transportPass": transport_meta,
         "job": service.get_job(session, job_id),
         "summary": {
-            "detected": len(normalized),
-            "recognized": len(normalized) - unmapped_count,
-            "needMapping": unmapped_count,
+            "detected": len(review_items),
+            "recognized": 0,
+            "needMapping": len(review_items),
+            "valid": len(review_items) - attention,
+            "needsAttention": attention,
+            "reviewRequired": True,
         },
         "extractedDocument": extracted.model_dump(),
         "normalizedItems": [item.model_dump() for item in normalized],
+        "reviewItems": review_items,
         "extracted": body,
     }
