@@ -23,6 +23,7 @@ from app.modules.document_import.pdf_extractor import extract_pdf_locally
 from app.modules.document_import.purchase_context import build_purchase_context
 from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct, NormalizedImportItem
 from app.services.mapping_service import MappingService
+from app.services.normalizer import normalize_brand
 from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
 
 
@@ -309,6 +310,185 @@ class DocumentImportService:
             rows = db.execute("SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id", (job_id,)).fetchall()
         return [dict(row) for row in rows]
 
+    @staticmethod
+    def _review_row(row: Any) -> dict[str, Any]:
+        name = str(row["raw_name"] or row["normalized_name"] or "").strip()
+        brand = str(row["brand"] or name).strip()
+        ml = _int_value(row["ml"])
+        quantity = _int_value(row["quantity"])
+        issues: list[str] = []
+        if not name:
+            issues.append("Name is required")
+        if not brand:
+            issues.append("Brand is required")
+        if ml <= 0:
+            issues.append("ML must be a positive whole number")
+        if quantity <= 0:
+            issues.append("Quantity must be a positive whole number")
+        return {
+            "id": str(row["id"]),
+            "name": name,
+            "brand": brand,
+            "ml": ml or None,
+            "quantity": quantity or None,
+            "issues": issues,
+            "valid": not issues,
+        }
+
+    def get_review_items(self, session: dict[str, Any], job_id: str) -> list[dict[str, Any]]:
+        self.get_job(session, job_id)
+        with conn() as db:
+            rows = db.execute(
+                "SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id",
+                (job_id,),
+            ).fetchall()
+        return [self._review_row(row) for row in rows]
+
+    async def confirm_review(
+        self,
+        session: dict[str, Any],
+        job_id: str,
+        edits: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        job = self.get_job(session, job_id)
+        if str(job.get("source_type") or "") not in {"DOCUMENT_PDF", "DOCUMENT_IMAGE", "QR_HTML"}:
+            raise HTTPException(status_code=409, detail="This import source does not support document review")
+
+        with conn() as db:
+            rows = db.execute(
+                "SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id",
+                (job_id,),
+            ).fetchall()
+            existing = {str(row["id"]): row for row in rows}
+
+        if not rows:
+            raise HTTPException(status_code=409, detail="No extracted products are available for review")
+
+        supplied_ids = [str(item.get("id") or "").strip() for item in edits]
+        if len(supplied_ids) != len(set(supplied_ids)):
+            raise HTTPException(status_code=400, detail="Duplicate review rows are not allowed")
+        if set(supplied_ids) != set(existing):
+            raise HTTPException(
+                status_code=409,
+                detail="The extracted product list changed. Refresh the review before continuing.",
+            )
+
+        cleaned: list[dict[str, Any]] = []
+        validation_errors: list[str] = []
+        for position, item in enumerate(edits, start=1):
+            row_id = str(item.get("id") or "").strip()
+            name = " ".join(str(item.get("name") or "").split()).strip()
+            brand = " ".join(str(item.get("brand") or "").split()).strip()
+            try:
+                ml_decimal = Decimal(str(item.get("ml") or "0"))
+                quantity_decimal = Decimal(str(item.get("quantity") or "0"))
+            except Exception:
+                validation_errors.append(f"Row {position}: ML and Quantity must be numbers")
+                continue
+
+            ml = int(ml_decimal) if ml_decimal == ml_decimal.to_integral_value() else 0
+            quantity = int(quantity_decimal) if quantity_decimal == quantity_decimal.to_integral_value() else 0
+            row_errors: list[str] = []
+            if not name:
+                row_errors.append("Name is required")
+            if not brand:
+                row_errors.append("Brand is required")
+            if ml <= 0 or ml > 10000:
+                row_errors.append("ML must be a positive whole number")
+            if quantity <= 0:
+                row_errors.append("Quantity must be a positive whole number")
+            if len(name) > 300 or len(brand) > 300:
+                row_errors.append("Name and Brand must be 300 characters or fewer")
+            if row_errors:
+                validation_errors.append(f"Row {position}: " + "; ".join(row_errors))
+                continue
+
+            raw: dict[str, Any] = {}
+            try:
+                loaded = json.loads(existing[row_id]["raw_data_json"] or "{}")
+                if isinstance(loaded, dict):
+                    raw = loaded
+            except Exception:
+                raw = {}
+
+            raw.update(
+                {
+                    "itemName": name,
+                    "brand": brand,
+                    "ml": ml,
+                    "quantity": quantity,
+                    "loose": quantity,
+                    "qnty": quantity,
+                    "box": 0,
+                    "reviewConfirmed": True,
+                }
+            )
+            cleaned.append(
+                {
+                    "id": row_id,
+                    "name": name,
+                    "brand": brand,
+                    "ml": ml,
+                    "quantity": quantity,
+                    "raw": raw,
+                }
+            )
+
+        if validation_errors:
+            raise HTTPException(status_code=422, detail=" | ".join(validation_errors[:8]))
+
+        reviewed_at = now_iso()
+        with conn() as db:
+            for item in cleaned:
+                db.execute(
+                    """
+                    UPDATE import_items
+                    SET raw_name=?, normalized_name=?, brand=?, ml=?,
+                        packing=NULL, quantity=?,
+                        mapping_status='PENDING', excise_item_code=NULL,
+                        mapped_item_code=NULL, raw_data_json=?, updated_at=?
+                    WHERE id=? AND job_id=?
+                    """,
+                    (
+                        item["name"],
+                        normalize_brand(item["name"]),
+                        item["brand"],
+                        item["ml"],
+                        float(item["quantity"]),
+                        json.dumps(item["raw"], ensure_ascii=False),
+                        reviewed_at,
+                        item["id"],
+                        job_id,
+                    ),
+                )
+
+        self._update_job(job_id, status="CHECKING_MAPPING", error=None)
+        try:
+            await self.mapping_service.prepare_document_job(session, job_id)
+            workspace = await self.mapping_service.workspace_for_session(session, job_id=job_id)
+        except MadhushalaApiError as exc:
+            self._update_job(job_id, status="FAILED", error=str(exc))
+            raise
+
+        mapping_rows = workspace.get("unmappedItems", [])
+        unmapped_count = sum(1 for row in mapping_rows if not row.get("selectedItemCode"))
+        status = "MAPPING_REQUIRED" if unmapped_count else "READY"
+        self._update_job(
+            job_id,
+            status=status,
+            mapped_count=len(cleaned) - unmapped_count,
+            error=None,
+        )
+        return {
+            "job": self.get_job(session, job_id),
+            "reviewItems": self.get_review_items(session, job_id),
+            "summary": {
+                "detected": len(cleaned),
+                "recognized": len(cleaned) - unmapped_count,
+                "needMapping": unmapped_count,
+            },
+        }
+
     async def process_upload(self, session: dict[str, Any], upload: UploadFile) -> dict[str, Any]:
         data = await upload.read()
         ext = self._validate_file(upload, data)
@@ -355,42 +535,30 @@ class DocumentImportService:
                 self._update_job(job_id, status="FAILED", error="No valid product rows were extracted")
                 raise HTTPException(status_code=422, detail="No valid product rows were extracted")
 
-            # Quantity validation belongs to extraction/normalization, before
-            # persistence and before any Excise/Madhushala mapping. A document
-            # job is not allowed to become READY with an unknown physical count.
-            if source_type in {"DOCUMENT_PDF", "DOCUMENT_IMAGE"}:
-                missing_quantity = [
-                    item.rawName
-                    for item in normalized
-                    if not item.quantity or float(item.quantity) <= 0
-                ]
-                if missing_quantity:
-                    detail = (
-                        "Extraction could not determine a positive physical quantity for: "
-                        + ", ".join(missing_quantity[:5])
-                        + ". Please correct/re-upload the source document before mapping."
-                    )
-                    self._update_job(job_id, status="FAILED", error=detail)
-                    raise HTTPException(status_code=422, detail=detail)
-
             self._persist_items(job_id, normalized)
-            self._update_job(job_id, status="CHECKING_MAPPING", extracted_count=len(normalized))
-            await self.mapping_service.prepare_document_job(session, job_id)
-            workspace = await self.mapping_service.workspace_for_session(session, job_id=job_id)
-            mapping_rows = workspace.get("unmappedItems", [])
-            unmapped_count = sum(1 for row in mapping_rows if not row.get("selectedItemCode"))
-            status = "MAPPING_REQUIRED" if unmapped_count else "READY"
-            self._update_job(job_id, status=status, mapped_count=len(normalized) - unmapped_count)
+            self._update_job(
+                job_id,
+                status="REVIEW_REQUIRED",
+                extracted_count=len(normalized),
+                mapped_count=0,
+                error=None,
+            )
+            review_items = self.get_review_items(session, job_id)
+            attention = sum(1 for item in review_items if not item["valid"])
             return {
                 "job": self.get_job(session, job_id),
                 "summary": {
-                    "detected": len(normalized),
-                    "recognized": len(normalized) - unmapped_count,
-                    "needMapping": unmapped_count,
+                    "detected": len(review_items),
+                    "recognized": 0,
+                    "needMapping": len(review_items),
+                    "valid": len(review_items) - attention,
+                    "needsAttention": attention,
+                    "reviewRequired": True,
                 },
                 "extraction": extraction_meta,
                 "extractedDocument": extracted.model_dump(),
                 "normalizedItems": [item.model_dump() for item in normalized],
+                "reviewItems": review_items,
             }
         except HTTPException:
             raise
@@ -531,13 +699,15 @@ class DocumentImportService:
             raise HTTPException(status_code=422, detail="No item rows were found in the QR linked page")
 
         self._persist_items(job_id, normalized)
-        self._update_job(job_id, status="CHECKING_MAPPING", extracted_count=len(normalized))
-        await self.mapping_service.prepare_document_job(session, job_id)
-        workspace = await self.mapping_service.workspace_for_session(session, job_id=job_id)
-        mapping_rows = workspace.get("unmappedItems", [])
-        unmapped_count = sum(1 for row in mapping_rows if not row.get("selectedItemCode"))
-        status = "MAPPING_REQUIRED" if unmapped_count else "READY"
-        self._update_job(job_id, status=status, mapped_count=len(normalized) - unmapped_count)
+        self._update_job(
+            job_id,
+            status="REVIEW_REQUIRED",
+            extracted_count=len(normalized),
+            mapped_count=0,
+            error=None,
+        )
+        review_items = self.get_review_items(session, job_id)
+        attention = sum(1 for item in review_items if not item["valid"])
         return {
             "source": "QR_HTML",
             "url": clean_url,
@@ -546,12 +716,16 @@ class DocumentImportService:
             "contentType": content_type,
             "job": self.get_job(session, job_id),
             "summary": {
-                "detected": len(normalized),
-                "recognized": len(normalized) - unmapped_count,
-                "needMapping": unmapped_count,
+                "detected": len(review_items),
+                "recognized": 0,
+                "needMapping": len(review_items),
+                "valid": len(review_items) - attention,
+                "needsAttention": attention,
+                "reviewRequired": True,
             },
             "extractedDocument": extracted.model_dump(),
             "normalizedItems": [item.model_dump() for item in normalized],
+            "reviewItems": review_items,
             "extracted": body,
         }
     @staticmethod
