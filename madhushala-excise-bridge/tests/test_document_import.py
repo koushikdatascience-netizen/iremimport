@@ -137,6 +137,68 @@ def test_document_normalization_ignores_bad_rows():
     assert rows[0].confidence == 0.91
 
 
+
+
+def test_pdf_and_image_normalization_keep_only_identity_and_quantity_for_purchase():
+    document = ExtractedDocument(
+        documentType="invoice",
+        supplierName="Supplier A",
+        invoiceNumber="INV-42",
+        invoiceDate="2026-09-18",
+        items=[
+            ExtractedProduct(
+                itemName="100 PIPER 750 ML",
+                brand="100 PIPER",
+                ml=750,
+                packing=12,
+                quantity=18,
+                box=2,
+                loose=6,
+                rate=211.8,
+                mrp=1880,
+                amount=3812.4,
+                discount=99,
+                cgst=5,
+                sgst=5,
+                t1Amt=100,
+                etd=500,
+                confidence=0.97,
+            )
+        ],
+    )
+
+    for source_type in ("DOCUMENT_PDF", "DOCUMENT_IMAGE"):
+        rows = normalize_extracted_document(document, source_type)
+        assert len(rows) == 1
+        row = rows[0]
+
+        assert row.rawName == "100 PIPER 750 ML"
+        assert row.ml == 750
+        assert row.quantity == 18.0
+        assert row.box is None
+        assert row.loose == 18
+
+        # PDF/image commercial values are audit-only. The purchase path must
+        # source them later from Madhushala Item Master, exactly like QR.
+        assert row.packing is None
+        assert row.rate is None
+        assert row.mrp is None
+        assert row.amount is None
+        assert row.discount is None
+        assert row.cgst is None
+        assert row.sgst is None
+        assert row.t1Amt is None
+        assert row.etd is None
+
+        # Full extractor output is still retained for review/debugging.
+        assert row.rawData["packing"] == 12
+        assert row.rawData["box"] == 2
+        assert row.rawData["loose"] == 6
+        assert row.rawData["rate"] == 211.8
+        assert row.rawData["mrp"] == 1880
+        assert row.rawData["discount"] == 99
+
+
 def test_document_upload_rejects_invalid_extension(client):
     session = create_session(client)
     response = client.post(

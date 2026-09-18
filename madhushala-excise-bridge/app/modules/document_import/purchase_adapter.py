@@ -74,7 +74,8 @@ class DocumentPurchaseAdapter:
 
     async def purchase_items(self, session: dict[str, Any], job_id: str) -> list[dict[str, Any]]:
         job = self.document_service.get_job(session, job_id)
-        is_qr = str(job.get("source_type") or "").upper() == "QR_HTML"
+        source_type = str(job.get("source_type") or "").upper()
+        quantity_only_source = source_type in {"QR_HTML", "DOCUMENT_PDF", "DOCUMENT_IMAGE"}
         with conn() as db:
             rows = db.execute(
                 "SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id",
@@ -146,9 +147,9 @@ class DocumentPurchaseAdapter:
                 fallback=0,
             )
 
-            # Preserve an already-valid manual case/loose shape. Otherwise,
-            # QR/PDF bottle totals are loose units and must never be interpreted
-            # as a number of boxes.
+            # Manual/non-document sources may preserve a valid case/loose shape.
+            # QR, PDF and image imports are quantity-only sources for Purchase:
+            # the extracted physical quantity is always sent as loose bottles.
             has_explicit_bottle_total = any(
                 _key(alias) in normalized_raw
                 for alias in (
@@ -167,7 +168,7 @@ class DocumentPurchaseAdapter:
 
             if document_qnty and (
                 has_explicit_bottle_total
-                or (is_qr and not has_valid_case_loose_shape)
+                or quantity_only_source
             ):
                 old_box, old_loose = box, loose
                 box = 0
