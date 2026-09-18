@@ -620,3 +620,29 @@ def test_pdf_normalization_promotes_nested_physical_qty_to_loose_quantity():
     assert rows[0].quantity == 36.0
     assert rows[0].loose == 36
     assert rows[0].rawData["rawPdfRow"]["Physical Qty"] == "36"
+
+
+def test_pdf_normalization_accepts_generic_physical_stock_bottle_field():
+    document = ExtractedDocument(
+        documentType="invoice",
+        items=[
+            ExtractedProduct(
+                itemName="JOHNNIE WALKER RED LABEL BLENDED SCOTCH WHISKY",
+                brand="JOHNNIE WALKER RED LABEL BLENDED SCOTCH WHISKY",
+                ml=750,
+                quantity=None,
+                **{
+                    "sourceRow": {
+                        "Brand": "JOHNNIE WALKER RED LABEL BLENDED SCOTCH WHISKY",
+                        "Physical Stock (Btls.)": "18 Bottles",
+                    }
+                },
+            )
+        ],
+    )
+
+    rows = normalize_extracted_document(document, "DOCUMENT_PDF")
+    assert len(rows) == 1
+    assert rows[0].quantity == 18.0
+    assert rows[0].loose == 18
+    assert rows[0].box is None

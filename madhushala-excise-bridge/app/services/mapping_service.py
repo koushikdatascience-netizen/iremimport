@@ -11,6 +11,7 @@ from typing import Any
 from app.config import settings
 from app.db import conn
 from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
+from app.modules.document_import.quantity import extract_physical_quantity
 from app.services.matching_service import suggest_matches
 
 logger = logging.getLogger("madhushala-excise-bridge")
@@ -497,6 +498,11 @@ class MappingService:
                     except Exception:
                         raw_data = {}
 
+                    canonical_quantity = (
+                        int(job_item["quantity"])
+                        if job_item["quantity"] not in (None, "") and float(job_item["quantity"]) > 0
+                        else extract_physical_quantity(raw_data)
+                    )
                     captured = {
                         **raw_data,
                         "rawName": job_item["raw_name"],
@@ -505,7 +511,8 @@ class MappingService:
                         "ml": job_item["ml"],
                         "bottlesPerCase": job_item["packing"],
                         "packing": job_item["packing"],
-                        "quantity": job_item["quantity"],
+                        "quantity": canonical_quantity or None,
+                        "loose": canonical_quantity or None,
                         "rate": job_item["rate"],
                         "mrpPerUnit": job_item["mrp"],
                         "mrp": job_item["mrp"],

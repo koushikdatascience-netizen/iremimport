@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from app.db import conn, now_iso
 from app.modules.document_import.purchase_contract import ItemMasterCalculateClient, load_item_master_details
+from app.modules.document_import.quantity import extract_physical_quantity
 from app.services.purchase_orchestrator import purchase_orchestrator
 from app.services.reference_data_service import reference_data_service
 
@@ -44,53 +45,6 @@ def _dict_value(row: dict[str, Any] | None, *aliases: str) -> Any:
         if value not in (None, ""):
             return value
     return None
-
-
-DOCUMENT_QUANTITY_KEYS = {
-    "quantity",
-    "qty",
-    "qnty",
-    "physicalqty",
-    "physicalquantity",
-    "physicalbottleqty",
-    "physicalbottlequantity",
-    "bottleqty",
-    "bottlequantity",
-    "bottles",
-    "noofbottles",
-    "noofbottlesdispatched",
-    "bottlesdispatched",
-    "noofbottlesrequested",
-    "bottlesrequested",
-    "totalbottles",
-    "totalqty",
-    "totalquantity",
-    "dispatchqty",
-    "dispatchedqty",
-    "issuedqty",
-}
-
-
-def _raw_document_quantity(value: Any) -> int:
-    """Find a positive physical bottle/unit quantity anywhere in raw extraction data."""
-    if isinstance(value, dict):
-        # Prefer explicitly named quantity fields at the current level.
-        for name, candidate in value.items():
-            if _key(name) in DOCUMENT_QUANTITY_KEYS:
-                parsed = _int_value(candidate)
-                if parsed > 0:
-                    return parsed
-        # Then inspect nested extractor/table payloads such as rawPdfRow.
-        for candidate in value.values():
-            parsed = _raw_document_quantity(candidate)
-            if parsed > 0:
-                return parsed
-    elif isinstance(value, list):
-        for candidate in value:
-            parsed = _raw_document_quantity(candidate)
-            if parsed > 0:
-                return parsed
-    return 0
 
 
 class DocumentPurchaseAdapter:
@@ -184,72 +138,64 @@ class DocumentPurchaseAdapter:
 
             box = raw_int("box", "boxes", "case", "cases", fallback=0)
             loose = raw_int("loose", "looseQty", fallback=0)
-            document_qnty = raw_int(
-                "qnty",
-                "qty",
-                "physicalQty",
-                "physicalQuantity",
-                "bottleQty",
-                "bottleQuantity",
-                "totalQty",
-                "totalQuantity",
-                "No of Bottles",
-                "No of Bottles Dispatched",
-                "Bottles Dispatched",
-                "No of Bottles Requested",
-                "Bottles Requested",
-                fallback=row["quantity"],
-            )
 
-            # PDF/image normalization persists the trusted physical quantity in
-            # import_items.quantity. Older/current jobs can still have it only
-            # inside raw extraction JSON (for example rawPdfRow -> Physical Qty),
-            # so recover it recursively before rejecting the row.
             if is_document_upload:
-                document_qnty = (
-                    _int_value(row["quantity"])
-                    or _raw_document_quantity(raw)
-                    or document_qnty
-                )
+                # PDF/image is normalized to the same canonical purchase rule as
+                # QR bottle totals: document identity + one physical unit count.
+                # Mapping must never change that count.
+                persisted_qnty = _int_value(row["quantity"])
+                recovered_qnty = extract_physical_quantity(raw)
+                document_qnty = persisted_qnty or recovered_qnty
 
-            # Manual/non-document sources may preserve a valid case/loose shape.
-            # QR, PDF and image imports are quantity-only sources for Purchase:
-            # the extracted physical quantity is always sent as loose bottles.
-            has_explicit_bottle_total = any(
-                _key(alias) in normalized_raw
-                for alias in (
+                # Self-heal older/current jobs that were extracted correctly but
+                # persisted before quantity aliases were normalized.
+                if recovered_qnty and not persisted_qnty:
+                    with conn() as db:
+                        db.execute(
+                            "UPDATE import_items SET quantity=?, updated_at=? WHERE id=?",
+                            (float(recovered_qnty), now_iso(), row["id"]),
+                        )
+
+                box = 0
+                loose = document_qnty
+                qnty = document_qnty
+            else:
+                document_qnty = raw_int(
+                    "qnty",
+                    "qty",
+                    "totalQty",
+                    "totalQuantity",
                     "No of Bottles Dispatched",
                     "Bottles Dispatched",
                     "No of Bottles Requested",
                     "Bottles Requested",
-                )
-            )
-            represented_qnty = ((box * packing) + loose) if packing else (box + loose)
-            has_valid_case_loose_shape = bool(
-                document_qnty
-                and (box or loose)
-                and represented_qnty == document_qnty
-            )
-
-            if document_qnty and (
-                has_explicit_bottle_total
-                or is_document_upload
-                or (is_qr and not has_valid_case_loose_shape)
-            ):
-                old_box, old_loose = box, loose
-                box = 0
-                loose = document_qnty
-                logger.info(
-                    "purchase_quantity_as_loose jobId=%s itemCode=%s sourceBox=%s sourceLoose=%s qnty=%s box=0 loose=%s",
-                    job_id,
-                    mapped,
-                    old_box,
-                    old_loose,
-                    document_qnty,
-                    loose,
+                    fallback=row["quantity"],
                 )
 
-            qnty = document_qnty or ((box * packing + loose) if packing else (box + loose))
+                has_explicit_bottle_total = any(
+                    _key(alias) in normalized_raw
+                    for alias in (
+                        "No of Bottles Dispatched",
+                        "Bottles Dispatched",
+                        "No of Bottles Requested",
+                        "Bottles Requested",
+                    )
+                )
+                represented_qnty = ((box * packing) + loose) if packing else (box + loose)
+                has_valid_case_loose_shape = bool(
+                    document_qnty
+                    and (box or loose)
+                    and represented_qnty == document_qnty
+                )
+
+                if document_qnty and (
+                    has_explicit_bottle_total
+                    or (is_qr and not has_valid_case_loose_shape)
+                ):
+                    box = 0
+                    loose = document_qnty
+
+                qnty = document_qnty or ((box * packing + loose) if packing else (box + loose))
 
             # Mirror the exact Madhushala Calculate contract used below:
             #   boxRate   <- itemmst.purchaseRateCase

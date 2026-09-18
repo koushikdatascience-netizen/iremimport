@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.normalizer import normalize_brand, parse_decimal, parse_int, parse_ml
+from app.modules.document_import.quantity import extract_physical_quantity
 from app.modules.document_import.schemas import ExtractedDocument, NormalizedImportItem
 
 
@@ -24,54 +25,6 @@ def _confidence(value) -> float | None:
 def _clean_text(value) -> str | None:
     text = str(value or "").strip()
     return text or None
-
-
-def _quantity_key(value) -> str:
-    return "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
-
-
-_DOCUMENT_QUANTITY_KEYS = {
-    "quantity",
-    "qty",
-    "qnty",
-    "physicalqty",
-    "physicalquantity",
-    "physicalbottleqty",
-    "physicalbottlequantity",
-    "bottleqty",
-    "bottlequantity",
-    "bottles",
-    "noofbottles",
-    "noofbottlesdispatched",
-    "bottlesdispatched",
-    "noofbottlesrequested",
-    "bottlesrequested",
-    "totalbottles",
-    "totalqty",
-    "totalquantity",
-    "dispatchqty",
-    "dispatchedqty",
-    "issuedqty",
-}
-
-
-def _raw_document_quantity(value) -> int | None:
-    if isinstance(value, dict):
-        for name, candidate in value.items():
-            if _quantity_key(name) in _DOCUMENT_QUANTITY_KEYS:
-                parsed = parse_int(candidate)
-                if parsed and parsed > 0:
-                    return parsed
-        for candidate in value.values():
-            parsed = _raw_document_quantity(candidate)
-            if parsed and parsed > 0:
-                return parsed
-    elif isinstance(value, list):
-        for candidate in value:
-            parsed = _raw_document_quantity(candidate)
-            if parsed and parsed > 0:
-                return parsed
-    return None
 
 
 def normalize_extracted_document(document: ExtractedDocument, source_type: str) -> list[NormalizedImportItem]:
@@ -100,8 +53,7 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
             physical_quantity = (
                 parse_int(item.quantity)
                 or parse_int(item.loose)
-                or _raw_document_quantity(raw)
-                or parse_int(item.box)
+                or extract_physical_quantity(raw)
                 or None
             )
             items.append(
