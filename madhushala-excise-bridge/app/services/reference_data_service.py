@@ -190,10 +190,10 @@ class MadhushalaReferenceDataService:
         if not code:
             return {}
         cache_key = f"item:{shop}:{company}:{code}"
-        cached = await cache_service.get_json(cache_key)
-        if isinstance(cached, dict):
-            return cached
 
+        # Purchase Calculate must use the full Item Master record. Do not return
+        # a cached/dropdown summary here because it may contain packing/tax tags
+        # while purchaseRate/MRP are absent or zero.
         source_catalogue = catalogue if catalogue is not None else await self.catalogue(session)
         dropdown_item: dict[str, Any] = {}
         for row in source_catalogue:
@@ -201,10 +201,6 @@ class MadhushalaReferenceDataService:
             if str(row_code or "").strip() == code:
                 dropdown_item = row
                 break
-
-        if dropdown_item and _has_purchase_detail(dropdown_item):
-            await cache_service.set_json(cache_key, dropdown_item, settings.CACHE_ITEM_TTL_SECONDS)
-            return dropdown_item
 
         client = self.client_for_session(session)
         try:
