@@ -127,20 +127,26 @@ def build_item_master_calculation_request(
     purchase_items: list[dict[str, Any]],
     item_master: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build Calculate request: extracted quantity only, all other values from Item Master."""
+    """Build Calculate request with reviewed box/loose; all commercial values come from Item Master."""
     request_items: list[dict[str, Any]] = []
 
     for item in purchase_items:
         code = str(item.get("itemCode") or "").strip()
         master = item_master.get(code) or {}
-        quantity = _int_value(item.get("qnty") if item.get("qnty") not in (None, "") else item.get("loose"))
+        box = _int_value(item.get("box"))
+        loose = _int_value(item.get("loose"))
+        if box <= 0 and loose <= 0:
+            # Backward compatibility for legacy callers that supplied only qnty.
+            loose = _int_value(
+                item.get("qnty") if item.get("qnty") not in (None, "") else item.get("quantity")
+            )
         loose_rate, box_rate, mrp, packing = _commercial_values(master)
 
         request_items.append(
             {
                 "itemCode": code,
-                "box": 0,
-                "loose": quantity,
+                "box": box,
+                "loose": loose,
                 "free": _int_value(item.get("freeQnty")),
                 "boxRate": box_rate,
                 "looseRate": loose_rate,
