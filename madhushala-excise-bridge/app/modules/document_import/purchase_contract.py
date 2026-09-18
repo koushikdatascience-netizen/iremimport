@@ -61,18 +61,13 @@ def _response_container(response: Any) -> dict[str, Any] | None:
 
 
 def _commercial_values(master: dict[str, Any]) -> tuple[float, float, float, int]:
-    loose_rate = _money(
-        _dict_value(
-            master,
-            "purchaseRate",
-            "purchaseRateLoose",
-            "looseRate",
-            "unitRate",
-            "rate",
-            "itemRate",
-        )
-    )
-    box_rate = _money(_dict_value(master, "purchaseRateCase", "boxRate", "caseRate", "purchaseCaseRate"))
+    # Purchase Calculate contract from Madhushala Item Master:
+    #   boxRate   <- itemmst.purchaseRateCase
+    #   looseRate <- itemmst.purchaseRate
+    # Either rate may legitimately be zero; never derive one from the other and
+    # never substitute generic rate/boxRate aliases from dropdown/source rows.
+    loose_rate = _money(_dict_value(master, "purchaseRate"))
+    box_rate = _money(_dict_value(master, "purchaseRateCase"))
     mrp = _money(_dict_value(master, "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
     packing = _int_value(_dict_value(master, "packing", "bottlePerCase", "bottlesPerCase", "caseQty"))
     return loose_rate, box_rate, mrp, packing
