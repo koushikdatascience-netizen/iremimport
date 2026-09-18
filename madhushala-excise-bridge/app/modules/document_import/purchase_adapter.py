@@ -151,9 +151,16 @@ class DocumentPurchaseAdapter:
                     # Legacy jobs created before canonical box/loose may only
                     # contain a single physical quantity. Keep them usable by
                     # treating that old quantity as loose, never as cases.
-                    legacy = _int_value(row["quantity"]) or resolve_document_quantity(raw)
+                    persisted_legacy = _int_value(row["quantity"])
+                    legacy = persisted_legacy or resolve_document_quantity(raw)
                     if legacy > 0:
                         loose = legacy
+                        if persisted_legacy <= 0:
+                            with conn() as db:
+                                db.execute(
+                                    "UPDATE import_items SET quantity=? WHERE id=?",
+                                    (float(legacy), row["id"]),
+                                )
 
                 qnty = ((box * packing) + loose) if packing else (box + loose)
             else:
