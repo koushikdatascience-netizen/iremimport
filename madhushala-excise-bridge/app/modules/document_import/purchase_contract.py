@@ -78,41 +78,6 @@ def _commercial_values(master: dict[str, Any]) -> tuple[float, float, float, int
     return loose_rate, box_rate, mrp, packing
 
 
-def validate_item_master_commercials(
-    item_master: dict[str, dict[str, Any]],
-    item_codes: list[str],
-) -> None:
-    """Block Calculate/Save when a mapped row is only a dropdown summary.
-
-    The document contributes only the extracted bottle quantity. Purchase rate,
-    case rate, MRP, packing and tax metadata must come from Madhushala Item Master.
-    A dropdown row that only contains packing/ETD/tax tags is not sufficient.
-    """
-    for code in item_codes:
-        master = item_master.get(str(code)) or {}
-        loose_rate, box_rate, mrp, packing = _commercial_values(master)
-        missing: list[str] = []
-        if not packing:
-            missing.append("packing")
-        if loose_rate <= 0 and box_rate <= 0:
-            missing.append("purchase rate")
-        if mrp <= 0:
-            missing.append("MRP")
-        if missing:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "stage": "ITEM_MASTER",
-                    "message": (
-                        f"Mapped item {code} is missing authoritative Item Master "
-                        f"{', '.join(missing)}. Purchase Calculate/Save was blocked."
-                    ),
-                    "itemCode": str(code),
-                    "missing": missing,
-                    "masterSnapshot": master,
-                },
-            )
-
 
 async def load_item_master_details(reference_service: Any, session: dict[str, Any], item_codes: list[str]) -> dict[str, dict[str, Any]]:
     """Load mapped purchase items without changing the integration company scope."""
@@ -157,7 +122,6 @@ async def load_item_master_details(reference_service: Any, session: dict[str, An
             detail=f"Madhushala Item Master returned no detail for item(s): {', '.join(missing)}",
         )
 
-    validate_item_master_commercials(result, codes)
     return result
 
 
@@ -280,10 +244,6 @@ class ItemMasterCalculateClient:
         return getattr(self._inner, name)
 
     async def calculate_purchase(self, payload: dict[str, Any]) -> Any:
-        validate_item_master_commercials(
-            self._item_master,
-            [str(item.get("itemCode") or "").strip() for item in self._purchase_items],
-        )
         actual_request = build_item_master_calculation_request(payload, self._purchase_items, self._item_master)
         payload.clear()
         payload.update(actual_request)
