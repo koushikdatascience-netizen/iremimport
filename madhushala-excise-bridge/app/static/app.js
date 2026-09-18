@@ -23,7 +23,7 @@ let currentDocumentJobId = activeJobId;
 let currentDocumentFile = null;
 let currentDocumentResult = null;
 let currentPreviewUrl = "";
-let currentUploadKind = "document";
+let currentUploadKind = "pdf";
 let mappingRefreshTimer = null;
 let mappingRefreshInFlight = false;
 const DEFAULT_EXCISE_LOGIN_URL = "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx";
@@ -258,7 +258,6 @@ async function uploadQr(file) {
     }
     currentUploadKind = "qr";
     currentDocumentFile = file;
-    currentUploadKind = kind;
     renderDocumentPreview(file);
     setDocumentImportState("uploading");
     const elements = documentElements();
@@ -882,7 +881,7 @@ function resetDocumentImport() {
     currentDocumentFile = null;
     currentDocumentResult = null;
     currentDocumentJobId = "";
-    currentUploadKind = "document";
+    currentUploadKind = "pdf";
     const pdfInput = document.getElementById("pdf-file");
     if (pdfInput) pdfInput.value = "";
     const imageInput = document.getElementById("image-file");
@@ -902,6 +901,7 @@ async function uploadDocument(file, kind = "pdf") {
         return;
     }
     currentDocumentFile = file;
+    currentUploadKind = kind;
     renderDocumentPreview(file);
     const form = new FormData();
     form.append("file", file);
