@@ -54,7 +54,7 @@ def test_calculate_request_uses_item_master_and_extracted_bottles_as_loose():
     assert item["loose"] == 6
     assert item["packing"] == 48
     assert item["boxRate"] == 500.0
-    assert item["looseRate"] == 10.42
+    assert item["looseRate"] == 500.0
     assert item["mrp"] == 280.0
     assert item["discount"] == 2.5
     assert item["cgst"] == 1.1
@@ -180,7 +180,7 @@ def test_calculate_allows_only_purchase_rate_to_be_non_zero():
     assert item["looseRate"] == 10.42
 
 
-def test_calculate_derives_loose_rate_from_case_rate_when_purchase_rate_is_zero():
+def test_calculate_uses_case_rate_as_loose_rate_when_purchase_rate_is_zero():
     master = _master()
     master["purchaseRate"] = 0
 
@@ -264,7 +264,7 @@ def test_real_item_master_sample_builds_real_calculate_shape():
     assert item["box"] == 0
     assert item["loose"] == 18
     assert item["boxRate"] == 200.0
-    assert item["looseRate"] == 16.67
+    assert item["looseRate"] == 200.0
     assert item["mrp"] == 1880.0
     assert item["t1Amt"] == 100.0
     assert item["t2Amt"] == 120.0
