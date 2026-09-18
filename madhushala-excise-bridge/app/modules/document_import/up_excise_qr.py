@@ -483,14 +483,19 @@ def _document_from_payload(
             "Total Bulk Litres",
         )
 
+        extracted_quantity = bottle_count or box_count or boxes
+        extracted_box = 0 if bottle_count else (box_count or boxes)
+        extracted_loose = bottle_count or None
+
         raw = {
             **meta,
             **row,
             "packageType": package_type,
             "measureMl": ml,
             "packagingSize": _clean(package_size),
-            "box": box_count or boxes,
-            "quantity": box_count or boxes,
+            "box": extracted_box,
+            "loose": extracted_loose,
+            "quantity": extracted_quantity,
             "qnty": bottle_count or bottles,
             "bulkLitres": _clean(bulk_litres),
             "liquorType": _clean(_first_present(row, "Liquor Type")),
@@ -516,8 +521,9 @@ def _document_from_payload(
                 brand=name,
                 ml=ml,
                 packing=packing,
-                quantity=box_count or boxes,
-                box=box_count or boxes,
+                quantity=extracted_quantity,
+                box=extracted_box,
+                loose=extracted_loose,
                 confidence=1,
                 **extras,
             )
