@@ -21,8 +21,11 @@ const selectedMappings = new Map();
 let pendingGuardrailAction = null;
 let currentDocumentJobId = activeJobId;
 let currentDocumentFile = null;
+let currentDocumentFiles = [];
 let currentDocumentResult = null;
 let currentPreviewUrl = "";
+let currentPreviewUrls = [];
+let currentPreviewIndex = 0;
 let currentUploadKind = "pdf";
 let currentReviewItems = [];
 let currentSourceUrl = "";
@@ -820,23 +823,105 @@ function formatBytes(bytes) {
 }
 
 function revokeDocumentPreview() {
-    if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl);
+    currentPreviewUrls.forEach((url) => {
+        try { URL.revokeObjectURL(url); } catch {}
+    });
+    currentPreviewUrls = [];
     currentPreviewUrl = "";
+    currentPreviewIndex = 0;
 }
 
-function renderDocumentPreview(file) {
-    revokeDocumentPreview();
-    currentPreviewUrl = URL.createObjectURL(file);
-    const preview = document.getElementById("document-preview");
-    if (!preview) return;
-    if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
-        preview.innerHTML = `<iframe title="Uploaded PDF preview" src="${currentPreviewUrl}"></iframe>`;
-    } else {
-        preview.innerHTML = `<img alt="Uploaded document preview" src="${currentPreviewUrl}">`;
+function currentPreviewFile() {
+    return currentDocumentFiles[currentPreviewIndex] || currentDocumentFile || null;
+}
+
+function renderPreviewFileList() {
+    const container = document.getElementById("document-file-tabs");
+    if (!container) return;
+    if (currentDocumentFiles.length <= 1) {
+        container.innerHTML = "";
+        container.hidden = true;
+        return;
     }
+    container.hidden = false;
+    container.innerHTML = currentDocumentFiles.map((file, index) => {
+        const active = index === currentPreviewIndex ? " active" : "";
+        return '<button type="button" class="document-file-tab' + active + '" data-preview-index="' + index + '">' +
+            '<span>' + (index + 1) + '</span>' +
+            '<strong>' + escapeHtml(file.name) + '</strong>' +
+            '</button>';
+    }).join("");
+}
+
+function renderCurrentDocumentPreview() {
+    const file = currentPreviewFile();
+    const preview = document.getElementById("document-preview");
+    if (!preview || !file) return;
+    currentPreviewUrl = currentPreviewUrls[currentPreviewIndex] || "";
+    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    preview.innerHTML = isPdf
+        ? '<iframe title="Uploaded PDF preview" src="' + currentPreviewUrl + '#toolbar=1&navpanes=0"></iframe>'
+        : '<img alt="Uploaded document preview" src="' + currentPreviewUrl + '">';
     setText(document.getElementById("review-filename"), file.name);
     setText(document.getElementById("review-filetype"), file.type || file.name.split(".").pop().toUpperCase());
     setText(document.getElementById("review-filesize"), formatBytes(file.size));
+    renderPreviewFileList();
+}
+
+function renderDocumentPreviews(files) {
+    revokeDocumentPreview();
+    currentDocumentFiles = Array.from(files || []);
+    currentDocumentFile = currentDocumentFiles[0] || null;
+    currentPreviewUrls = currentDocumentFiles.map((file) => URL.createObjectURL(file));
+    currentPreviewIndex = 0;
+    renderCurrentDocumentPreview();
+}
+
+function setPreviewIndex(index) {
+    const next = Number(index);
+    if (!Number.isInteger(next) || next < 0 || next >= currentDocumentFiles.length) return;
+    currentPreviewIndex = next;
+    renderCurrentDocumentPreview();
+    if (!document.getElementById("document-viewer-modal")?.hidden) {
+        renderDocumentViewer();
+    }
+}
+
+function renderDocumentViewer() {
+    const file = currentPreviewFile();
+    const stage = document.getElementById("document-viewer-stage");
+    if (!file || !stage) return;
+    const url = currentPreviewUrls[currentPreviewIndex] || "";
+    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    stage.innerHTML = isPdf
+        ? '<iframe title="Full document preview" src="' + url + '#toolbar=1&navpanes=1"></iframe>'
+        : '<img alt="Full document preview" src="' + url + '">';
+    setText(document.getElementById("document-viewer-title"), file.name);
+    setText(document.getElementById("document-viewer-count"), currentDocumentFiles.length > 1
+        ? ((currentPreviewIndex + 1) + " of " + currentDocumentFiles.length)
+        : "Source preview");
+    const previous = document.getElementById("document-viewer-prev");
+    const next = document.getElementById("document-viewer-next");
+    if (previous) previous.disabled = currentPreviewIndex <= 0;
+    if (next) next.disabled = currentPreviewIndex >= currentDocumentFiles.length - 1;
+}
+
+function openDocumentViewer() {
+    if (!currentPreviewFile()) {
+        showToast("No local PDF/image preview is available.", "error");
+        return;
+    }
+    const modal = document.getElementById("document-viewer-modal");
+    if (!modal) return;
+    renderDocumentViewer();
+    modal.hidden = false;
+    document.body.classList.add("document-viewer-open");
+}
+
+function closeDocumentViewer() {
+    const modal = document.getElementById("document-viewer-modal");
+    if (modal) modal.hidden = true;
+    document.body.classList.remove("document-viewer-open");
 }
 
 function safeSourceUrl(value) {
@@ -858,6 +943,7 @@ function reviewItemsFromPayload(payload) {
             ml: item.ml ?? "",
             box: item.box ?? 0,
             loose: item.loose ?? 0,
+            sourceFile: String(item.sourceFile || ""),
             issues: Array.isArray(item.issues) ? item.issues : [],
         }));
     }
@@ -868,6 +954,7 @@ function reviewItemsFromPayload(payload) {
         ml: item.ml ?? "",
         box: item.box ?? 0,
         loose: item.loose ?? 0,
+        sourceFile: String(item.rawData?.sourceFilename || ""),
         issues: [],
     }));
 }
@@ -929,21 +1016,41 @@ function updateReviewValidation() {
     return {items, invalid};
 }
 
+function applyReviewFilter() {
+    const query = String(document.getElementById("document-review-search")?.value || "").trim().toLowerCase();
+    const issuesOnly = Boolean(document.getElementById("document-review-issues-only")?.checked);
+    document.querySelectorAll("#document-items-table-body tr[data-review-id]").forEach((row) => {
+        const haystack = String(row.dataset.searchText || "").toLowerCase();
+        const hasIssues = row.classList.contains("invalid-row");
+        row.hidden = Boolean((query && !haystack.includes(query)) || (issuesOnly && !hasIssues));
+    });
+}
+
 function renderReviewTable(items) {
     currentReviewItems = items;
     const tbody = document.getElementById("document-items-table-body");
     if (!tbody) return;
-    tbody.innerHTML = items.map((item) => {
+    tbody.innerHTML = items.map((item, index) => {
         const initialIssues = validateReviewItem(item);
-        return '<tr data-review-id="' + escapeHtml(item.id) + '" class="' + (initialIssues.length ? "invalid-row" : "") + '">' +
+        const source = item.sourceFile || "";
+        const searchText = [item.name, item.brand, item.ml, item.box, item.loose, source].join(" ");
+        return '<tr data-review-id="' + escapeHtml(item.id) + '" data-search-text="' + escapeHtml(searchText) + '" class="' + (initialIssues.length ? "invalid-row" : "") + '">' +
+            '<td class="row-number-cell"><span class="row-number">' + (index + 1) + '</span></td>' +
             '<td class="name-cell"><input data-field="name" type="text" value="' + escapeHtml(item.name) + '" maxlength="300" aria-label="Product name"><span class="document-row-issues">' + escapeHtml(initialIssues.join(" • ")) + '</span></td>' +
             '<td class="brand-cell"><input data-field="brand" type="text" value="' + escapeHtml(item.brand) + '" maxlength="300" aria-label="Brand"></td>' +
             '<td class="number-cell"><input data-field="ml" type="number" min="1" step="1" value="' + escapeHtml(item.ml) + '" aria-label="ML"></td>' +
             '<td class="number-cell"><input data-field="box" type="number" min="0" step="1" value="' + escapeHtml(item.box) + '" aria-label="Box or cases"></td>' +
             '<td class="number-cell"><input data-field="loose" type="number" min="0" step="1" value="' + escapeHtml(item.loose) + '" aria-label="Loose bottles"></td>' +
+            '<td class="source-cell"><button type="button" class="source-jump" data-source-file="' + escapeHtml(source) + '" title="Open source file">' +
+                (source ? escapeHtml(source) : "Source") +
+            '</button></td>' +
+            '<td class="status-cell"><span class="row-status ' + (initialIssues.length ? "issue" : "valid") + '">' +
+                (initialIssues.length ? "Needs attention" : "Ready") +
+            '</span></td>' +
             '</tr>';
     }).join("");
     updateReviewValidation();
+    applyReviewFilter();
 }
 
 function renderReviewSource(payload) {
@@ -989,6 +1096,7 @@ function renderDocumentReview(payload) {
 function resetDocumentImport() {
     revokeDocumentPreview();
     currentDocumentFile = null;
+    currentDocumentFiles = [];
     currentDocumentResult = null;
     currentDocumentJobId = "";
     currentUploadKind = "pdf";
@@ -1008,46 +1116,63 @@ function resetDocumentImport() {
     setDocumentImportState("idle", "Ready. Select a purchase PDF, purchase image, or QR image.");
 }
 
-async function uploadDocument(file, kind = "pdf") {
+async function uploadDocuments(files, kind = "pdf") {
+    const selectedFiles = Array.from(files || []).filter(Boolean);
+    if (!selectedFiles.length) return;
     if (!sessionToken) {
         setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
         setText(documentElements().errorMessage, "Missing or expired CRM session.");
         return;
     }
-    currentDocumentFile = file;
+
     currentUploadKind = kind;
-    renderDocumentPreview(file);
+    renderDocumentPreviews(selectedFiles);
     const form = new FormData();
-    form.append("file", file);
+    selectedFiles.forEach((file) => form.append("files", file));
+
     setDocumentImportState("uploading");
     const elements = documentElements();
-    setText(elements.progressTitle, "Uploading document");
-    setText(elements.progressDetail, "Sending the selected document securely to the bridge.");
+    setText(elements.progressTitle, selectedFiles.length > 1 ? "Uploading purchase documents" : "Uploading document");
+    setText(
+        elements.progressDetail,
+        selectedFiles.length > 1
+            ? ("Uploading " + selectedFiles.length + " files as one purchase and validating their document identity.")
+            : "Sending the selected document securely to the bridge."
+    );
+
     try {
         window.setTimeout(() => {
             if (document.getElementById("document-processing-panel")?.hidden) return;
             setDocumentImportState("extracting");
-            const latestElements = documentElements();
-            setText(latestElements.progressTitle, "Extracting products");
-            setText(latestElements.progressDetail, "Reading source rows and building canonical Name / Brand / ML / Box / Loose values.");
-        }, 500);
-        const endpoint = kind === "image" ? "/api/v1/document-import/upload/image" : "/api/v1/document-import/upload/pdf";
-        const response = await fetch(apiUrl(endpoint), {
+            setText(elements.progressTitle, "Extracting purchase data");
+            setText(elements.progressDetail, "Checking PyMuPDF coverage first and using LlamaParse automatically when extraction is incomplete.");
+        }, 250);
+
+        const payload = await api("/api/v1/document-import/upload/batch/" + encodeURIComponent(kind), {
             method: "POST",
-            headers: {"Authorization": `Bearer ${sessionToken}`},
             body: form,
-        });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.detail || payload.error || "Document import failed");
+        }, true);
+        if (!payload?.job) throw new Error(payload.detail || payload.error || "Document import failed");
         renderDocumentReview(payload);
-        const engine = payload.extraction?.engine || (kind === "image" ? "llamaparse" : "unknown");
-        setText(document.getElementById("document-action-summary"),
-            `${document.getElementById("document-action-summary")?.textContent || ""} | Extractor: ${engine}`);
+        const engines = (payload.extraction?.files || [])
+            .map((entry) => entry.engine)
+            .filter(Boolean);
+        const engineText = engines.length ? Array.from(new Set(engines)).join(" + ") : (payload.extraction?.engine || "unknown");
+        setText(
+            document.getElementById("document-action-summary"),
+            (document.getElementById("document-action-summary")?.textContent || "") +
+            " • " + selectedFiles.length + " source file" + (selectedFiles.length === 1 ? "" : "s") +
+            " • Extractor: " + engineText
+        );
         setDocumentImportState("review");
     } catch (error) {
         setText(documentElements().errorMessage, error.message || "Document import failed.");
         setDocumentImportState("error");
     }
+}
+
+async function uploadDocument(file, kind = "pdf") {
+    return uploadDocuments([file], kind);
 }
 
 async function initDocumentImport() {
@@ -1074,12 +1199,12 @@ document.getElementById("open-portal")?.addEventListener("click", openPortal);
 document.getElementById("madhushala-search")?.addEventListener("input", runSearch);
 document.getElementById("submit-mappings")?.addEventListener("click", saveMappings);
 document.getElementById("pdf-file")?.addEventListener("change", (event) => {
-    const [file] = event.target.files || [];
-    if (file) uploadDocument(file, "pdf");
+    const files = Array.from(event.target.files || []);
+    if (files.length) void uploadDocuments(files, "pdf");
 });
 document.getElementById("image-file")?.addEventListener("change", (event) => {
-    const [file] = event.target.files || [];
-    if (file) uploadDocument(file, "image");
+    const files = Array.from(event.target.files || []);
+    if (files.length) void uploadDocuments(files, "image");
 });
 document.getElementById("qr-file")?.addEventListener("change", (event) => {
     const [file] = event.target.files || [];
@@ -1094,7 +1219,7 @@ document.getElementById("qr-link-input")?.addEventListener("keydown", (event) =>
         void submitQrLink();
     }
 });
-function bindDropzone(id, handler) {
+function bindDropzone(id, handler, multiple = false) {
     const zone = document.getElementById(id);
     zone?.addEventListener("dragover", (event) => {
         event.preventDefault();
@@ -1104,12 +1229,13 @@ function bindDropzone(id, handler) {
     zone?.addEventListener("drop", (event) => {
         event.preventDefault();
         zone.classList.remove("dragover");
-        const [file] = event.dataTransfer.files || [];
-        if (file) handler(file);
+        const files = Array.from(event.dataTransfer.files || []);
+        if (!files.length) return;
+        handler(multiple ? files : files[0]);
     });
 }
-bindDropzone("pdf-dropzone", (file) => uploadDocument(file, "pdf"));
-bindDropzone("image-dropzone", (file) => uploadDocument(file, "image"));
+bindDropzone("pdf-dropzone", (files) => void uploadDocuments(files, "pdf"), true);
+bindDropzone("image-dropzone", (files) => void uploadDocuments(files, "image"), true);
 bindDropzone("qr-dropzone", uploadQr);
 document.getElementById("document-refresh")?.addEventListener("click", resetDocumentImport);
 document.getElementById("replace-document")?.addEventListener("click", resetDocumentImport);
@@ -1117,31 +1243,45 @@ document.getElementById("document-upload-another")?.addEventListener("click", re
 document.getElementById("success-upload-another")?.addEventListener("click", resetDocumentImport);
 document.getElementById("choose-another-document")?.addEventListener("click", resetDocumentImport);
 document.getElementById("retry-document")?.addEventListener("click", () => {
-    if (currentDocumentFile) {
-        if (currentUploadKind === "qr") uploadQr(currentDocumentFile);
-        else uploadDocument(currentDocumentFile, currentUploadKind === "image" ? "image" : "pdf");
+    if (currentUploadKind === "qr" && currentDocumentFile) {
+        void uploadQr(currentDocumentFile);
+    } else if (currentDocumentFiles.length) {
+        void uploadDocuments(currentDocumentFiles, currentUploadKind === "image" ? "image" : "pdf");
+    } else {
+        resetDocumentImport();
     }
-    else resetDocumentImport();
 });
 document.getElementById("copy-document-json")?.addEventListener("click", async () => {
     await navigator.clipboard.writeText(document.getElementById("document-json")?.textContent || "");
     showToast("JSON copied", "success");
 });
-document.getElementById("document-items-table-body")?.addEventListener("input", updateReviewValidation);
-document.getElementById("document-fullscreen")?.addEventListener("click", async () => {
-    const preview = document.getElementById("document-preview");
-    if (!preview?.requestFullscreen) {
-        showToast("Full screen preview is not supported by this browser.", "error");
-        return;
-    }
-    try {
-        await preview.requestFullscreen();
-    } catch (error) {
-        showToast(error.message || "Could not open full screen preview", "error");
+document.getElementById("document-items-table-body")?.addEventListener("input", () => {
+    updateReviewValidation();
+    applyReviewFilter();
+});
+document.getElementById("document-items-table-body")?.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-source-file]");
+    if (!button) return;
+    const filename = String(button.dataset.sourceFile || "");
+    const index = currentDocumentFiles.findIndex((file) => file.name === filename);
+    if (index >= 0) {
+        setPreviewIndex(index);
+        openDocumentViewer();
     }
 });
+document.getElementById("document-file-tabs")?.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-preview-index]");
+    if (button) setPreviewIndex(Number(button.dataset.previewIndex));
+});
+document.getElementById("document-review-search")?.addEventListener("input", applyReviewFilter);
+document.getElementById("document-review-issues-only")?.addEventListener("change", applyReviewFilter);
+document.getElementById("document-fullscreen")?.addEventListener("click", openDocumentViewer);
+document.getElementById("document-viewer-close")?.addEventListener("click", closeDocumentViewer);
+document.getElementById("document-viewer-backdrop")?.addEventListener("click", closeDocumentViewer);
+document.getElementById("document-viewer-prev")?.addEventListener("click", () => setPreviewIndex(currentPreviewIndex - 1));
+document.getElementById("document-viewer-next")?.addEventListener("click", () => setPreviewIndex(currentPreviewIndex + 1));
 document.getElementById("document-open-new-tab")?.addEventListener("click", () => {
-    const target = currentPreviewUrl || currentSourceUrl;
+    const target = (currentPreviewUrls[currentPreviewIndex] || currentPreviewUrl) || currentSourceUrl;
     if (!target) {
         showToast("No source preview is available.", "error");
         return;
