@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS mappings (
   mapped_at TEXT NOT NULL,
   PRIMARY KEY(shop_code, excise_item_code)
 );
+CREATE TABLE IF NOT EXISTS mappings_v2 (
+  shop_code TEXT NOT NULL,
+  company_code TEXT NOT NULL,
+  excise_item_code TEXT NOT NULL,
+  madhushala_item_code TEXT NOT NULL,
+  mapped_at TEXT NOT NULL,
+  PRIMARY KEY(shop_code, company_code, excise_item_code)
+);
 CREATE TABLE IF NOT EXISTS import_jobs (
   id TEXT PRIMARY KEY,
   shop_code TEXT NOT NULL,
@@ -104,6 +112,17 @@ CREATE TABLE IF NOT EXISTS document_product_mappings (
   PRIMARY KEY(shop_code, normalized_name, ml)
 );
 
+CREATE TABLE IF NOT EXISTS document_product_mappings_v2 (
+  shop_code TEXT NOT NULL,
+  company_code TEXT NOT NULL,
+  normalized_name TEXT NOT NULL,
+  ml INTEGER NOT NULL,
+  barcode TEXT,
+  madhushala_item_code TEXT NOT NULL,
+  mapped_at TEXT NOT NULL,
+  PRIMARY KEY(shop_code, company_code, normalized_name, ml)
+);
+
 CREATE TABLE IF NOT EXISTS purchase_transactions (
   id TEXT PRIMARY KEY,
   job_id TEXT NOT NULL UNIQUE,
@@ -135,6 +154,8 @@ CREATE INDEX IF NOT EXISTS idx_import_jobs_status ON import_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_import_items_job_id ON import_items(job_id);
 CREATE INDEX IF NOT EXISTS idx_import_items_mapping_status ON import_items(mapping_status);
 CREATE INDEX IF NOT EXISTS idx_document_product_mappings_item ON document_product_mappings(shop_code, madhushala_item_code);
+CREATE INDEX IF NOT EXISTS idx_mappings_v2_item ON mappings_v2(shop_code, company_code, madhushala_item_code);
+CREATE INDEX IF NOT EXISTS idx_document_product_mappings_v2_item ON document_product_mappings_v2(shop_code, company_code, madhushala_item_code);
 CREATE INDEX IF NOT EXISTS idx_purchase_transactions_status ON purchase_transactions(status);
 CREATE INDEX IF NOT EXISTS idx_purchase_transactions_doc ON purchase_transactions(shop_code, company_code, supplier_code, doc_no);
 CREATE INDEX IF NOT EXISTS idx_purchase_events_job_id ON purchase_events(job_id);
@@ -293,35 +314,46 @@ def init_db():
                 (box, loose, row["id"]),
             )
 
-        # Backfill mappings already confirmed before this migration.  Rows are
-        # ordered oldest -> newest so the user's latest Change Mapping decision
-        # wins for a repeated product.
+        # Company-scoped mapping v2. Old shop-only mappings are unsafe when the
+        # same shop/session can work under multiple Madhushala companies.
+        # Rebuild v2 history only from import jobs whose original session tells
+        # us the exact company that was active when the mapping was confirmed.
+        db.execute("DROP TRIGGER IF EXISTS trg_document_mapping_remember")
+        db.execute("DROP TRIGGER IF EXISTS trg_document_mapping_reuse_on_insert")
+        db.execute("DROP TRIGGER IF EXISTS trg_document_mapping_preserve_on_refresh")
+
         historical = db.execute(
             """
             SELECT
               j.shop_code,
+              s.company_code,
               ii.normalized_name,
               ii.ml,
               ii.barcode,
+              ii.excise_item_code,
               ii.mapped_item_code,
               ii.updated_at
             FROM import_items ii
             JOIN import_jobs j ON j.id = ii.job_id
+            JOIN integration_sessions s ON s.session_id = j.session_id
             WHERE TRIM(COALESCE(ii.mapped_item_code, '')) <> ''
               AND TRIM(COALESCE(ii.normalized_name, '')) <> ''
               AND COALESCE(ii.ml, 0) > 0
+              AND TRIM(COALESCE(s.company_code, '')) <> ''
             ORDER BY ii.updated_at ASC
             """
         ).fetchall()
         for row in historical:
             db.execute(
                 """
-                INSERT OR REPLACE INTO document_product_mappings(
-                  shop_code, normalized_name, ml, barcode, madhushala_item_code, mapped_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO document_product_mappings_v2(
+                  shop_code, company_code, normalized_name, ml, barcode,
+                  madhushala_item_code, mapped_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row["shop_code"],
+                    row["company_code"],
                     row["normalized_name"],
                     row["ml"],
                     row["barcode"],
@@ -329,6 +361,119 @@ def init_db():
                     row["updated_at"],
                 ),
             )
+            if str(row["excise_item_code"] or "").strip():
+                db.execute(
+                    """
+                    INSERT OR REPLACE INTO mappings_v2(
+                      shop_code, company_code, excise_item_code,
+                      madhushala_item_code, mapped_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        row["shop_code"],
+                        row["company_code"],
+                        row["excise_item_code"],
+                        row["mapped_item_code"],
+                        row["updated_at"],
+                    ),
+                )
+
+        db.executescript(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_document_mapping_remember_v2
+            AFTER UPDATE OF mapped_item_code ON import_items
+            WHEN TRIM(COALESCE(NEW.mapped_item_code, '')) <> ''
+             AND TRIM(COALESCE(NEW.normalized_name, '')) <> ''
+             AND COALESCE(NEW.ml, 0) > 0
+            BEGIN
+              INSERT OR REPLACE INTO document_product_mappings_v2(
+                shop_code, company_code, normalized_name, ml, barcode,
+                madhushala_item_code, mapped_at
+              )
+              SELECT
+                j.shop_code,
+                s.company_code,
+                NEW.normalized_name,
+                NEW.ml,
+                NEW.barcode,
+                NEW.mapped_item_code,
+                NEW.updated_at
+              FROM import_jobs j
+              JOIN integration_sessions s ON s.session_id = j.session_id
+              WHERE j.id = NEW.job_id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_document_mapping_reuse_on_insert_v2
+            AFTER INSERT ON import_items
+            WHEN TRIM(COALESCE(NEW.normalized_name, '')) <> ''
+             AND COALESCE(NEW.ml, 0) > 0
+            BEGIN
+              UPDATE import_items
+              SET
+                mapped_item_code = COALESCE(
+                  (
+                    SELECT dpm.madhushala_item_code
+                    FROM document_product_mappings_v2 dpm
+                    JOIN import_jobs j ON j.id = NEW.job_id
+                    JOIN integration_sessions s ON s.session_id = j.session_id
+                    WHERE dpm.shop_code = j.shop_code
+                      AND dpm.company_code = s.company_code
+                      AND dpm.normalized_name = NEW.normalized_name
+                      AND dpm.ml = NEW.ml
+                    LIMIT 1
+                  ),
+                  mapped_item_code
+                ),
+                mapping_status = CASE
+                  WHEN EXISTS(
+                    SELECT 1
+                    FROM document_product_mappings_v2 dpm
+                    JOIN import_jobs j ON j.id = NEW.job_id
+                    JOIN integration_sessions s ON s.session_id = j.session_id
+                    WHERE dpm.shop_code = j.shop_code
+                      AND dpm.company_code = s.company_code
+                      AND dpm.normalized_name = NEW.normalized_name
+                      AND dpm.ml = NEW.ml
+                  ) THEN 'MAPPED'
+                  ELSE mapping_status
+                END
+              WHERE id = NEW.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_document_mapping_preserve_on_refresh_v2
+            AFTER UPDATE OF mapped_item_code ON import_items
+            WHEN TRIM(COALESCE(NEW.mapped_item_code, '')) = ''
+             AND TRIM(COALESCE(NEW.normalized_name, '')) <> ''
+             AND COALESCE(NEW.ml, 0) > 0
+             AND EXISTS(
+               SELECT 1
+               FROM document_product_mappings_v2 dpm
+               JOIN import_jobs j ON j.id = NEW.job_id
+               JOIN integration_sessions s ON s.session_id = j.session_id
+               WHERE dpm.shop_code = j.shop_code
+                 AND dpm.company_code = s.company_code
+                 AND dpm.normalized_name = NEW.normalized_name
+                 AND dpm.ml = NEW.ml
+             )
+            BEGIN
+              UPDATE import_items
+              SET
+                mapped_item_code = (
+                  SELECT dpm.madhushala_item_code
+                  FROM document_product_mappings_v2 dpm
+                  JOIN import_jobs j ON j.id = NEW.job_id
+                  JOIN integration_sessions s ON s.session_id = j.session_id
+                  WHERE dpm.shop_code = j.shop_code
+                    AND dpm.company_code = s.company_code
+                    AND dpm.normalized_name = NEW.normalized_name
+                    AND dpm.ml = NEW.ml
+                  LIMIT 1
+                ),
+                mapping_status = 'MAPPED'
+              WHERE id = NEW.id;
+            END;
+            """
+        )
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
