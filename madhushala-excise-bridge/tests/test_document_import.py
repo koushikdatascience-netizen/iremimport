@@ -934,3 +934,151 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
     assert len(products) == 1
     assert products[0].box == 3
     assert products[0].loose == 144
+
+
+def test_multi_pdf_batch_merges_same_purchase_into_one_review(client, monkeypatch):
+    from app.modules.document_import.service import DocumentImportService
+
+    async def fake_extract_part(self, data, ext, filename, source_index):
+        name = "ROYAL STAG 750 ML" if source_index == 1 else "SIGNATURE 375 ML"
+        payload = ExtractedDocument(
+            documentType="invoice",
+            invoiceNumber="INV-100",
+            invoiceDate="18/09/2026",
+            items=[
+                ExtractedProduct(
+                    itemName=name,
+                    brand=name,
+                    ml=750 if source_index == 1 else 375,
+                    box=2 if source_index == 1 else 1,
+                    loose=3 if source_index == 1 else 4,
+                    **{
+                        "sourceFilename": filename,
+                        "sourceFileIndex": source_index,
+                    },
+                )
+            ],
+        )
+        return payload, {
+            "engine": "fake",
+            "filename": filename,
+            "sourceFileIndex": source_index,
+        }
+
+    monkeypatch.setattr(DocumentImportService, "_extract_upload_part", fake_extract_part)
+
+    session = create_session(client)
+    response = client.post(
+        "/api/v1/document-import/upload/batch/pdf",
+        headers=auth(session),
+        files=[
+            ("files", ("page-1.pdf", b"%PDF-1.4 page1", "application/pdf")),
+            ("files", ("page-2.pdf", b"%PDF-1.4 page2", "application/pdf")),
+        ],
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["job"]["status"] == "REVIEW_REQUIRED"
+    assert payload["summary"]["detected"] == 2
+    assert payload["summary"]["sourceFiles"] == 2
+    assert payload["extractedDocument"]["invoiceNumber"] == "INV-100"
+    assert [row["sourceFile"] for row in payload["reviewItems"]] == ["page-1.pdf", "page-2.pdf"]
+    assert payload["reviewItems"][0]["box"] == 2
+    assert payload["reviewItems"][0]["loose"] == 3
+    assert payload["reviewItems"][1]["box"] == 1
+    assert payload["reviewItems"][1]["loose"] == 4
+
+
+def test_multi_pdf_batch_rejects_different_document_numbers(client, monkeypatch):
+    from app.modules.document_import.service import DocumentImportService
+
+    async def fake_extract_part(self, data, ext, filename, source_index):
+        return ExtractedDocument(
+            documentType="invoice",
+            invoiceNumber="INV-A" if source_index == 1 else "INV-B",
+            invoiceDate="2026-09-18",
+            items=[
+                ExtractedProduct(
+                    itemName=f"ITEM {source_index} 750 ML",
+                    brand=f"ITEM {source_index}",
+                    ml=750,
+                    box=1,
+                    loose=0,
+                    **{
+                        "sourceFilename": filename,
+                        "sourceFileIndex": source_index,
+                    },
+                )
+            ],
+        ), {"engine": "fake"}
+
+    monkeypatch.setattr(DocumentImportService, "_extract_upload_part", fake_extract_part)
+
+    session = create_session(client)
+    response = client.post(
+        "/api/v1/document-import/upload/batch/pdf",
+        headers=auth(session),
+        files=[
+            ("files", ("a.pdf", b"%PDF-1.4 a", "application/pdf")),
+            ("files", ("b.pdf", b"%PDF-1.4 b", "application/pdf")),
+        ],
+    )
+
+    assert response.status_code == 422
+    assert "different document numbers" in response.json()["detail"]
+
+
+def test_company_scoped_product_mapping_does_not_leak_to_other_company(client):
+    from app.db import conn
+    from app.main import document_import_service
+    from app.services.session_service import session_service
+
+    session_two_response = create_session(client)
+    session_two = session_service.by_token(session_two_response["sessionToken"])
+    session_three_response = client.post(
+        "/crm/session",
+        json={
+            "shopCode": "SHOP_A",
+            "companyCode": "3",
+            "billType": "AI",
+            "accessToken": "token",
+        },
+    ).json()
+    session_three = session_service.by_token(session_three_response["sessionToken"])
+
+    normalized = normalize_extracted_document(
+        ExtractedDocument(
+            documentType="invoice",
+            items=[
+                ExtractedProduct(
+                    itemName="SAME PRODUCT 750 ML",
+                    brand="SAME PRODUCT",
+                    ml=750,
+                    box=1,
+                    loose=0,
+                )
+            ],
+        ),
+        "DOCUMENT_PDF",
+    )
+
+    job_two = document_import_service._create_job(session_two, "DOCUMENT_PDF", "c2.pdf")
+    document_import_service._persist_items(job_two, normalized)
+    with conn() as db:
+        row = db.execute("SELECT id FROM import_items WHERE job_id=?", (job_two,)).fetchone()
+        db.execute(
+            "UPDATE import_items SET mapped_item_code='C2ITEM', mapping_status='MAPPED', updated_at='2026-09-18T00:00:00Z' WHERE id=?",
+            (row["id"],),
+        )
+
+    job_three = document_import_service._create_job(session_three, "DOCUMENT_PDF", "c3.pdf")
+    document_import_service._persist_items(job_three, normalized)
+    with conn() as db:
+        row = db.execute(
+            "SELECT mapped_item_code, mapping_status FROM import_items WHERE job_id=?",
+            (job_three,),
+        ).fetchone()
+
+    assert not str(row["mapped_item_code"] or "").strip()
+    assert row["mapping_status"] != "MAPPED"
