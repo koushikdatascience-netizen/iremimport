@@ -231,7 +231,7 @@ def test_document_upload_accepts_pdf_and_persists_job(client, monkeypatch):
         return ExtractedDocument(
             documentType="invoice",
             supplierName="Supplier",
-            items=[ExtractedProduct(itemName="100 PIPER 180", brand="100 PIPER", ml=180, packing=48, confidence=0.95)],
+            items=[ExtractedProduct(itemName="100 PIPER 180", brand="100 PIPER", ml=180, packing=48, quantity=48, confidence=0.95)],
         )
 
     async def fake_prepare(session, job_id):
