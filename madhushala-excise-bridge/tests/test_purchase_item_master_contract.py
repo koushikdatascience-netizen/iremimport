@@ -200,7 +200,7 @@ def test_calculate_uses_case_rate_as_loose_rate_when_purchase_rate_is_zero():
     assert item["box"] == 0
     assert item["loose"] == 18
     assert item["boxRate"] == 500.0
-    assert item["looseRate"] == 10.42
+    assert item["looseRate"] == 500.0
 
 
 def test_calculate_does_not_fall_back_to_generic_rate_aliases():
