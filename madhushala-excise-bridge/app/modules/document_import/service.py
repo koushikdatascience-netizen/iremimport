@@ -267,10 +267,10 @@ class DocumentImportService:
                     """
                     INSERT INTO import_items(
                         id, job_id, source_item_id, raw_name, normalized_name, brand, ml,
-                        packing, quantity, rate, mrp, amount, barcode, confidence,
+                        packing, quantity, box, loose, rate, mrp, amount, barcode, confidence,
                         mapping_status, raw_data_json, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         uuid.uuid4().hex,
@@ -282,6 +282,8 @@ class DocumentImportService:
                         item.ml,
                         item.packing,
                         item.quantity,
+                        item.box,
+                        item.loose,
                         item.rate,
                         item.mrp,
                         item.amount,
@@ -315,7 +317,26 @@ class DocumentImportService:
         name = str(row["raw_name"] or row["normalized_name"] or "").strip()
         brand = str(row["brand"] or name).strip()
         ml = _int_value(row["ml"])
-        quantity = _int_value(row["quantity"])
+
+        raw: dict[str, Any] = {}
+        try:
+            loaded = json.loads(row["raw_data_json"] or "{}")
+            if isinstance(loaded, dict):
+                raw = loaded
+        except Exception:
+            raw = {}
+
+        keys = set(row.keys()) if hasattr(row, "keys") else set()
+        box = _int_value(row["box"]) if "box" in keys else 0
+        loose = _int_value(row["loose"]) if "loose" in keys else 0
+        if box <= 0:
+            box = _int_value(raw.get("canonicalBox", raw.get("box")))
+        if loose <= 0:
+            loose = _int_value(raw.get("canonicalLoose", raw.get("loose")))
+        if box <= 0 and loose <= 0:
+            # Legacy review compatibility only.
+            loose = _int_value(row["quantity"])
+
         issues: list[str] = []
         if not name:
             issues.append("Name is required")
@@ -323,14 +344,16 @@ class DocumentImportService:
             issues.append("Brand is required")
         if ml <= 0:
             issues.append("ML must be a positive whole number")
-        if quantity <= 0:
-            issues.append("Quantity must be a positive whole number")
+        if box <= 0 and loose <= 0:
+            issues.append("Enter at least one case/box or loose bottle")
+
         return {
             "id": str(row["id"]),
             "name": name,
             "brand": brand,
             "ml": ml or None,
-            "quantity": quantity or None,
+            "box": box,
+            "loose": loose,
             "issues": issues,
             "valid": not issues,
         }
@@ -381,13 +404,16 @@ class DocumentImportService:
             brand = " ".join(str(item.get("brand") or "").split()).strip()
             try:
                 ml_decimal = Decimal(str(item.get("ml") or "0"))
-                quantity_decimal = Decimal(str(item.get("quantity") or "0"))
+                box_decimal = Decimal(str(item.get("box") or "0"))
+                loose_decimal = Decimal(str(item.get("loose") or "0"))
             except Exception:
-                validation_errors.append(f"Row {position}: ML and Quantity must be numbers")
+                validation_errors.append(f"Row {position}: ML, Box and Loose must be numbers")
                 continue
 
             ml = int(ml_decimal) if ml_decimal == ml_decimal.to_integral_value() else 0
-            quantity = int(quantity_decimal) if quantity_decimal == quantity_decimal.to_integral_value() else 0
+            box = int(box_decimal) if box_decimal == box_decimal.to_integral_value() else -1
+            loose = int(loose_decimal) if loose_decimal == loose_decimal.to_integral_value() else -1
+
             row_errors: list[str] = []
             if not name:
                 row_errors.append("Name is required")
@@ -395,8 +421,12 @@ class DocumentImportService:
                 row_errors.append("Brand is required")
             if ml <= 0 or ml > 10000:
                 row_errors.append("ML must be a positive whole number")
-            if quantity <= 0:
-                row_errors.append("Quantity must be a positive whole number")
+            if box < 0:
+                row_errors.append("Box/Cases must be a non-negative whole number")
+            if loose < 0:
+                row_errors.append("Loose/Bottles must be a non-negative whole number")
+            if box == 0 and loose == 0:
+                row_errors.append("Enter at least one case/box or loose bottle")
             if len(name) > 300 or len(brand) > 300:
                 row_errors.append("Name and Brand must be 300 characters or fewer")
             if row_errors:
@@ -416,10 +446,12 @@ class DocumentImportService:
                     "itemName": name,
                     "brand": brand,
                     "ml": ml,
-                    "quantity": quantity,
-                    "loose": quantity,
-                    "qnty": quantity,
-                    "box": 0,
+                    "box": box,
+                    "loose": loose,
+                    "canonicalBox": box,
+                    "canonicalLoose": loose,
+                    "canonicalQuantityVersion": 2,
+                    "quantity": box + loose,
                     "reviewConfirmed": True,
                 }
             )
@@ -429,7 +461,9 @@ class DocumentImportService:
                     "name": name,
                     "brand": brand,
                     "ml": ml,
-                    "quantity": quantity,
+                    "box": box,
+                    "loose": loose,
+                    "quantity": box + loose,
                     "raw": raw,
                 }
             )
@@ -444,7 +478,7 @@ class DocumentImportService:
                     """
                     UPDATE import_items
                     SET raw_name=?, normalized_name=?, brand=?, ml=?,
-                        packing=NULL, quantity=?,
+                        packing=NULL, quantity=?, box=?, loose=?,
                         mapping_status='PENDING', excise_item_code=NULL,
                         mapped_item_code=NULL, raw_data_json=?, updated_at=?
                     WHERE id=? AND job_id=?
@@ -455,6 +489,8 @@ class DocumentImportService:
                         item["brand"],
                         item["ml"],
                         float(item["quantity"]),
+                        item["box"],
+                        item["loose"],
                         json.dumps(item["raw"], ensure_ascii=False),
                         reviewed_at,
                         item["id"],
@@ -517,7 +553,10 @@ class DocumentImportService:
                         "pageItemCounts": getattr(extracted, "pageItemCounts", None),
                     }
                 else:
-                    extraction_meta = {**extraction_meta, "engine": "pymupdf"}
+                    extraction_meta = {
+                        **extraction_meta,
+                        "engine": extraction_meta.get("engine") or "pymupdf-state-adapter",
+                    }
             else:
                 extracted = await LlamaCloudClient().extract_products(temp_path, filename)
                 extraction_meta = {"engine": "llamaparse"}
@@ -601,13 +640,11 @@ class DocumentImportService:
             rate = _first_present(row, "Rate", "Box Rate", "Case Rate")
             mrp = _first_present(row, "MRP", "MRP Per Unit", "MrpPerUnit")
             packing = None
-            if bottles and boxes and _int_value(boxes):
-                packing = _int_value(bottles) // max(1, _int_value(boxes))
             bottle_count = _int_value(bottles)
             box_count = _int_value(boxes)
-            extracted_quantity = bottle_count or box_count or boxes
-            extracted_box = 0 if bottle_count else (box_count or boxes)
-            extracted_loose = bottle_count or None
+            extracted_box = box_count
+            extracted_loose = bottle_count
+            extracted_quantity = (box_count + bottle_count) or None
             raw = {
                 **meta,
                 **row,
