@@ -472,6 +472,11 @@ class MappingService:
         company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
         bill_type = str(session.get("bill_type") or settings.DEFAULT_BILL_TYPE).strip()
         madhushala_items = await client.get_dropdown_items(company_code, bill_type)
+        valid_item_codes = {
+            str(item.get("itemCode") or "").strip()
+            for item in madhushala_items
+            if str(item.get("itemCode") or "").strip()
+        }
 
         if job_id:
             rows: list[dict[str, Any]] = []
@@ -551,10 +556,27 @@ class MappingService:
                     mapped_code = str(job_item["mapped_item_code"] or "").strip()
                     if not mapped_code and excise_code:
                         mapped = db.execute(
-                            "SELECT madhushala_item_code FROM mappings WHERE shop_code=? AND excise_item_code=?",
-                            (shop_code, excise_code),
+                            "SELECT madhushala_item_code FROM mappings_v2 WHERE shop_code=? AND company_code=? AND excise_item_code=?",
+                            (shop_code, company_code, excise_code),
                         ).fetchone()
                         mapped_code = str(mapped["madhushala_item_code"] if mapped else "").strip()
+                    if mapped_code and mapped_code not in valid_item_codes:
+                        logger.warning(
+                            "stale_company_mapping_cleared shopCode=%s companyCode=%s itemCode=%s jobItemId=%s",
+                            shop_code,
+                            company_code,
+                            mapped_code,
+                            job_item["id"],
+                        )
+                        db.execute(
+                            """
+                            UPDATE import_items
+                            SET mapped_item_code=NULL, mapping_status='UNMAPPED', updated_at=?
+                            WHERE id=?
+                            """,
+                            (datetime.now(timezone.utc).isoformat(), job_item["id"]),
+                        )
+                        mapped_code = ""
                     mapped_item = next((item for item in madhushala_items if str(item.get("itemCode")) == mapped_code), None)
                     rows.append(
                         {
@@ -673,6 +695,7 @@ class MappingService:
 
     async def prepare_document_job(self, session: dict[str, Any], job_id: str) -> dict[str, Any]:
         shop_code = session["shop_code"]
+        company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
         client = self._client_for_session(session)
         unmapped: list[dict[str, Any]] = []
         prepared = 0
@@ -712,8 +735,8 @@ class MappingService:
             with conn() as db:
                 if not mapped_item_code and excise_item_code is not None:
                     mapped = db.execute(
-                        "SELECT madhushala_item_code FROM mappings WHERE shop_code=? AND excise_item_code=?",
-                        (shop_code, str(excise_item_code)),
+                        "SELECT madhushala_item_code FROM mappings_v2 WHERE shop_code=? AND company_code=? AND excise_item_code=?",
+                        (shop_code, company_code, str(excise_item_code)),
                     ).fetchone()
                     mapped_item_code = str(mapped["madhushala_item_code"] if mapped else "").strip()
                 mapping_status = "MAPPED" if mapped_item_code else ("UNMAPPED" if excise_item_code else ("REVIEW_REQUIRED" if prepare_action == "review_required" else "PENDING"))
@@ -748,13 +771,21 @@ class MappingService:
             for item in clean:
                 db.execute(
                     """
-                    INSERT INTO mappings(shop_code, excise_item_code, madhushala_item_code, mapped_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(shop_code, excise_item_code) DO UPDATE SET
+                    INSERT INTO mappings_v2(
+                        shop_code, company_code, excise_item_code, madhushala_item_code, mapped_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(shop_code, company_code, excise_item_code) DO UPDATE SET
                         madhushala_item_code=excluded.madhushala_item_code,
                         mapped_at=excluded.mapped_at
                     """,
-                    (session["shop_code"], str(item["exciseItemCode"]), item["itemCode"], mapped_at),
+                    (
+                        session["shop_code"],
+                        str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip(),
+                        str(item["exciseItemCode"]),
+                        item["itemCode"],
+                        mapped_at,
+                    ),
                 )
                 if job_id:
                     db.execute(
