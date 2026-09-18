@@ -457,6 +457,64 @@ def _extract_generic(
     return _dedupe(products), invoice_number, invoice_date
 
 
+def _candidate_row_count(
+    profile: str,
+    pages: list[tuple[int, str, list[list[list[str]]]]],
+) -> int:
+    """Estimate unique product rows without assigning business semantics.
+
+    This is deliberately broader than the deterministic adapters. It is used
+    only as a completeness signal: under-extraction triggers LlamaParse rather
+    than inventing missing products.
+    """
+    selected_pages = pages
+    if profile == "WEST_BENGAL_FORM3":
+        originals = [entry for entry in pages if re.search(r"\bORIGINAL\b", entry[1], re.IGNORECASE)]
+        selected_pages = originals or pages[:2]
+
+    signatures: set[str] = set()
+    for _page_no, _text, page_tables in selected_pages:
+        for rows in page_tables:
+            for cells in rows:
+                cleaned = [_clean(cell) for cell in cells]
+                joined = " | ".join(cleaned)
+                if not joined.strip():
+                    continue
+
+                looks_like_product = False
+                if profile == "WEST_BENGAL_FORM3":
+                    category = _clean(cleaned[0]).upper() if cleaned else ""
+                    looks_like_product = (
+                        category in {"IMFL", "OSBI", "OS"}
+                        and any(re.search(r"\d{2,5}\s*m\.?l\.?", value, re.IGNORECASE) for value in cleaned)
+                    )
+                elif profile == "TELANGANA_ICDC":
+                    looks_like_product = bool(
+                        cleaned
+                        and re.fullmatch(r"\d+", cleaned[0])
+                        and any(re.search(r"\d+\s*/\s*\d+\s*m\.?l\.?", value, re.IGNORECASE) for value in cleaned)
+                    )
+                elif profile == "JHARKHAND_EXCISE":
+                    looks_like_product = bool(
+                        cleaned
+                        and re.fullmatch(r"\d+", cleaned[0])
+                        and any(re.search(r"\d{2,5}\s*m\.?l\.?", value, re.IGNORECASE) for value in cleaned)
+                        and any(re.search(r"[A-Za-z]{4}", value) for value in cleaned)
+                    )
+                else:
+                    looks_like_product = bool(
+                        any(re.search(r"\d{2,5}\s*m\.?l\.?", value, re.IGNORECASE) for value in cleaned)
+                        and any(
+                            ("case" in _key(value) or "bottle" in _key(value) or "loose" in _key(value))
+                            for value in cleaned
+                        )
+                    )
+
+                if looks_like_product:
+                    signatures.add(_key(joined))
+    return len(signatures)
+
+
 def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict[str, Any]]:
     """PyMuPDF-first deterministic PDF extraction.
 
@@ -506,6 +564,14 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             "GENERIC": _extract_generic,
         }[profile]
         products, invoice_number, invoice_date = extractor(full_text, pages)
+        candidate_rows = _candidate_row_count(profile, pages)
+        product_count = len(products)
+        completeness = (
+            min(1.0, product_count / candidate_rows)
+            if candidate_rows > 0
+            else (1.0 if product_count else 0.0)
+        )
+        needs_fallback = bool(candidate_rows > product_count)
 
         if not products:
             return None, {
@@ -539,7 +605,10 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
                 "textChars": text_chars,
                 "wordCount": word_count,
                 "tableCount": table_count,
-                "productCount": len(products),
+                "productCount": product_count,
+                "candidateRowCount": candidate_rows,
+                "completeness": completeness,
+                "needsFallback": needs_fallback,
             },
         )
         return extracted, {
@@ -551,7 +620,10 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             "textChars": text_chars,
             "wordCount": word_count,
             "tableCount": table_count,
-            "productCount": len(products),
+            "productCount": product_count,
+            "candidateRowCount": candidate_rows,
+            "completeness": completeness,
+            "needsFallback": needs_fallback,
         }
     finally:
         document.close()
