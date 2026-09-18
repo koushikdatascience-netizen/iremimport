@@ -146,19 +146,29 @@ class DocumentPurchaseAdapter:
                 fallback=0,
             )
 
-            # Source QR/PDF bottle quantity must stay as loose units end-to-end.
-            # Never reinterpret extracted bottle count as cases/boxes.
-            has_explicit_bottles = any(
+            # Preserve an already-valid manual case/loose shape. Otherwise,
+            # QR/PDF bottle totals are loose units and must never be interpreted
+            # as a number of boxes.
+            has_explicit_bottle_total = any(
                 _key(alias) in normalized_raw
                 for alias in (
-                    "qnty",
                     "No of Bottles Dispatched",
                     "Bottles Dispatched",
                     "No of Bottles Requested",
                     "Bottles Requested",
                 )
             )
-            if document_qnty and (is_qr or has_explicit_bottles):
+            represented_qnty = ((box * packing) + loose) if packing else (box + loose)
+            has_valid_case_loose_shape = bool(
+                document_qnty
+                and (box or loose)
+                and represented_qnty == document_qnty
+            )
+
+            if document_qnty and (
+                has_explicit_bottle_total
+                or (is_qr and not has_valid_case_loose_shape)
+            ):
                 old_box, old_loose = box, loose
                 box = 0
                 loose = document_qnty
