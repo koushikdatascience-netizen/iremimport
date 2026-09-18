@@ -19,6 +19,7 @@ from app.config import settings
 from app.db import conn, now_iso
 from app.modules.document_import.llama_client import LlamaCloudClient, LlamaCloudError
 from app.modules.document_import.normalizer import normalize_extracted_document
+from app.modules.document_import.pdf_extractor import extract_pdf_locally
 from app.modules.document_import.purchase_context import build_purchase_context
 from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct, NormalizedImportItem
 from app.services.mapping_service import MappingService
@@ -323,7 +324,22 @@ class DocumentImportService:
                 temp_path = Path(handle.name)
 
             self._update_job(job_id, status="EXTRACTING")
-            extracted = await LlamaCloudClient().extract_products(temp_path, filename)
+            extraction_meta: dict[str, Any] = {}
+            if ext == "pdf":
+                extracted, extraction_meta = extract_pdf_locally(temp_path)
+                if extracted is None:
+                    extracted = await LlamaCloudClient().extract_products(temp_path, filename)
+                    extraction_meta = {
+                        **extraction_meta,
+                        "engine": "llamaparse",
+                        "fallbackFrom": "pymupdf",
+                    }
+                else:
+                    extraction_meta = {**extraction_meta, "engine": "pymupdf"}
+            else:
+                extracted = await LlamaCloudClient().extract_products(temp_path, filename)
+                extraction_meta = {"engine": "llamaparse"}
+
             self._update_job(
                 job_id,
                 status="NORMALIZING",
@@ -352,6 +368,7 @@ class DocumentImportService:
                     "recognized": len(normalized) - unmapped_count,
                     "needMapping": unmapped_count,
                 },
+                "extraction": extraction_meta,
                 "extractedDocument": extracted.model_dump(),
                 "normalizedItems": [item.model_dump() for item in normalized],
             }
