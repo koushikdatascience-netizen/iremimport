@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from app.config import settings
 from app.db import conn, now_iso
 
 
@@ -27,6 +28,21 @@ async def save_document_row_mappings(
 
     service.get_job(session, clean_job_id)
 
+    # Never accept a row mapping for an item code that does not exist in the
+    # current company catalogue. This prevents stale mappings from a different
+    # company from reaching Purchase / Item Master.
+    company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
+    bill_type = str(session.get("bill_type") or settings.DEFAULT_BILL_TYPE).strip()
+    catalogue = await service.mapping_service._client_for_session(session).get_dropdown_items(
+        company_code,
+        bill_type,
+    )
+    valid_item_codes = {
+        str(item.get("itemCode") or "").strip()
+        for item in (catalogue or [])
+        if isinstance(item, dict) and str(item.get("itemCode") or "").strip()
+    }
+
     if not selections:
         return {
             "mappedCount": 0,
@@ -46,6 +62,11 @@ async def save_document_row_mappings(
             item_code = str(item.get("itemCode") or "").strip()
             if not job_item_id or not item_code:
                 raise HTTPException(status_code=400, detail="jobItemId and itemCode are required")
+            if item_code not in valid_item_codes:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Madhushala item {item_code} is not available in company {company_code}. Refresh and choose a current-company item.",
+                )
             if job_item_id in seen_job_items:
                 raise HTTPException(status_code=400, detail="Duplicate document row in mapping request")
             seen_job_items.add(job_item_id)
