@@ -937,7 +937,7 @@ async def test_document_purchase_uses_reviewed_cases_and_loose_with_item_master_
         """
     )
     db.execute(
-        "INSERT INTO import_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO import_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             "row-canonical",
             "job-canonical",
