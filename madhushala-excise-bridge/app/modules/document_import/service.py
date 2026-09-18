@@ -398,14 +398,20 @@ class DocumentImportService:
             packing = None
             if bottles and boxes and _int_value(boxes):
                 packing = _int_value(bottles) // max(1, _int_value(boxes))
+            bottle_count = _int_value(bottles)
+            box_count = _int_value(boxes)
+            extracted_quantity = bottle_count or box_count or boxes
+            extracted_box = 0 if bottle_count else (box_count or boxes)
+            extracted_loose = bottle_count or None
             raw = {
                 **meta,
                 **row,
                 "packageType": package_type,
                 "measureMl": ml,
-                "box": boxes,
-                "quantity": boxes,
-                "qnty": bottles,
+                "box": extracted_box,
+                "loose": extracted_loose,
+                "quantity": extracted_quantity,
+                "qnty": bottle_count or bottles,
                 "itemAmount": amount,
                 "sourceRow": index,
             }
@@ -422,8 +428,9 @@ class DocumentImportService:
                     brand=brand,
                     ml=ml,
                     packing=packing,
-                    quantity=boxes,
-                    box=boxes,
+                    quantity=extracted_quantity,
+                    box=extracted_box,
+                    loose=extracted_loose,
                     rate=rate,
                     mrp=mrp,
                     amount=amount,
