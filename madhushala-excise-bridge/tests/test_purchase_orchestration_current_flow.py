@@ -960,6 +960,7 @@ async def test_document_purchase_uses_reviewed_cases_and_loose_with_item_master_
                 "loose": 47,
                 "canonicalBox": 7,
                 "canonicalLoose": 47,
+                "canonicalQuantityVersion": 2,
             }),
             "2026-09-18",
         ),
