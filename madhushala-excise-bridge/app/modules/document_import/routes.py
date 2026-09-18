@@ -73,6 +73,28 @@ def create_router(service: DocumentImportService) -> APIRouter:
         session = session_service.from_request(request)
         return await service.process_upload(session, file)
 
+    @router.post("/upload/batch/{kind}")
+    async def upload_document_batch(
+        kind: str,
+        request: Request,
+        files: list[UploadFile] = File(...),
+    ):
+        normalized_kind = str(kind or "").strip().casefold()
+        if normalized_kind not in {"pdf", "image"}:
+            raise HTTPException(status_code=400, detail="Batch upload kind must be pdf or image")
+        if not files:
+            raise HTTPException(status_code=400, detail="Select at least one source file")
+
+        for file in files:
+            filename = str(file.filename or "").casefold()
+            if normalized_kind == "pdf" and not filename.endswith(".pdf"):
+                raise HTTPException(status_code=400, detail="PDF batch accepts .pdf files only")
+            if normalized_kind == "image" and not filename.endswith((".jpg", ".jpeg", ".png")):
+                raise HTTPException(status_code=400, detail="Image batch accepts JPG, JPEG or PNG files only")
+
+        session = session_service.from_request(request)
+        return await service.process_uploads(session, files)
+
     @router.get("/jobs/{job_id}")
     async def get_job(job_id: str, request: Request):
         session = session_service.from_request(request)
