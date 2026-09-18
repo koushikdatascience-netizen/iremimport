@@ -54,7 +54,7 @@ def test_calculate_request_uses_item_master_and_extracted_bottles_as_loose():
     assert item["loose"] == 6
     assert item["packing"] == 48
     assert item["boxRate"] == 500.0
-    assert item["looseRate"] == 10.42
+    assert item["looseRate"] == 500.0
     assert item["mrp"] == 280.0
     assert item["discount"] == 2.5
     assert item["cgst"] == 1.1
@@ -180,7 +180,7 @@ def test_calculate_allows_only_purchase_rate_to_be_non_zero():
     assert item["looseRate"] == 10.42
 
 
-def test_calculate_allows_only_purchase_case_rate_to_be_non_zero():
+def test_calculate_uses_case_rate_as_loose_rate_when_purchase_rate_is_zero():
     master = _master()
     master["purchaseRate"] = 0
 
@@ -200,7 +200,7 @@ def test_calculate_allows_only_purchase_case_rate_to_be_non_zero():
     assert item["box"] == 0
     assert item["loose"] == 18
     assert item["boxRate"] == 500.0
-    assert item["looseRate"] == 0
+    assert item["looseRate"] == 10.42
 
 
 def test_calculate_does_not_fall_back_to_generic_rate_aliases():
@@ -225,3 +225,49 @@ def test_calculate_does_not_fall_back_to_generic_rate_aliases():
     item = request["items"][0]
     assert item["boxRate"] == 0
     assert item["looseRate"] == 0
+
+
+def test_real_item_master_sample_builds_real_calculate_shape():
+    master = {
+        "itemCode": "100010",
+        "itemName": "100 PIPER 750 N",
+        "packing": 12,
+        "purchaseRate": 0,
+        "salesRate": 1880,
+        "vat": 100,
+        "tcs": 120,
+        "tp": 0,
+        "others": 0,
+        "etd": 0,
+        "purchaseRateCase": 200,
+        "t1Rate": 0,
+        "t2Rate": 0,
+        "t3Rate": 2,
+        "t4Rate": 0,
+    }
+
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "WBTEST",
+            "companyCode": "3",
+            "schemeCode": "",
+            "salesTaxRate": 0,
+            "salesTaxIncludingFree": False,
+        },
+        [{"itemCode": "100010", "qnty": 18, "freeQnty": 0}],
+        {"100010": master},
+    )
+
+    item = request["items"][0]
+    assert item["itemCode"] == "100010"
+    assert item["packing"] == 12
+    assert item["box"] == 0
+    assert item["loose"] == 18
+    assert item["boxRate"] == 200.0
+    assert item["looseRate"] == 200.0
+    assert item["mrp"] == 1880.0
+    assert item["t1Amt"] == 100.0
+    assert item["t2Amt"] == 120.0
+    assert item["t3Amt"] == 0.0
+    assert item["t4Amt"] == 0.0
+    assert item["t3Rate"] == 2.0

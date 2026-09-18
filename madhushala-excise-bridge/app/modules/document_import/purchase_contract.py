@@ -61,15 +61,17 @@ def _response_container(response: Any) -> dict[str, Any] | None:
 
 
 def _commercial_values(master: dict[str, Any]) -> tuple[float, float, float, int]:
-    # Purchase Calculate contract from Madhushala Item Master:
-    #   boxRate   <- itemmst.purchaseRateCase
-    #   looseRate <- itemmst.purchaseRate
-    # Either rate may legitimately be zero; never derive one from the other and
-    # never substitute generic rate/boxRate aliases from dropdown/source rows.
-    loose_rate = _money(_dict_value(master, "purchaseRate"))
-    box_rate = _money(_dict_value(master, "purchaseRateCase"))
-    mrp = _money(_dict_value(master, "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
+    # Match the real Madhushala Purchase screen contract.
+    #
+    # boxRate   <- itemmst.purchaseRateCase
+    # looseRate <- itemmst.purchaseRate when non-zero; otherwise use
+    #              itemmst.purchaseRateCase exactly as supplied.
+    # mrp       <- itemmst.salesRate (legacy aliases retained for compatibility)
     packing = _int_value(_dict_value(master, "packing", "bottlePerCase", "bottlesPerCase", "caseQty"))
+    purchase_rate = _money(_dict_value(master, "purchaseRate"))
+    box_rate = _money(_dict_value(master, "purchaseRateCase"))
+    loose_rate = purchase_rate if purchase_rate else box_rate
+    mrp = _money(_dict_value(master, "salesRate", "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
     return loose_rate, box_rate, mrp, packing
 
 
@@ -157,10 +159,10 @@ def build_item_master_calculation_request(
                 "cess": _money(_dict_value(master, "cess", "cessAmount")),
                 "addCess": _money(_dict_value(master, "addCess", "adCess", "addCessAmount", "adCessAmount")),
                 "igst": _money(_dict_value(master, "igst", "igstAmount")),
-                "t1Amt": _money(_dict_value(master, "t1Amt", "t1Amount", "t1")),
-                "t2Amt": _money(_dict_value(master, "t2Amt", "t2Amount", "t2")),
-                "t3Amt": _money(_dict_value(master, "t3Amt", "t3Amount", "t3")),
-                "t4Amt": _money(_dict_value(master, "t4Amt", "t4Amount", "t4")),
+                "t1Amt": _money(_dict_value(master, "vat", "t1Amt", "t1Amount", "t1")),
+                "t2Amt": _money(_dict_value(master, "tcs", "t2Amt", "t2Amount", "t2")),
+                "t3Amt": _money(_dict_value(master, "tp", "t3Amt", "t3Amount", "t3")),
+                "t4Amt": _money(_dict_value(master, "others", "t4Amt", "t4Amount", "t4")),
                 "etd": _money(_dict_value(master, "etd", "etdAmount")),
                 "packing": packing,
                 "t1Rate": _money(_dict_value(master, "t1Rate", "tax1Rate")),
