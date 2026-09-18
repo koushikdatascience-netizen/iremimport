@@ -66,8 +66,16 @@ class DocumentPurchaseAdapter:
             return mapped
         if row["excise_item_code"]:
             mapping = db.execute(
-                "SELECT madhushala_item_code FROM mappings WHERE shop_code=? AND excise_item_code=?",
-                (session["shop_code"], str(row["excise_item_code"])),
+                """
+                SELECT madhushala_item_code
+                FROM mappings_v2
+                WHERE shop_code=? AND company_code=? AND excise_item_code=?
+                """,
+                (
+                    session["shop_code"],
+                    str(session.get("company_code") or "").strip(),
+                    str(row["excise_item_code"]),
+                ),
             ).fetchone()
             if mapping:
                 return str(mapping["madhushala_item_code"] or "").strip()
