@@ -56,7 +56,7 @@ def test_calculate_request_uses_item_master_and_extracted_bottles_as_loose():
     assert item["boxRate"] == 500.0
     assert item["looseRate"] == 10.42
     assert item["mrp"] == 280.0
-    assert item["discount"] == 2.5
+    assert item["discount"] is None
     assert item["cgst"] == 1.1
     assert item["sgst"] == 1.2
     assert item["cess"] == 1.3
@@ -312,7 +312,7 @@ def test_real_item_master_sample_uses_sales_rate_and_tax_master_fields():
         "boxRate": 200.0,
         "looseRate": 200.0,
         "mrp": 1880.0,
-        "discount": 0.0,
+        "discount": None,
         "cgst": 0.0,
         "sgst": 0.0,
         "cess": 0.0,
