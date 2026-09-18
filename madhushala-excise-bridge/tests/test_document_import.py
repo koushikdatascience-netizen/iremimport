@@ -268,7 +268,9 @@ def test_up_excise_transport_pass_qr_exact_url_and_table_shape(client, monkeypat
     assert normalized[0]["rawName"] == "ROYAL STAG PREMIER WHISKY"
     assert normalized[0]["ml"] == 750
     assert normalized[0]["packing"] == 12
-    assert normalized[0]["quantity"] == 2.0
+    assert normalized[0]["quantity"] == 24.0
+    assert normalized[0]["box"] is None
+    assert normalized[0]["loose"] == 24
     assert normalized[1]["rawName"] == "100 PIPERS DELUXE SCOTCH WHISKY"
     assert normalized[1]["ml"] == 180
     assert normalized[1]["packing"] == 48
@@ -283,6 +285,9 @@ def test_up_excise_transport_pass_qr_exact_url_and_table_shape(client, monkeypat
     assert raw["transportPassNo"] == "WHOLESALE1501-FL2-RETAIL995782-FL4C-LUCK-Jun26_00000674"
     assert raw["transportPassType"] == "FG"
     assert raw["transportPassYear"] == "2026"
+    assert raw["box"] == 0
+    assert raw["loose"] == 24
+    assert raw["quantity"] == 24
     assert raw["qnty"] == 24
     assert raw["bulkLitres"] == "18.00"
 
@@ -322,7 +327,9 @@ def test_up_excise_transport_pass_qr_reads_script_embedded_rows():
     assert normalized[0].rawName == "Tenjaku Blended Whisky"
     assert normalized[0].ml == 700
     assert normalized[0].packing == 12
-    assert normalized[0].quantity == 1.0
+    assert normalized[0].quantity == 12.0
+    assert normalized[0].box is None
+    assert normalized[0].loose == 12
 
 def test_shop_cannot_read_other_shop_job(client, monkeypatch):
     from app.modules.document_import.service import DocumentImportService
