@@ -257,6 +257,183 @@ def test_document_upload_accepts_pdf_and_persists_job(client, monkeypatch):
     assert items[0]["raw_name"] == "100 PIPER 180"
 
 
+
+
+def test_native_pdf_uses_pymupdf_without_llama(client, monkeypatch):
+    from app.db import conn
+    from app.main import document_import_service
+    from app.modules.document_import import service as service_module
+
+    local_document = ExtractedDocument(
+        documentType="invoice",
+        supplierName="Native Supplier",
+        invoiceNumber="INV-NATIVE-1",
+        invoiceDate="2026-09-18",
+        items=[
+            ExtractedProduct(
+                itemName="100 PIPER 750 ML",
+                brand="100 PIPER",
+                ml=750,
+                quantity=18,
+                loose=18,
+                box=0,
+            )
+        ],
+    )
+
+    def fake_local_extract(_path):
+        return local_document, {
+            "engine": "pymupdf",
+            "usable": True,
+            "productCount": 1,
+        }
+
+    async def should_not_use_llama(self, temp_path, filename):
+        raise AssertionError("LlamaParse must not run for a usable native PDF")
+
+    async def fake_prepare(session, job_id):
+        with conn() as db:
+            db.execute(
+                "UPDATE import_items SET excise_item_code='733', mapping_status='UNMAPPED' WHERE job_id=?",
+                (job_id,),
+            )
+        return {"preparedCount": 1}
+
+    async def fake_workspace(session, capture=None, latest_only=True, job_id=None):
+        return {"unmappedItems": [{"exciseItemCode": 733}]}
+
+    monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local_extract)
+    monkeypatch.setattr(service_module.LlamaCloudClient, "extract_products", should_not_use_llama)
+    monkeypatch.setattr(document_import_service.mapping_service, "prepare_document_job", fake_prepare)
+    monkeypatch.setattr(document_import_service.mapping_service, "workspace_for_session", fake_workspace)
+
+    session = create_session(client)
+    response = client.post(
+        "/api/v1/document-import/upload/pdf",
+        headers=auth(session),
+        files={"file": ("native.pdf", b"%PDF-1.4 native-test", "application/pdf")},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["extraction"]["engine"] == "pymupdf"
+    assert payload["extraction"]["usable"] is True
+    assert payload["extractedDocument"]["supplierName"] == "Native Supplier"
+    assert payload["normalizedItems"][0]["quantity"] == 18.0
+    assert payload["normalizedItems"][0]["loose"] == 18
+
+
+def test_scanned_pdf_falls_back_to_llamaparse(client, monkeypatch):
+    from app.db import conn
+    from app.main import document_import_service
+    from app.modules.document_import import service as service_module
+
+    def fake_local_extract(_path):
+        return None, {
+            "engine": "pymupdf",
+            "usable": False,
+            "reason": "insufficient_text_layer",
+        }
+
+    async def fake_llama(self, temp_path, filename):
+        return ExtractedDocument(
+            documentType="invoice",
+            supplierName="Scanned Supplier",
+            invoiceNumber="SCAN-1",
+            invoiceDate="2026-09-18",
+            items=[
+                ExtractedProduct(
+                    itemName="BACARDI RESERVA 750 ML",
+                    brand="BACARDI",
+                    ml=750,
+                    quantity=2,
+                )
+            ],
+        )
+
+    async def fake_prepare(session, job_id):
+        with conn() as db:
+            db.execute(
+                "UPDATE import_items SET excise_item_code='734', mapping_status='UNMAPPED' WHERE job_id=?",
+                (job_id,),
+            )
+        return {"preparedCount": 1}
+
+    async def fake_workspace(session, capture=None, latest_only=True, job_id=None):
+        return {"unmappedItems": [{"exciseItemCode": 734}]}
+
+    monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local_extract)
+    monkeypatch.setattr(service_module.LlamaCloudClient, "extract_products", fake_llama)
+    monkeypatch.setattr(document_import_service.mapping_service, "prepare_document_job", fake_prepare)
+    monkeypatch.setattr(document_import_service.mapping_service, "workspace_for_session", fake_workspace)
+
+    session = create_session(client)
+    response = client.post(
+        "/api/v1/document-import/upload/pdf",
+        headers=auth(session),
+        files={"file": ("scan.pdf", b"%PDF-1.4 scan-test", "application/pdf")},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["extraction"]["engine"] == "llamaparse"
+    assert payload["extraction"]["fallbackFrom"] == "pymupdf"
+    assert payload["extraction"]["reason"] == "insufficient_text_layer"
+    assert payload["normalizedItems"][0]["quantity"] == 2.0
+    assert payload["normalizedItems"][0]["loose"] == 2
+
+
+def test_purchase_image_uses_llamaparse_directly(client, monkeypatch):
+    from app.db import conn
+    from app.main import document_import_service
+    from app.modules.document_import import service as service_module
+
+    def should_not_use_pdf(_path):
+        raise AssertionError("PyMuPDF must not run for image uploads")
+
+    async def fake_llama(self, temp_path, filename):
+        return ExtractedDocument(
+            documentType="invoice",
+            items=[
+                ExtractedProduct(
+                    itemName="100 PIPER 180 ML",
+                    brand="100 PIPER",
+                    ml=180,
+                    quantity=6,
+                )
+            ],
+        )
+
+    async def fake_prepare(session, job_id):
+        with conn() as db:
+            db.execute(
+                "UPDATE import_items SET excise_item_code='735', mapping_status='UNMAPPED' WHERE job_id=?",
+                (job_id,),
+            )
+        return {"preparedCount": 1}
+
+    async def fake_workspace(session, capture=None, latest_only=True, job_id=None):
+        return {"unmappedItems": [{"exciseItemCode": 735}]}
+
+    monkeypatch.setattr(service_module, "extract_pdf_locally", should_not_use_pdf)
+    monkeypatch.setattr(service_module.LlamaCloudClient, "extract_products", fake_llama)
+    monkeypatch.setattr(document_import_service.mapping_service, "prepare_document_job", fake_prepare)
+    monkeypatch.setattr(document_import_service.mapping_service, "workspace_for_session", fake_workspace)
+
+    session = create_session(client)
+    response = client.post(
+        "/api/v1/document-import/upload/image",
+        headers=auth(session),
+        files={"file": ("invoice.png", b"\x89PNG\r\n\x1a\nimage-test", "image/png")},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["extraction"]["engine"] == "llamaparse"
+    assert payload["normalizedItems"][0]["quantity"] == 6.0
+    assert payload["normalizedItems"][0]["loose"] == 6
+
+
 def test_up_excise_transport_pass_qr_exact_url_and_table_shape(client, monkeypatch):
     from app.db import conn
     from app.main import document_import_service

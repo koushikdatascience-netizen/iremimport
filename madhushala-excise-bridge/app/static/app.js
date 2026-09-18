@@ -23,7 +23,7 @@ let currentDocumentJobId = activeJobId;
 let currentDocumentFile = null;
 let currentDocumentResult = null;
 let currentPreviewUrl = "";
-let currentUploadKind = "document";
+let currentUploadKind = "pdf";
 let mappingRefreshTimer = null;
 let mappingRefreshInFlight = false;
 const DEFAULT_EXCISE_LOGIN_URL = "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx";
@@ -791,7 +791,8 @@ function documentElements() {
         success: document.getElementById("document-success-panel"),
         error: document.getElementById("document-error-panel"),
         action: document.getElementById("document-action-bar"),
-        file: document.getElementById("document-file"),
+        pdfFile: document.getElementById("pdf-file"),
+        imageFile: document.getElementById("image-file"),
         status: document.getElementById("document-status"),
         errorMessage: document.getElementById("document-error-message"),
         progressTitle: document.getElementById("document-progress-title"),
@@ -807,7 +808,9 @@ function setDocumentImportState(state, message = "") {
     setHidden(elements.success, state !== "complete");
     setHidden(elements.error, state !== "error");
     setHidden(elements.action, state !== "review");
-    if (elements.file) elements.file.disabled = state === "uploading" || state === "extracting" || state === "normalizing" || state === "checking";
+    const uploadDisabled = state === "uploading" || state === "extracting" || state === "normalizing" || state === "checking";
+    if (elements.pdfFile) elements.pdfFile.disabled = uploadDisabled;
+    if (elements.imageFile) elements.imageFile.disabled = uploadDisabled;
 
     if (elements.status) {
         elements.status.textContent = message;
@@ -855,7 +858,7 @@ function renderDocumentReview(payload) {
     const summary = payload.summary || {};
     const job = payload.job || {};
     currentDocumentResult = payload;
-    currentUploadKind = "document";
+    if (!["pdf", "image", "qr"].includes(currentUploadKind)) currentUploadKind = "pdf";
     currentDocumentJobId = job.id || currentDocumentJobId;
     const detected = summary.detected || job.extracted_count || 0;
     const recognized = summary.recognized || job.mapped_count || 0;
@@ -878,24 +881,27 @@ function resetDocumentImport() {
     currentDocumentFile = null;
     currentDocumentResult = null;
     currentDocumentJobId = "";
-    currentUploadKind = "document";
-    const input = document.getElementById("document-file");
-    if (input) input.value = "";
+    currentUploadKind = "pdf";
+    const pdfInput = document.getElementById("pdf-file");
+    if (pdfInput) pdfInput.value = "";
+    const imageInput = document.getElementById("image-file");
+    if (imageInput) imageInput.value = "";
     const qrInput = document.getElementById("qr-file");
     if (qrInput) qrInput.value = "";
     setHidden(document.getElementById("purchase-form"), false);
     setHidden(document.getElementById("save-purchase"), true);
     setHidden(document.getElementById("continue-document-mapping"), false);
-    setDocumentImportState("idle", "Ready. Select a purchase document or QR image.");
+    setDocumentImportState("idle", "Ready. Select a purchase PDF, purchase image, or QR image.");
 }
 
-async function uploadDocument(file) {
+async function uploadDocument(file, kind = "pdf") {
     if (!sessionToken) {
         setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
         setText(documentElements().errorMessage, "Missing or expired CRM session.");
         return;
     }
     currentDocumentFile = file;
+    currentUploadKind = kind;
     renderDocumentPreview(file);
     const form = new FormData();
     form.append("file", file);
@@ -911,7 +917,8 @@ async function uploadDocument(file) {
             setText(latestElements.progressTitle, "Extracting products");
             setText(latestElements.progressDetail, "Reading product rows and checking Madhushala mappings.");
         }, 500);
-        const response = await fetch(apiUrl("/api/v1/document-import/upload"), {
+        const endpoint = kind === "image" ? "/api/v1/document-import/upload/image" : "/api/v1/document-import/upload/pdf";
+        const response = await fetch(apiUrl(endpoint), {
             method: "POST",
             headers: {"Authorization": `Bearer ${sessionToken}`},
             body: form,
@@ -919,6 +926,9 @@ async function uploadDocument(file) {
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || payload.error || "Document import failed");
         renderDocumentReview(payload);
+        const engine = payload.extraction?.engine || (kind === "image" ? "llamaparse" : "unknown");
+        setText(document.getElementById("document-action-summary"),
+            `${document.getElementById("document-action-summary")?.textContent || ""} | Extractor: ${engine}`);
         setDocumentImportState("review");
     } catch (error) {
         setText(documentElements().errorMessage, error.message || "Document import failed.");
@@ -931,7 +941,7 @@ async function initDocumentImport() {
     setHidden(document.getElementById("launch-view"), true);
     setHidden(document.getElementById("mapping-view"), true);
     setHidden(document.getElementById("document-import-view"), false);
-    setDocumentImportState("idle", "Ready. Select a purchase document or QR image.");
+    setDocumentImportState("idle", "Ready. Select a purchase PDF, purchase image, or QR image.");
     if (!sessionToken) {
         setDocumentImportState("error", "Open this page from the Madhushala CRM Import PDF / Image button.");
         setText(documentElements().errorMessage, "Missing or expired CRM session.");
@@ -949,9 +959,13 @@ async function initDocumentImport() {
 document.getElementById("open-portal")?.addEventListener("click", openPortal);
 document.getElementById("madhushala-search")?.addEventListener("input", runSearch);
 document.getElementById("submit-mappings")?.addEventListener("click", saveMappings);
-document.getElementById("document-file")?.addEventListener("change", (event) => {
+document.getElementById("pdf-file")?.addEventListener("change", (event) => {
     const [file] = event.target.files || [];
-    if (file) uploadDocument(file);
+    if (file) uploadDocument(file, "pdf");
+});
+document.getElementById("image-file")?.addEventListener("change", (event) => {
+    const [file] = event.target.files || [];
+    if (file) uploadDocument(file, "image");
 });
 document.getElementById("qr-file")?.addEventListener("change", (event) => {
     const [file] = event.target.files || [];
@@ -980,7 +994,8 @@ function bindDropzone(id, handler) {
         if (file) handler(file);
     });
 }
-bindDropzone("document-dropzone", uploadDocument);
+bindDropzone("pdf-dropzone", (file) => uploadDocument(file, "pdf"));
+bindDropzone("image-dropzone", (file) => uploadDocument(file, "image"));
 bindDropzone("qr-dropzone", uploadQr);
 document.getElementById("document-refresh")?.addEventListener("click", resetDocumentImport);
 document.getElementById("replace-document")?.addEventListener("click", resetDocumentImport);
@@ -988,7 +1003,10 @@ document.getElementById("document-upload-another")?.addEventListener("click", re
 document.getElementById("success-upload-another")?.addEventListener("click", resetDocumentImport);
 document.getElementById("choose-another-document")?.addEventListener("click", resetDocumentImport);
 document.getElementById("retry-document")?.addEventListener("click", () => {
-    if (currentDocumentFile) (currentUploadKind === "qr" ? uploadQr(currentDocumentFile) : uploadDocument(currentDocumentFile));
+    if (currentDocumentFile) {
+        if (currentUploadKind === "qr") uploadQr(currentDocumentFile);
+        else uploadDocument(currentDocumentFile, currentUploadKind === "image" ? "image" : "pdf");
+    }
     else resetDocumentImport();
 });
 document.getElementById("copy-document-json")?.addEventListener("click", async () => {

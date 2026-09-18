@@ -40,6 +40,23 @@ def create_router(service: DocumentImportService) -> APIRouter:
 
     @router.post("/upload")
     async def upload_document(request: Request, file: UploadFile = File(...)):
+        # Backward-compatible mixed upload endpoint.
+        session = session_service.from_request(request)
+        return await service.process_upload(session, file)
+
+    @router.post("/upload/pdf")
+    async def upload_pdf(request: Request, file: UploadFile = File(...)):
+        filename = str(file.filename or "").casefold()
+        if not filename.endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="PDF upload accepts .pdf files only")
+        session = session_service.from_request(request)
+        return await service.process_upload(session, file)
+
+    @router.post("/upload/image")
+    async def upload_image(request: Request, file: UploadFile = File(...)):
+        filename = str(file.filename or "").casefold()
+        if not filename.endswith((".jpg", ".jpeg", ".png")):
+            raise HTTPException(status_code=400, detail="Image upload accepts JPG, JPEG or PNG files only")
         session = session_service.from_request(request)
         return await service.process_upload(session, file)
 
