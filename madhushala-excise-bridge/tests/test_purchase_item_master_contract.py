@@ -329,3 +329,34 @@ def test_real_item_master_sample_uses_sales_rate_and_tax_master_fields():
         "t3Rate": 2.0,
         "t4Rate": 0.0,
     }
+
+
+@pytest.mark.asyncio
+async def test_pdf_header_uses_extracted_document_number_and_date_not_browser_defaults():
+    class Service:
+        def get_job(self, _session, _job_id):
+            return {
+                "source_type": "DOCUMENT_PDF",
+                "invoice_number": "003_COM_DHN_25-26/2026-2027/6267/61/6024",
+                "invoice_date": "01/09/2026",
+                "supplier_name": "JHARKHAND STATE BEVERAGES CORPORATION LIMITED",
+                "source_filename": "1.pdf",
+            }
+
+    header = await resolve_required_purchase_header(
+        Service(),
+        {"shop_code": "hedu_test2"},
+        "job-pdf-1",
+        {
+            "docNo": "BROWSER-DEFAULT",
+            "docDate": "2026-09-18",
+            "tpPassNo": "DOC",
+            "supplierCode": "T00005",
+            "storeCode": "S00001",
+            "purchaseAccCode": "P00002",
+            "userCode": "A00001",
+        },
+    )
+
+    assert header["docNo"] == "003_COM_DHN_25-26/2026-2027/6267/61/6024"
+    assert header["docDate"] == "2026-09-01"

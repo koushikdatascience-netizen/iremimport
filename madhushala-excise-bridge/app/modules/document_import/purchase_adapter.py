@@ -104,6 +104,7 @@ class DocumentPurchaseAdapter:
         )
         self.item_master_snapshot = item_master
         items: list[dict[str, Any]] = []
+        missing_document_quantities: list[str] = []
 
         for row, mapped in row_codes:
             master = item_master.get(mapped, {})
@@ -145,8 +146,14 @@ class DocumentPurchaseAdapter:
                 "Bottles Dispatched",
                 "No of Bottles Requested",
                 "Bottles Requested",
-                fallback=0,
+                fallback=row["quantity"],
             )
+
+            # PDF/image normalization already persists the trusted physical
+            # quantity in import_items.quantity. Prefer that normalized value
+            # over raw extractor field names, which vary between documents.
+            if is_document_upload:
+                document_qnty = _int_value(row["quantity"]) or document_qnty
 
             # Manual/non-document sources may preserve a valid case/loose shape.
             # QR, PDF and image imports are quantity-only sources for Purchase:
@@ -212,6 +219,9 @@ class DocumentPurchaseAdapter:
                 or mapped
             ).strip()
 
+            if is_document_upload and qnty <= 0:
+                missing_document_quantities.append(item_name)
+
             item = {
                 "itemCode": mapped,
                 "itemName": item_name,
@@ -248,6 +258,16 @@ class DocumentPurchaseAdapter:
                 "t4Rate": _money(_dict_value(master, "t4Rate", "tax4Rate")),
             }
             items.append(item)
+
+        if missing_document_quantities:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Document extraction did not provide a positive bottle quantity for: "
+                    + ", ".join(missing_document_quantities[:5])
+                    + ". Purchase was not saved. Check the extracted quantities and re-upload the document."
+                ),
+            )
 
         logger.info("purchase_items_enriched jobId=%s itemCount=%s", job_id, len(items))
         return items

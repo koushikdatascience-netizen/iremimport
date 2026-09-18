@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException
@@ -29,8 +30,23 @@ def _text(value: Any) -> str:
 
 def _date_only(value: Any) -> str:
     text = _text(value)
+    if not text:
+        return ""
+
     match = re.match(r"^(\d{4}-\d{2}-\d{2})", text)
-    return match.group(1) if match else text
+    if match:
+        return match.group(1)
+
+    # Excise/invoice PDFs commonly expose Indian DD/MM/YYYY dates. Normalize
+    # source-document dates to the ISO shape expected by Madhushala Purchase.
+    candidates = [text, text.split()[0]]
+    for candidate in dict.fromkeys(candidates):
+        for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d-%b-%Y", "%d/%b/%Y", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(candidate, fmt).date().isoformat()
+            except ValueError:
+                continue
+    return text
 
 
 def _raw_value(job_id: str, *aliases: str) -> str:
@@ -100,18 +116,28 @@ async def resolve_required_purchase_header(
     schemeCode to be empty. Supplier, Store, Purchase A/c and User are the
     master values that must be resolved before submitting the import.
 
-    QR/PDF extraction owns source-document facts. In particular a QR purchase
-    must use the invoice/document date encoded by the transport pass rather than
-    replacing it with the browser's current date.
+    QR/PDF/image extraction owns source-document facts. Document number and
+    document date must come from the extracted source rather than browser
+    defaults whenever extraction supplied those values.
     """
     job = service.get_job(session, job_id)
     resolved = dict(header or {})
 
+    source_type = str(job.get("source_type") or "").strip().upper()
+    source_doc_no = _text(job.get("invoice_number"))
     source_doc_date = _date_only(job.get("invoice_date"))
-    if str(job.get("source_type") or "").strip().upper() == "QR_HTML" and source_doc_date:
-        resolved["docDate"] = source_doc_date
-    elif not _text(resolved.get("docDate")) and source_doc_date:
-        resolved["docDate"] = source_doc_date
+    source_is_document = source_type in {"QR_HTML", "DOCUMENT_PDF", "DOCUMENT_IMAGE"}
+
+    if source_is_document:
+        if source_doc_no:
+            resolved["docNo"] = source_doc_no
+        if source_doc_date:
+            resolved["docDate"] = source_doc_date
+    else:
+        if not _text(resolved.get("docNo")) and source_doc_no:
+            resolved["docNo"] = source_doc_no
+        if not _text(resolved.get("docDate")) and source_doc_date:
+            resolved["docDate"] = source_doc_date
 
     if not _text(resolved.get("tpPassNo")):
         resolved["tpPassNo"] = _transport_pass_from_job(job, job_id)
