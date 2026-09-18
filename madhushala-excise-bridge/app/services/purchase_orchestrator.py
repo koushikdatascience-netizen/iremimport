@@ -168,11 +168,17 @@ class PurchaseOrchestrator:
         """
         calc_items: list[dict[str, Any]] = []
         for item in payload.get("items") or []:
-            box = _int_value(item.get("box"))
-            loose = _int_value(item.get("loose"))
-            if box <= 0 and loose <= 0:
-                # Legacy callers may still supply only qnty.
-                loose = _int_value(item.get("qnty"))
+            canonical_v2 = _int_value(item.get("_canonicalQuantityVersion")) >= 2
+            if canonical_v2:
+                box = _int_value(item.get("box"))
+                loose = _int_value(item.get("loose"))
+            else:
+                # Historical contract flattened qnty to loose even when an
+                # ambiguous raw box value was present.
+                box = 0
+                loose = _int_value(
+                    item.get("qnty") if item.get("qnty") not in (None, "") else item.get("loose")
+                )
             calc_item = {
                 "itemCode": str(item.get("itemCode") or "").strip(),
             }
@@ -525,7 +531,10 @@ class PurchaseOrchestrator:
             # current PurchaseRequest/ItemRequest sent by the manual screen does
             # not include them as item properties.
             for item in payload["items"]:
-                for helper_key in ("packing", "boxRate", "looseRate", "t1Rate", "t2Rate", "t3Rate", "t4Rate"):
+                for helper_key in (
+                    "packing", "boxRate", "looseRate", "t1Rate", "t2Rate",
+                    "t3Rate", "t4Rate", "_canonicalQuantityVersion",
+                ):
                     item.pop(helper_key, None)
 
             self._validate_final_payload(payload)
