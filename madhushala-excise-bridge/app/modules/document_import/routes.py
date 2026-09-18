@@ -39,7 +39,8 @@ class DocumentReviewItem(BaseModel):
     name: str
     brand: str
     ml: int
-    quantity: int
+    box: int = 0
+    loose: int = 0
 
 
 class DocumentReviewConfirmRequest(BaseModel):
