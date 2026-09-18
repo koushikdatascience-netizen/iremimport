@@ -73,6 +73,36 @@ def test_calculate_request_uses_item_master_and_extracted_bottles_as_loose():
     assert item["t4Rate"] == 2.4
 
 
+def test_calculate_request_preserves_reviewed_cases_and_loose_bottles():
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "hedu_test2",
+            "companyCode": "2",
+            "schemeCode": "",
+            "salesTaxRate": 0,
+            "salesTaxIncludingFree": False,
+        },
+        [
+            {
+                "itemCode": "100003",
+                "box": 7,
+                "loose": 47,
+                "qnty": 383,
+                "freeQnty": 0,
+            }
+        ],
+        {"100003": _master()},
+    )
+
+    item = request["items"][0]
+    assert item["box"] == 7
+    assert item["loose"] == 47
+    assert item["packing"] == 48
+    assert item["boxRate"] == 500.0
+    assert item["looseRate"] == 10.42
+    assert item["discount"] == 0.0
+
+
 @pytest.mark.asyncio
 async def test_client_mutates_debug_request_to_exact_request_sent_and_normalizes_tax_total():
     captured = {}
