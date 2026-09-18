@@ -856,9 +856,9 @@ dd {
 }
 
 .document-json {
-    min-height: 360px;
-    max-height: min(58vh, 620px);
-    margin: 0;
+    min-height: 180px;
+    max-height: min(48vh, 520px);
+    margin: 12px 0 0;
     padding: 14px;
     overflow: auto;
     border-radius: 8px;
@@ -866,6 +866,144 @@ dd {
     color: #e5e7eb;
     font: 13px/1.55 var(--font-pos-mono);
     white-space: pre;
+}
+
+.document-preview-actions,
+.document-source-actions,
+.document-technical-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.document-source-panel {
+    display: grid;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid var(--brand-border);
+    border-radius: 8px;
+    background: var(--brand-soft);
+}
+
+.document-source-panel span {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+.document-source-panel a {
+    min-width: 0;
+    color: var(--heading);
+    font-weight: 800;
+    overflow-wrap: anywhere;
+}
+
+.document-table-wrap {
+    max-height: min(52vh, 560px);
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+
+.document-review-table {
+    width: 100%;
+    min-width: 720px;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: #fff;
+}
+
+.document-review-table th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 10px;
+    border-bottom: 1px solid var(--line);
+    background: var(--warm);
+    color: var(--heading);
+    font-size: 12px;
+    text-align: left;
+}
+
+.document-review-table td {
+    padding: 8px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+}
+
+.document-review-table tr:last-child td {
+    border-bottom: 0;
+}
+
+.document-review-table tr.invalid-row {
+    background: var(--danger-soft);
+}
+
+.document-review-table input {
+    min-height: 38px;
+    padding: 7px 9px;
+    font-size: 13px;
+}
+
+.document-review-table .name-cell {
+    min-width: 230px;
+}
+
+.document-review-table .brand-cell {
+    min-width: 170px;
+}
+
+.document-review-table .number-cell {
+    width: 105px;
+}
+
+.document-row-issues {
+    display: block;
+    margin-top: 5px;
+    color: var(--danger);
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.document-review-validation {
+    min-height: 20px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.document-review-validation.error {
+    color: var(--danger);
+}
+
+.document-review-validation.ok {
+    color: var(--success);
+}
+
+.document-technical,
+.purchase-details {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: #fbfbfc;
+}
+
+.document-technical summary,
+.purchase-details summary {
+    cursor: pointer;
+    color: var(--heading);
+    font-weight: 900;
+}
+
+.document-source-placeholder {
+    height: 100%;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
 }
 
 .document-action-bar {
@@ -2042,19 +2180,30 @@ body.mapping-mode {
                 <li data-stage="uploading">Uploading document</li>
                 <li data-stage="extracting">Extracting products</li>
                 <li data-stage="normalizing">Normalizing product data</li>
-                <li data-stage="checking">Checking Madhushala mappings</li>
+                <li data-stage="checking">Preparing review</li>
             </ol>
         </section>
 
         <section id="document-review-panel" class="document-review" hidden>
             <div class="document-preview-card">
                 <header>
-                    <h2>Uploaded Document</h2>
-                    <button id="replace-document" type="button" class="secondary">Replace Document</button>
+                    <h2>Source Document</h2>
+                    <div class="document-preview-actions">
+                        <button id="document-fullscreen" type="button" class="secondary">Full Screen</button>
+                        <button id="document-open-new-tab" type="button" class="secondary">Open in New Tab</button>
+                        <button id="replace-document" type="button" class="secondary">Replace</button>
+                    </div>
                 </header>
+                <div id="review-source-panel" class="document-source-panel" hidden>
+                    <span>QR Source URL</span>
+                    <a id="review-source-link" href="#" target="_blank" rel="noopener noreferrer"></a>
+                    <div class="document-source-actions">
+                        <button id="open-qr-source" type="button" class="secondary">Open Source Page</button>
+                    </div>
+                </div>
                 <div id="document-preview" class="document-preview"></div>
                 <dl class="document-file-meta">
-                    <div><dt>Filename</dt><dd id="review-filename">-</dd></div>
+                    <div><dt>Filename / Source</dt><dd id="review-filename">-</dd></div>
                     <div><dt>Type</dt><dd id="review-filetype">-</dd></div>
                     <div><dt>Size</dt><dd id="review-filesize">-</dd></div>
                 </dl>
@@ -2062,28 +2211,56 @@ body.mapping-mode {
 
             <div class="document-data-card">
                 <header>
-                    <h2>Extracted Data</h2>
-                    <button id="copy-document-json" type="button" class="secondary">Copy JSON</button>
+                    <div>
+                        <span class="app-kicker">Verify before mapping</span>
+                        <h2>Extracted Products</h2>
+                    </div>
                 </header>
                 <div class="document-metrics">
-                    <div><span>Products Detected</span><strong id="metric-detected">0</strong></div>
-                    <div><span>Recognized</span><strong id="metric-recognized">0</strong></div>
-                    <div><span>Require Mapping</span><strong id="metric-unmapped">0</strong></div>
+                    <div><span>Rows</span><strong id="metric-detected">0</strong></div>
+                    <div><span>Valid</span><strong id="metric-recognized">0</strong></div>
+                    <div><span>Needs Attention</span><strong id="metric-unmapped">0</strong></div>
                 </div>
-                <form id="purchase-form" class="purchase-form">
-                    <label>Year Code<input id="purchase-year-code" name="yearCode" required placeholder="2026-27"></label>
-                    <label>TRN Date<input id="purchase-trn-date" name="trnDate" type="date" required></label>
-                    <label>Doc Date<input id="purchase-doc-date" name="docDate" type="date" required></label>
-                    <label>Invoice No<input id="purchase-doc-no" name="docNo" required></label>
-                    <label>TP Pass No<input id="purchase-tp-pass-no" name="tpPassNo"></label>
-                    <label>Supplier Code<input id="purchase-supplier-code" name="supplierCode" required></label>
-                    <label>Store Code<input id="purchase-store-code" name="storeCode" required></label>
-                    <label>Purchase A/c<input id="purchase-acc-code" name="purchaseAccCode" required></label>
-                    <label>User Code<input id="purchase-user-code" name="userCode" required></label>
-                    <label>Tax Mode<select id="purchase-tax-mode" name="taxMode"><option value="ITEMWISE">ITEMWISE</option><option value="BILLWISE">BILLWISE</option></select></label>
-                    <label class="wide">Narration<input id="purchase-narration" name="narration" value="PDF import"></label>
-                </form>
-                <pre id="document-json" class="document-json">{}</pre>
+
+                <div class="document-table-wrap">
+                    <table class="document-review-table" aria-label="Editable extracted products">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Brand</th>
+                                <th>ML</th>
+                                <th>Quantity</th>
+                            </tr>
+                        </thead>
+                        <tbody id="document-items-table-body"></tbody>
+                    </table>
+                </div>
+                <p id="document-review-validation" class="document-review-validation">Review all rows before mapping.</p>
+
+                <details class="purchase-details">
+                    <summary>Purchase header details</summary>
+                    <form id="purchase-form" class="purchase-form">
+                        <label>Year Code<input id="purchase-year-code" name="yearCode" required placeholder="2026-27"></label>
+                        <label>TRN Date<input id="purchase-trn-date" name="trnDate" type="date" required></label>
+                        <label>Doc Date<input id="purchase-doc-date" name="docDate" type="date" required></label>
+                        <label>Invoice No<input id="purchase-doc-no" name="docNo" required></label>
+                        <label>TP Pass No<input id="purchase-tp-pass-no" name="tpPassNo"></label>
+                        <label>Supplier Code<input id="purchase-supplier-code" name="supplierCode" required></label>
+                        <label>Store Code<input id="purchase-store-code" name="storeCode" required></label>
+                        <label>Purchase A/c<input id="purchase-acc-code" name="purchaseAccCode" required></label>
+                        <label>User Code<input id="purchase-user-code" name="userCode" required></label>
+                        <label>Tax Mode<select id="purchase-tax-mode" name="taxMode"><option value="ITEMWISE">ITEMWISE</option><option value="BILLWISE">BILLWISE</option></select></label>
+                        <label class="wide">Narration<input id="purchase-narration" name="narration" value="PDF import"></label>
+                    </form>
+                </details>
+
+                <details class="document-technical">
+                    <summary>Technical extraction details</summary>
+                    <div class="document-technical-actions">
+                        <button id="copy-document-json" type="button" class="secondary">Copy JSON</button>
+                    </div>
+                    <pre id="document-json" class="document-json">{}</pre>
+                </details>
             </div>
         </section>
 
