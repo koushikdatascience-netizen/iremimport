@@ -83,6 +83,32 @@ async def load_item_master_details(reference_service: Any, session: dict[str, An
         return {}
 
     company_before = str(session.get("company_code") or "").strip()
+
+    catalogue_loader = getattr(reference_service, "catalogue", None)
+    if callable(catalogue_loader):
+        try:
+            catalogue = await catalogue_loader(session)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not verify Madhushala Item Master for company {company_before or '[blank]'}: {exc}",
+            ) from exc
+
+        available_codes = {
+            str(_dict_value(row, "itemCode", "code", "value", "id") or "").strip()
+            for row in (catalogue or [])
+            if isinstance(row, dict)
+        }
+        invalid_codes = [code for code in codes if code not in available_codes]
+        if invalid_codes:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Mapped Madhushala item(s) {', '.join(invalid_codes)} are not available "
+                    f"in company {company_before or '[blank]'}. Remap those rows for the current company before saving."
+                ),
+            )
+
     items_loader = getattr(reference_service, "items", None)
     if not callable(items_loader):
         raise HTTPException(status_code=500, detail="Madhushala Item Master loader is not available")
