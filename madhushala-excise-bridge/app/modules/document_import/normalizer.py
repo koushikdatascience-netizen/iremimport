@@ -40,10 +40,12 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
         raw_name = (item.itemName or item.brand or "").strip()
         brand = (item.brand or raw_name).strip()
         ml = parse_ml(item.ml or raw_name) or None
-        if not raw_name or not ml:
+        if not raw_name:
             continue
 
         normalized_name = normalize_brand(raw_name)
+        if normalized_name in {"total", "subtotal", "grandtotal"} or normalized_name.startswith("total "):
+            continue
 
         if document_source:
             # PDF/image canonical contract:
