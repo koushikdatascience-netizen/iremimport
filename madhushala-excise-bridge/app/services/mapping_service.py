@@ -670,8 +670,8 @@ class MappingService:
                     context.update(captured)
 
                 mapped = db.execute(
-                    "SELECT madhushala_item_code FROM mappings WHERE shop_code=? AND excise_item_code=?",
-                    (shop_code, excise_code),
+                    "SELECT madhushala_item_code FROM mappings_v2 WHERE shop_code=? AND company_code=? AND excise_item_code=?",
+                    (shop_code, company_code, excise_code),
                 ).fetchone()
                 rows.append(
                     {
