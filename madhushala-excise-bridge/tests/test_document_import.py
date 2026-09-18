@@ -224,7 +224,10 @@ def test_document_upload_accepts_pdf_and_persists_job(client, monkeypatch):
     from app.main import document_import_service
     from app.modules.document_import import service as service_module
 
-    async def fake_extract_products(self, temp_path, filename):
+    def fake_local_extract(_path):
+        return None, {"engine": "pymupdf", "usable": False, "reason": "insufficient_text_layer"}
+
+    async def fake_scanned_pages(self, temp_path, filename):
         return ExtractedDocument(
             documentType="invoice",
             supplierName="Supplier",
@@ -240,7 +243,8 @@ def test_document_upload_accepts_pdf_and_persists_job(client, monkeypatch):
     async def fake_workspace(session, capture=None, latest_only=True, job_id=None):
         return {"unmappedItems": [{"exciseItemCode": 733}]}
 
-    monkeypatch.setattr(service_module.LlamaCloudClient, "extract_products", fake_extract_products)
+    monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local_extract)
+    monkeypatch.setattr(service_module.LlamaCloudClient, "extract_scanned_pdf_pages", fake_scanned_pages)
     monkeypatch.setattr(document_import_service.mapping_service, "prepare_document_job", fake_prepare)
     monkeypatch.setattr(document_import_service.mapping_service, "workspace_for_session", fake_workspace)
 
@@ -292,6 +296,9 @@ def test_native_pdf_uses_pymupdf_without_llama(client, monkeypatch):
     async def should_not_use_llama(self, temp_path, filename):
         raise AssertionError("LlamaParse must not run for a usable native PDF")
 
+    async def should_not_use_scanned_pages(self, temp_path, filename):
+        raise AssertionError("Scanned-page fallback must not run for a usable native PDF")
+
     async def fake_prepare(session, job_id):
         with conn() as db:
             db.execute(
@@ -305,6 +312,7 @@ def test_native_pdf_uses_pymupdf_without_llama(client, monkeypatch):
 
     monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local_extract)
     monkeypatch.setattr(service_module.LlamaCloudClient, "extract_products", should_not_use_llama)
+    monkeypatch.setattr(service_module.LlamaCloudClient, "extract_scanned_pdf_pages", should_not_use_scanned_pages)
     monkeypatch.setattr(document_import_service.mapping_service, "prepare_document_job", fake_prepare)
     monkeypatch.setattr(document_import_service.mapping_service, "workspace_for_session", fake_workspace)
 
@@ -336,7 +344,7 @@ def test_scanned_pdf_falls_back_to_llamaparse(client, monkeypatch):
             "reason": "insufficient_text_layer",
         }
 
-    async def fake_llama(self, temp_path, filename):
+    async def fake_scanned_pages(self, temp_path, filename):
         return ExtractedDocument(
             documentType="invoice",
             supplierName="Scanned Supplier",
@@ -364,7 +372,7 @@ def test_scanned_pdf_falls_back_to_llamaparse(client, monkeypatch):
         return {"unmappedItems": [{"exciseItemCode": 734}]}
 
     monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local_extract)
-    monkeypatch.setattr(service_module.LlamaCloudClient, "extract_products", fake_llama)
+    monkeypatch.setattr(service_module.LlamaCloudClient, "extract_scanned_pdf_pages", fake_scanned_pages)
     monkeypatch.setattr(document_import_service.mapping_service, "prepare_document_job", fake_prepare)
     monkeypatch.setattr(document_import_service.mapping_service, "workspace_for_session", fake_workspace)
 
@@ -377,7 +385,7 @@ def test_scanned_pdf_falls_back_to_llamaparse(client, monkeypatch):
 
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["extraction"]["engine"] == "llamaparse"
+    assert payload["extraction"]["engine"] == "llamaparse-page-by-page"
     assert payload["extraction"]["fallbackFrom"] == "pymupdf"
     assert payload["extraction"]["reason"] == "insufficient_text_layer"
     assert payload["normalizedItems"][0]["quantity"] == 2.0
