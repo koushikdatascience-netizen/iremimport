@@ -46,16 +46,29 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
         normalized_name = normalize_brand(raw_name)
 
         if document_source:
-            # Source document owns only identity + physical bottle/unit count.
-            # Extractors sometimes place the same quantity under labels such as
-            # "Physical Qty" in extra/nested raw row data, so normalize all of
-            # those aliases into one quantity before Purchase.
-            physical_quantity = (
-                parse_int(item.quantity)
-                or parse_int(item.loose)
-                or resolve_document_quantity(raw)
-                or None
-            )
+            # PDF/image canonical contract:
+            #   box   = explicitly printed cases/cartons
+            #   loose = explicitly printed single bottles/units
+            # Never convert between the two here. Packing belongs to Item Master.
+            box = parse_int(item.box) or 0
+            loose = parse_int(item.loose) or 0
+
+            # Backward-compatible recovery only for older extraction payloads
+            # that pre-date canonical box/loose. New extractors must provide
+            # semantic box/loose directly.
+            if box <= 0 and loose <= 0:
+                legacy_quantity = (
+                    parse_int(item.quantity)
+                    or resolve_document_quantity(raw)
+                    or 0
+                )
+                if legacy_quantity > 0:
+                    loose = legacy_quantity
+
+            raw["canonicalBox"] = box
+            raw["canonicalLoose"] = loose
+            raw["canonicalQuantityVersion"] = 2
+
             items.append(
                 NormalizedImportItem(
                     source=source_type,
@@ -65,13 +78,13 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
                     brand=brand,
                     ml=ml,
                     packing=None,
-                    quantity=float(physical_quantity) if physical_quantity is not None else None,
+                    quantity=float(box + loose) if (box or loose) else None,
                     rate=None,
                     mrp=None,
                     amount=None,
                     batchNo=None,
-                    box=None,
-                    loose=physical_quantity,
+                    box=box,
+                    loose=loose,
                     freeQnty=None,
                     discount=None,
                     cgst=None,
