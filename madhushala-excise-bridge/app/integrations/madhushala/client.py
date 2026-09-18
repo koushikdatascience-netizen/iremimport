@@ -369,10 +369,13 @@ class MadhushalaClient:
 
     async def get_item(self, item_code: str, company_code: str) -> Any:
         safe_company = str(company_code or "").strip()
+        # Purchase item detail must stay in the same shop/company scope as the
+        # Purchase dropdown. targetCompanyCode is an admin/generic item scope
+        # and can reject an otherwise valid purchase company.
         return await self._request(
             "GET",
             f"/api/items/{item_code}",
-            params={"companyCode": safe_company, "targetCompanyCode": safe_company},
+            params={"shopCode": self.shop_code, "companyCode": safe_company},
             headers=self._auth_headers("application/json"),
         )
 
