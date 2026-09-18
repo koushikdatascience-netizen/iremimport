@@ -132,7 +132,7 @@ class DocumentPurchaseAdapter:
             raw_packing = raw_int("packing", "bottlePerCase", "bottlesPerCase", "caseQty", fallback=row["packing"])
             packing = master_packing or raw_packing
 
-            box = raw_int("box", "boxes", "case", "cases", fallback=row["quantity"] or 0)
+            box = raw_int("box", "boxes", "case", "cases", fallback=0)
             loose = raw_int("loose", "looseQty", fallback=0)
             document_qnty = raw_int(
                 "qnty",
@@ -146,9 +146,8 @@ class DocumentPurchaseAdapter:
                 fallback=0,
             )
 
-            # Source QR/PDF owns the physical bottle total. Preserve the normal
-            # Save representation here; Calculate itself will always receive
-            # box=0 and loose=<extracted bottle quantity> via ItemMasterCalculateClient.
+            # Source QR/PDF bottle quantity must stay as loose units end-to-end.
+            # Never reinterpret extracted bottle count as cases/boxes.
             has_explicit_bottles = any(
                 _key(alias) in normalized_raw
                 for alias in (
@@ -159,23 +158,19 @@ class DocumentPurchaseAdapter:
                     "Bottles Requested",
                 )
             )
-            if document_qnty and packing and (is_qr or has_explicit_bottles):
-                represented = (box * packing) + loose
-                if represented != document_qnty:
-                    old_box, old_loose = box, loose
-                    box = document_qnty // packing
-                    loose = document_qnty % packing
-                    logger.info(
-                        "purchase_quantity_reconciled jobId=%s itemCode=%s sourceBox=%s sourceLoose=%s qnty=%s packing=%s box=%s loose=%s",
-                        job_id,
-                        mapped,
-                        old_box,
-                        old_loose,
-                        document_qnty,
-                        packing,
-                        box,
-                        loose,
-                    )
+            if document_qnty and (is_qr or has_explicit_bottles):
+                old_box, old_loose = box, loose
+                box = 0
+                loose = document_qnty
+                logger.info(
+                    "purchase_quantity_as_loose jobId=%s itemCode=%s sourceBox=%s sourceLoose=%s qnty=%s box=0 loose=%s",
+                    job_id,
+                    mapped,
+                    old_box,
+                    old_loose,
+                    document_qnty,
+                    loose,
+                )
 
             qnty = document_qnty or ((box * packing + loose) if packing else (box + loose))
 
