@@ -256,8 +256,9 @@ def test_document_upload_accepts_pdf_and_persists_job(client, monkeypatch):
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["job"]["status"] == "MAPPING_REQUIRED"
+    assert payload["job"]["status"] == "REVIEW_REQUIRED"
     assert payload["summary"]["detected"] == 1
+    assert payload["summary"]["reviewRequired"] is True
     items = client.get(f"/api/v1/document-import/jobs/{payload['job']['id']}/items", headers=auth(session)).json()["items"]
     assert items[0]["raw_name"] == "100 PIPER 180"
 
@@ -506,8 +507,11 @@ def test_up_excise_transport_pass_qr_exact_url_and_table_shape(client, monkeypat
         "transportPassType": "FG",
         "transportPassYear": "2026",
     }
-    assert payload["job"]["status"] == "MAPPING_REQUIRED"
-    assert payload["summary"] == {"detected": 2, "recognized": 0, "needMapping": 2}
+    assert payload["job"]["status"] == "REVIEW_REQUIRED"
+    assert payload["summary"]["detected"] == 2
+    assert payload["summary"]["recognized"] == 0
+    assert payload["summary"]["needMapping"] == 2
+    assert payload["summary"]["reviewRequired"] is True
     assert payload["extractedDocument"]["invoiceNumber"] == "IND-LUCK-2026-00042"
     assert payload["extractedDocument"]["invoiceDate"] == "2026-06-16"
     assert payload["extractedDocument"]["transportPassNo"] == "WHOLESALE1501-FL2-RETAIL995782-FL4C-LUCK-Jun26_00000674"
@@ -723,7 +727,7 @@ def test_pdf_first_page_real_packing_is_not_mistaken_for_quantity():
     assert rows[0].loose is None
 
 
-def test_pdf_upload_fails_during_extraction_when_quantity_still_missing(client, monkeypatch):
+def test_pdf_upload_surfaces_missing_quantity_in_review_before_mapping(client, monkeypatch):
     from app.main import document_import_service
     from app.modules.document_import import service as service_module
 
@@ -754,7 +758,7 @@ def test_pdf_upload_fails_during_extraction_when_quantity_still_missing(client, 
 
     async def should_not_prepare(*_args, **_kwargs):
         called["prepare"] = True
-        raise AssertionError("Mapping must not run when extraction quantity is missing")
+        raise AssertionError("Mapping must not run before user review confirmation")
 
     monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local_extract)
     monkeypatch.setattr(service_module.LlamaCloudClient, "extract_scanned_pdf_pages", fake_scanned_pages)
@@ -767,6 +771,104 @@ def test_pdf_upload_fails_during_extraction_when_quantity_still_missing(client, 
         files={"file": ("missing-qty.pdf", b"%PDF-1.4 missing-qty", "application/pdf")},
     )
 
-    assert response.status_code == 422
-    assert "Extraction could not determine a positive physical quantity" in response.json()["detail"]
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job"]["status"] == "REVIEW_REQUIRED"
+    assert payload["summary"]["needsAttention"] == 1
+    assert payload["reviewItems"][0]["quantity"] is None
+    assert payload["reviewItems"][0]["valid"] is False
     assert called["prepare"] is False
+
+
+
+def test_review_confirm_persists_edits_then_starts_mapping(client, monkeypatch):
+    from app.db import conn
+    from app.main import document_import_service
+    from app.modules.document_import import service as service_module
+
+    document = ExtractedDocument(
+        documentType="invoice",
+        supplierName="Supplier",
+        items=[
+            ExtractedProduct(
+                itemName="ROYAL STAG DELUXE WHISKY",
+                brand="ROYAL STAG",
+                ml=750,
+                quantity=2,
+            )
+        ],
+    )
+
+    def fake_local_extract(_path):
+        return document, {"engine": "pymupdf", "usable": True}
+
+    called = {"prepare": 0}
+
+    async def fake_prepare(session, job_id):
+        called["prepare"] += 1
+        with conn() as db:
+            db.execute(
+                "UPDATE import_items SET excise_item_code='991', mapping_status='UNMAPPED' WHERE job_id=?",
+                (job_id,),
+            )
+        return {"preparedCount": 1}
+
+    async def fake_workspace(session, capture=None, latest_only=True, job_id=None):
+        return {
+            "unmappedItems": [
+                {
+                    "jobItemId": "row",
+                    "exciseItemCode": "991",
+                    "selectedItemCode": None,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local_extract)
+    monkeypatch.setattr(document_import_service.mapping_service, "prepare_document_job", fake_prepare)
+    monkeypatch.setattr(document_import_service.mapping_service, "workspace_for_session", fake_workspace)
+
+    session = create_session(client)
+    upload = client.post(
+        "/api/v1/document-import/upload/pdf",
+        headers=auth(session),
+        files={"file": ("review.pdf", b"%PDF-1.4 review", "application/pdf")},
+    )
+    assert upload.status_code == 200, upload.text
+    payload = upload.json()
+    assert payload["job"]["status"] == "REVIEW_REQUIRED"
+    assert called["prepare"] == 0
+
+    row = payload["reviewItems"][0]
+    confirm = client.post(
+        f"/api/v1/document-import/jobs/{payload['job']['id']}/review/confirm",
+        headers=auth(session),
+        json={
+            "items": [
+                {
+                    "id": row["id"],
+                    "name": "ROYAL STAG DELUXE WHISKY EDITED",
+                    "brand": "ROYAL STAG",
+                    "ml": 750,
+                    "quantity": 5,
+                }
+            ]
+        },
+    )
+    assert confirm.status_code == 200, confirm.text
+    confirmed = confirm.json()
+    assert called["prepare"] == 1
+    assert confirmed["job"]["status"] == "MAPPING_REQUIRED"
+    assert confirmed["reviewItems"][0]["name"] == "ROYAL STAG DELUXE WHISKY EDITED"
+    assert confirmed["reviewItems"][0]["quantity"] == 5
+
+    items = client.get(
+        f"/api/v1/document-import/jobs/{payload['job']['id']}/items",
+        headers=auth(session),
+    ).json()["items"]
+    assert items[0]["raw_name"] == "ROYAL STAG DELUXE WHISKY EDITED"
+    assert items[0]["quantity"] == 5.0
+    raw = json.loads(items[0]["raw_data_json"])
+    assert raw["quantity"] == 5
+    assert raw["loose"] == 5
+    assert raw["box"] == 0
