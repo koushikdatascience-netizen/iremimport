@@ -997,6 +997,16 @@ function updateReviewValidation() {
         row.classList.toggle("invalid-row", issues.length > 0);
         const target = row.querySelector(".document-row-issues");
         if (target) target.textContent = issues.join(" • ");
+        const status = row.querySelector(".row-status");
+        if (status) {
+            status.textContent = issues.length ? "Needs attention" : "Ready";
+            status.className = "row-status " + (issues.length ? "issue" : "valid");
+        }
+        const current = items[index] || {};
+        row.dataset.searchText = [
+            current.name, current.brand, current.ml, current.box, current.loose,
+            row.querySelector("[data-source-file]")?.dataset.sourceFile || "",
+        ].join(" ");
         if (issues.length) invalid += 1;
     });
     const valid = Math.max(0, items.length - invalid);
@@ -1349,6 +1359,12 @@ document.getElementById("confirm-guardrail")?.addEventListener("click", () => {
     const action = pendingGuardrailAction;
     closeGuardrailModal();
     if (action) action();
+});
+
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !document.getElementById("document-viewer-modal")?.hidden) {
+        closeDocumentViewer();
+    }
 });
 
 document.addEventListener("DOMContentLoaded", () => {
