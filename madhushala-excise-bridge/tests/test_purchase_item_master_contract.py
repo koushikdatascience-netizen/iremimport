@@ -155,3 +155,73 @@ async def test_qr_header_uses_transport_pass_document_date_not_browser_today():
     )
 
     assert header["docDate"] == "2026-06-16"
+
+
+def test_calculate_allows_only_purchase_rate_to_be_non_zero():
+    master = _master()
+    master["purchaseRateCase"] = 0
+
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "hedu_test2",
+            "companyCode": "2",
+            "schemeCode": "",
+            "salesTaxRate": 0,
+            "salesTaxIncludingFree": False,
+        },
+        [{"itemCode": "100003", "qnty": 18, "freeQnty": 0}],
+        {"100003": master},
+    )
+
+    item = request["items"][0]
+    assert item["box"] == 0
+    assert item["loose"] == 18
+    assert item["boxRate"] == 0
+    assert item["looseRate"] == 10.42
+
+
+def test_calculate_allows_only_purchase_case_rate_to_be_non_zero():
+    master = _master()
+    master["purchaseRate"] = 0
+
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "hedu_test2",
+            "companyCode": "2",
+            "schemeCode": "",
+            "salesTaxRate": 0,
+            "salesTaxIncludingFree": False,
+        },
+        [{"itemCode": "100003", "qnty": 18, "freeQnty": 0}],
+        {"100003": master},
+    )
+
+    item = request["items"][0]
+    assert item["box"] == 0
+    assert item["loose"] == 18
+    assert item["boxRate"] == 500.0
+    assert item["looseRate"] == 0
+
+
+def test_calculate_does_not_fall_back_to_generic_rate_aliases():
+    master = _master()
+    master["purchaseRate"] = 0
+    master["purchaseRateCase"] = 0
+    master["rate"] = 99.0
+    master["boxRate"] = 999.0
+
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "hedu_test2",
+            "companyCode": "2",
+            "schemeCode": "",
+            "salesTaxRate": 0,
+            "salesTaxIncludingFree": False,
+        },
+        [{"itemCode": "100003", "qnty": 18, "freeQnty": 0}],
+        {"100003": master},
+    )
+
+    item = request["items"][0]
+    assert item["boxRate"] == 0
+    assert item["looseRate"] == 0
