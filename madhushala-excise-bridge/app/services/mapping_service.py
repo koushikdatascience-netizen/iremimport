@@ -498,11 +498,32 @@ class MappingService:
                     except Exception:
                         raw_data = {}
 
-                    canonical_quantity = (
-                        int(job_item["quantity"])
-                        if job_item["quantity"] not in (None, "") and float(job_item["quantity"]) > 0
-                        else extract_physical_quantity(raw_data)
-                    )
+                    keys = set(job_item.keys())
+                    try:
+                        canonical_box = max(0, int(float(job_item["box"] or 0))) if "box" in keys else 0
+                    except Exception:
+                        canonical_box = 0
+                    try:
+                        canonical_loose = max(0, int(float(job_item["loose"] or 0))) if "loose" in keys else 0
+                    except Exception:
+                        canonical_loose = 0
+                    if canonical_box <= 0:
+                        try:
+                            canonical_box = max(0, int(float(raw_data.get("canonicalBox", raw_data.get("box")) or 0)))
+                        except Exception:
+                            canonical_box = 0
+                    if canonical_loose <= 0:
+                        try:
+                            canonical_loose = max(0, int(float(raw_data.get("canonicalLoose", raw_data.get("loose")) or 0)))
+                        except Exception:
+                            canonical_loose = 0
+                    if canonical_box <= 0 and canonical_loose <= 0:
+                        canonical_loose = (
+                            int(job_item["quantity"])
+                            if job_item["quantity"] not in (None, "") and float(job_item["quantity"]) > 0
+                            else extract_physical_quantity(raw_data)
+                        )
+
                     captured = {
                         **raw_data,
                         "rawName": job_item["raw_name"],
@@ -511,8 +532,9 @@ class MappingService:
                         "ml": job_item["ml"],
                         "bottlesPerCase": job_item["packing"],
                         "packing": job_item["packing"],
-                        "quantity": canonical_quantity or None,
-                        "loose": canonical_quantity or None,
+                        "box": canonical_box,
+                        "loose": canonical_loose,
+                        "quantity": (canonical_box + canonical_loose) or None,
                         "rate": job_item["rate"],
                         "mrpPerUnit": job_item["mrp"],
                         "mrp": job_item["mrp"],
