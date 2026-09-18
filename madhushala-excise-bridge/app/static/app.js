@@ -856,7 +856,8 @@ function reviewItemsFromPayload(payload) {
             name: String(item.name || ""),
             brand: String(item.brand || item.name || ""),
             ml: item.ml ?? "",
-            quantity: item.quantity ?? "",
+            box: item.box ?? 0,
+            loose: item.loose ?? 0,
             issues: Array.isArray(item.issues) ? item.issues : [],
         }));
     }
@@ -865,7 +866,8 @@ function reviewItemsFromPayload(payload) {
         name: String(item.rawName || item.itemName || ""),
         brand: String(item.brand || item.rawName || item.itemName || ""),
         ml: item.ml ?? "",
-        quantity: item.quantity ?? item.loose ?? "",
+        box: item.box ?? 0,
+        loose: item.loose ?? 0,
         issues: [],
     }));
 }
@@ -875,11 +877,16 @@ function validateReviewItem(item) {
     const name = String(item.name || "").trim();
     const brand = String(item.brand || "").trim();
     const ml = Number(item.ml);
-    const quantity = Number(item.quantity);
+    const box = Number(item.box);
+    const loose = Number(item.loose);
     if (!name) issues.push("Name is required");
     if (!brand) issues.push("Brand is required");
     if (!Number.isInteger(ml) || ml <= 0) issues.push("ML must be a positive whole number");
-    if (!Number.isInteger(quantity) || quantity <= 0) issues.push("Quantity must be a positive whole number");
+    if (!Number.isInteger(box) || box < 0) issues.push("Box/Cases must be a non-negative whole number");
+    if (!Number.isInteger(loose) || loose < 0) issues.push("Loose/Bottles must be a non-negative whole number");
+    if (Number.isInteger(box) && Number.isInteger(loose) && box === 0 && loose === 0) {
+        issues.push("Enter at least one case/box or loose bottle");
+    }
     return issues;
 }
 
@@ -890,7 +897,8 @@ function collectReviewItems() {
         name: row.querySelector('[data-field="name"]')?.value || "",
         brand: row.querySelector('[data-field="brand"]')?.value || "",
         ml: row.querySelector('[data-field="ml"]')?.value || "",
-        quantity: row.querySelector('[data-field="quantity"]')?.value || "",
+        box: row.querySelector('[data-field="box"]')?.value || "0",
+        loose: row.querySelector('[data-field="loose"]')?.value || "0",
     }));
 }
 
@@ -931,7 +939,8 @@ function renderReviewTable(items) {
             '<td class="name-cell"><input data-field="name" type="text" value="' + escapeHtml(item.name) + '" maxlength="300" aria-label="Product name"><span class="document-row-issues">' + escapeHtml(initialIssues.join(" • ")) + '</span></td>' +
             '<td class="brand-cell"><input data-field="brand" type="text" value="' + escapeHtml(item.brand) + '" maxlength="300" aria-label="Brand"></td>' +
             '<td class="number-cell"><input data-field="ml" type="number" min="1" step="1" value="' + escapeHtml(item.ml) + '" aria-label="ML"></td>' +
-            '<td class="number-cell"><input data-field="quantity" type="number" min="1" step="1" value="' + escapeHtml(item.quantity) + '" aria-label="Quantity"></td>' +
+            '<td class="number-cell"><input data-field="box" type="number" min="0" step="1" value="' + escapeHtml(item.box) + '" aria-label="Box or cases"></td>' +
+            '<td class="number-cell"><input data-field="loose" type="number" min="0" step="1" value="' + escapeHtml(item.loose) + '" aria-label="Loose bottles"></td>' +
             '</tr>';
     }).join("");
     updateReviewValidation();
@@ -967,7 +976,7 @@ function renderDocumentReview(payload) {
     const items = reviewItemsFromPayload(payload);
     renderReviewTable(items);
     renderReviewSource(payload);
-    setText(document.getElementById("document-action-summary"), items.length + " products extracted • Verify Name, Brand, ML and Quantity before mapping");
+    setText(document.getElementById("document-action-summary"), items.length + " products extracted • Verify Name, Brand, ML, Box/Cases and Loose/Bottles before mapping");
     setText(document.getElementById("continue-document-mapping"), "Confirm & Continue to Mapping");
     setHidden(document.getElementById("save-purchase"), true);
     setHidden(document.getElementById("continue-document-mapping"), false);
@@ -1020,7 +1029,7 @@ async function uploadDocument(file, kind = "pdf") {
             setDocumentImportState("extracting");
             const latestElements = documentElements();
             setText(latestElements.progressTitle, "Extracting products");
-            setText(latestElements.progressDetail, "Reading product rows and checking Madhushala mappings.");
+            setText(latestElements.progressDetail, "Reading source rows and building canonical Name / Brand / ML / Box / Loose values.");
         }, 500);
         const endpoint = kind === "image" ? "/api/v1/document-import/upload/image" : "/api/v1/document-import/upload/pdf";
         const response = await fetch(apiUrl(endpoint), {
@@ -1179,7 +1188,8 @@ async function confirmReviewAndContinue() {
                     name: String(item.name || "").trim(),
                     brand: String(item.brand || "").trim(),
                     ml: Number(item.ml),
-                    quantity: Number(item.quantity),
+                    box: Number(item.box),
+                    loose: Number(item.loose),
                 })),
             }),
         });
