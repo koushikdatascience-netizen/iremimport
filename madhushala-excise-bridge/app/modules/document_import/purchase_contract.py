@@ -85,7 +85,7 @@ async def load_item_master_details(reference_service: Any, session: dict[str, An
     company_before = str(session.get("company_code") or "").strip()
 
     catalogue_loader = getattr(reference_service, "catalogue", None)
-    if callable(catalogue_loader):
+    if company_before and callable(catalogue_loader):
         try:
             catalogue = await catalogue_loader(session)
         except Exception as exc:
