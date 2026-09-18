@@ -5,7 +5,7 @@ import mimetypes
 import re
 import tempfile
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from html.parser import HTMLParser
 from urllib.parse import urlparse
@@ -354,6 +354,8 @@ class DocumentImportService:
             "ml": ml or None,
             "box": box,
             "loose": loose,
+            "sourceFile": str(raw.get("sourceFilename") or "").strip(),
+            "sourcePart": _int_value(raw.get("sourceFileIndex")) or None,
             "issues": issues,
             "valid": not issues,
         }
@@ -525,53 +527,229 @@ class DocumentImportService:
             },
         }
 
-    async def process_upload(self, session: dict[str, Any], upload: UploadFile) -> dict[str, Any]:
-        data = await upload.read()
-        ext = self._validate_file(upload, data)
-        filename = Path(upload.filename or f"document.{ext}").name
-        source_type = self._source_type(ext)
-        job_id = self._create_job(session, source_type, filename)
-        temp_path: Path | None = None
+    @staticmethod
+    def _document_number_key(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
 
+    @staticmethod
+    def _document_date_key(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        candidates = [text, text.split()[0]]
+        for candidate in dict.fromkeys(candidates):
+            for fmt in (
+                "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y",
+                "%d-%b-%Y", "%d/%b/%Y", "%d %b %Y", "%d %B %Y",
+            ):
+                try:
+                    return datetime.strptime(candidate, fmt).date().isoformat()
+                except ValueError:
+                    continue
+        return re.sub(r"\s+", "", text.casefold())
+
+    @staticmethod
+    def _merge_extracted(primary: ExtractedDocument, secondary: ExtractedDocument) -> ExtractedDocument:
+        """Merge a secondary parser without duplicating rows already found by the primary parser."""
+        primary_items = list(primary.items or [])
+        secondary_items = list(secondary.items or [])
+
+        def key(item: ExtractedProduct) -> tuple[str, int]:
+            name = normalize_brand(str(item.itemName or item.brand or ""))
+            ml = _int_value(item.ml)
+            return name, ml
+
+        primary_counts: dict[tuple[str, int], int] = {}
+        for item in primary_items:
+            item_key = key(item)
+            primary_counts[item_key] = primary_counts.get(item_key, 0) + 1
+
+        secondary_seen: dict[tuple[str, int], int] = {}
+        merged_items = list(primary_items)
+        for item in secondary_items:
+            item_key = key(item)
+            occurrence = secondary_seen.get(item_key, 0)
+            secondary_seen[item_key] = occurrence + 1
+            if occurrence < primary_counts.get(item_key, 0):
+                continue
+            merged_items.append(item)
+
+        return ExtractedDocument(
+            documentType=primary.documentType or secondary.documentType,
+            supplierName=primary.supplierName or secondary.supplierName,
+            invoiceNumber=primary.invoiceNumber or secondary.invoiceNumber,
+            invoiceDate=primary.invoiceDate or secondary.invoiceDate,
+            items=merged_items,
+            extractionEngine="pymupdf+llamaparse",
+            extractionProfile=getattr(primary, "extractionProfile", None),
+            sourceState=getattr(primary, "sourceState", None),
+            extractionDiagnostics={
+                "primaryItems": len(primary_items),
+                "secondaryItems": len(secondary_items),
+                "mergedItems": len(merged_items),
+            },
+        )
+
+    async def _extract_upload_part(
+        self,
+        data: bytes,
+        ext: str,
+        filename: str,
+        source_index: int,
+    ) -> tuple[ExtractedDocument, dict[str, Any]]:
+        temp_path: Path | None = None
         try:
-            self._update_job(job_id, status="UPLOADING")
             with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as handle:
                 handle.write(data)
                 temp_path = Path(handle.name)
 
-            self._update_job(job_id, status="EXTRACTING")
-            extraction_meta: dict[str, Any] = {}
             if ext == "pdf":
-                extracted, extraction_meta = extract_pdf_locally(temp_path)
+                extracted, meta = extract_pdf_locally(temp_path)
                 if extracted is None:
-                    llama = LlamaCloudClient()
-                    extracted = await llama.extract_scanned_pdf_pages(temp_path, filename)
-                    extraction_meta = {
-                        **extraction_meta,
+                    extracted = await LlamaCloudClient().extract_scanned_pdf_pages(temp_path, filename)
+                    meta = {
+                        **meta,
                         "engine": "llamaparse-page-by-page",
                         "fallbackFrom": "pymupdf",
+                        "fallbackReason": meta.get("reason") or "no_usable_local_extraction",
                         "pageItemCounts": getattr(extracted, "pageItemCounts", None),
                     }
+                elif meta.get("needsFallback"):
+                    secondary = await LlamaCloudClient().extract_scanned_pdf_pages(temp_path, filename)
+                    primary_count = len(extracted.items or [])
+                    secondary_count = len(secondary.items or [])
+                    extracted = self._merge_extracted(extracted, secondary)
+                    meta = {
+                        **meta,
+                        "engine": "pymupdf+llamaparse",
+                        "fallbackFrom": "pymupdf-state-adapter",
+                        "fallbackReason": "deterministic_extraction_incomplete",
+                        "primaryProductCount": primary_count,
+                        "secondaryProductCount": secondary_count,
+                        "mergedProductCount": len(extracted.items or []),
+                    }
                 else:
-                    extraction_meta = {
-                        **extraction_meta,
-                        "engine": extraction_meta.get("engine") or "pymupdf-state-adapter",
+                    meta = {
+                        **meta,
+                        "engine": meta.get("engine") or "pymupdf-state-adapter",
                     }
             else:
                 extracted = await LlamaCloudClient().extract_products(temp_path, filename)
-                extraction_meta = {"engine": "llamaparse"}
+                meta = {"engine": "llamaparse"}
+
+            tagged: list[ExtractedProduct] = []
+            for item in extracted.items or []:
+                payload = item.model_dump()
+                payload["sourceFilename"] = filename
+                payload["sourceFileIndex"] = source_index
+                tagged.append(ExtractedProduct.model_validate(payload))
+            payload = extracted.model_dump()
+            payload["items"] = [item.model_dump() for item in tagged]
+            extracted = ExtractedDocument.model_validate(payload)
+            return extracted, {**meta, "filename": filename, "sourceFileIndex": source_index}
+        finally:
+            if temp_path:
+                temp_path.unlink(missing_ok=True)
+
+    async def process_uploads(
+        self,
+        session: dict[str, Any],
+        uploads: list[UploadFile],
+    ) -> dict[str, Any]:
+        if not uploads:
+            raise HTTPException(status_code=400, detail="Select at least one PDF or image")
+        if len(uploads) > settings.DOCUMENT_IMPORT_MAX_FILES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A purchase can contain at most {settings.DOCUMENT_IMPORT_MAX_FILES} source files",
+            )
+
+        parts: list[tuple[bytes, str, str]] = []
+        source_types: set[str] = set()
+        for upload in uploads:
+            data = await upload.read()
+            ext = self._validate_file(upload, data)
+            filename = Path(upload.filename or f"document.{ext}").name
+            source_type = self._source_type(ext)
+            source_types.add(source_type)
+            parts.append((data, ext, filename))
+
+        if len(source_types) != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Upload PDFs together or images together for one purchase; do not mix file types in the same batch.",
+            )
+
+        source_type = next(iter(source_types))
+        filenames = [filename for _data, _ext, filename in parts]
+        job_id = self._create_job(session, source_type, " | ".join(filenames)[:1000])
+
+        try:
+            self._update_job(job_id, status="UPLOADING")
+            extracted_parts: list[ExtractedDocument] = []
+            metas: list[dict[str, Any]] = []
+            self._update_job(job_id, status="EXTRACTING")
+
+            for index, (data, ext, filename) in enumerate(parts, start=1):
+                extracted, meta = await self._extract_upload_part(data, ext, filename, index)
+                extracted_parts.append(extracted)
+                metas.append(meta)
+
+            doc_numbers = [
+                str(doc.invoiceNumber or "").strip()
+                for doc in extracted_parts
+                if str(doc.invoiceNumber or "").strip()
+            ]
+            doc_dates = [
+                str(doc.invoiceDate or "").strip()
+                for doc in extracted_parts
+                if str(doc.invoiceDate or "").strip()
+            ]
+            number_keys = {self._document_number_key(value) for value in doc_numbers if self._document_number_key(value)}
+            date_keys = {self._document_date_key(value) for value in doc_dates if self._document_date_key(value)}
+            if len(number_keys) > 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Selected files appear to belong to different document numbers. Upload only files/pages from the same purchase.",
+                )
+            if len(date_keys) > 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Selected files appear to have different document dates. Upload only files/pages from the same purchase.",
+                )
+
+            merged_items: list[ExtractedProduct] = []
+            for doc in extracted_parts:
+                merged_items.extend(doc.items or [])
+
+            if not merged_items:
+                raise HTTPException(status_code=422, detail="No valid product rows were extracted")
+
+            merged = ExtractedDocument(
+                documentType=next((doc.documentType for doc in extracted_parts if doc.documentType), "invoice"),
+                supplierName=next((doc.supplierName for doc in extracted_parts if doc.supplierName), None),
+                invoiceNumber=doc_numbers[0] if doc_numbers else None,
+                invoiceDate=doc_dates[0] if doc_dates else None,
+                items=merged_items,
+                extractionEngine="batch",
+                extractionDiagnostics={
+                    "sourceFiles": filenames,
+                    "fileCount": len(filenames),
+                    "fileExtractions": metas,
+                    "mergedProductCount": len(merged_items),
+                },
+            )
 
             self._update_job(
                 job_id,
                 status="NORMALIZING",
-                document_type=extracted.documentType,
-                supplier_name=extracted.supplierName,
-                invoice_number=extracted.invoiceNumber,
-                invoice_date=extracted.invoiceDate,
+                document_type=merged.documentType,
+                supplier_name=merged.supplierName,
+                invoice_number=merged.invoiceNumber,
+                invoice_date=merged.invoiceDate,
             )
-            normalized = normalize_extracted_document(extracted, source_type)
+            normalized = normalize_extracted_document(merged, source_type)
             if not normalized:
-                self._update_job(job_id, status="FAILED", error="No valid product rows were extracted")
                 raise HTTPException(status_code=422, detail="No valid product rows were extracted")
 
             self._persist_items(job_id, normalized)
@@ -593,13 +771,19 @@ class DocumentImportService:
                     "valid": len(review_items) - attention,
                     "needsAttention": attention,
                     "reviewRequired": True,
+                    "sourceFiles": len(filenames),
                 },
-                "extraction": extraction_meta,
-                "extractedDocument": extracted.model_dump(),
+                "extraction": {
+                    "engine": "batch" if len(parts) > 1 else metas[0].get("engine"),
+                    "files": metas,
+                },
+                "sourceFiles": filenames,
+                "extractedDocument": merged.model_dump(),
                 "normalizedItems": [item.model_dump() for item in normalized],
                 "reviewItems": review_items,
             }
-        except HTTPException:
+        except HTTPException as exc:
+            self._update_job(job_id, status="FAILED", error=str(exc.detail))
             raise
         except MadhushalaApiError as exc:
             self._update_job(job_id, status="FAILED", error=str(exc))
@@ -608,9 +792,9 @@ class DocumentImportService:
         except (LlamaCloudError, ValueError) as exc:
             self._update_job(job_id, status="FAILED", error=str(exc))
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        finally:
-            if temp_path:
-                temp_path.unlink(missing_ok=True)
+
+    async def process_upload(self, session: dict[str, Any], upload: UploadFile) -> dict[str, Any]:
+        return await self.process_uploads(session, [upload])
 
     def _qr_document_from_html(self, payload: dict[str, Any]) -> ExtractedDocument:
         meta = _qr_meta_from_payload(payload)
