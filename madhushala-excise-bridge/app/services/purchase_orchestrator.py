@@ -159,25 +159,29 @@ class PurchaseOrchestrator:
     }
 
     def build_calculation_request(self, payload: dict[str, Any], header: dict[str, Any]) -> dict[str, Any]:
-        """Build Madhushala's Calculate shape with only itemCode + bottle quantity populated.
+        """Build Madhushala's Calculate shape with itemCode + reviewed box/loose populated.
 
         Madhushala Calculate is authoritative for commercial/tax values. ASP.NET's
         request DTO uses non-nullable numeric/boolean fields, so unused numeric
-        properties must be sent as zero (not JSON null) and the boolean as false.
-        ``loose`` carries the actual bottle quantity being purchased; all other
-        item calculation inputs stay at their DTO defaults.
+        properties are sent as zero. Source quantity identity remains separate:
+        box carries reviewed cases and loose carries reviewed single bottles.
         """
         calc_items: list[dict[str, Any]] = []
         for item in payload.get("items") or []:
-            bottle_quantity = item.get("qnty")
-            if bottle_quantity in (None, ""):
-                bottle_quantity = item.get("loose")
+            box = _int_value(item.get("box"))
+            loose = _int_value(item.get("loose"))
+            if box <= 0 and loose <= 0:
+                # Legacy callers may still supply only qnty.
+                loose = _int_value(item.get("qnty"))
             calc_item = {
                 "itemCode": str(item.get("itemCode") or "").strip(),
-                "loose": _int_value(bottle_quantity),
             }
             for field in self.CALCULATION_ZERO_ITEM_FIELDS:
                 calc_item[field] = 0
+            # Quantity identity is source/review-owned, not a zero-value
+            # commercial placeholder. Set it after the defaults above.
+            calc_item["box"] = box
+            calc_item["loose"] = loose
             calc_items.append(calc_item)
 
         return {
