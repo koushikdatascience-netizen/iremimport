@@ -54,7 +54,7 @@ def test_calculate_request_uses_item_master_and_extracted_bottles_as_loose():
     assert item["loose"] == 6
     assert item["packing"] == 48
     assert item["boxRate"] == 500.0
-    assert item["looseRate"] == 500.0
+    assert item["looseRate"] == 10.42
     assert item["mrp"] == 280.0
     assert item["discount"] == 2.5
     assert item["cgst"] == 1.1
@@ -271,3 +271,61 @@ def test_real_item_master_sample_builds_real_calculate_shape():
     assert item["t3Amt"] == 0.0
     assert item["t4Amt"] == 0.0
     assert item["t3Rate"] == 2.0
+
+
+def test_real_item_master_sample_uses_sales_rate_and_tax_master_fields():
+    master = {
+        "itemCode": "100010",
+        "packing": 12,
+        "purchaseRate": 0,
+        "purchaseRateCase": 200,
+        "salesRate": 1880,
+        "vat": 100,
+        "tcs": 120,
+        "tp": 0,
+        "others": 0,
+        "etd": 0,
+        "t1Rate": 0,
+        "t2Rate": 0,
+        "t3Rate": 2,
+        "t4Rate": 0,
+    }
+
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "WBTEST",
+            "companyCode": "3",
+            "schemeCode": "",
+            "salesTaxRate": 0,
+            "salesTaxIncludingFree": False,
+        },
+        [{"itemCode": "100010", "qnty": 18, "freeQnty": 0}],
+        {"100010": master},
+    )
+
+    item = request["items"][0]
+    assert item == {
+        "itemCode": "100010",
+        "box": 0,
+        "loose": 18,
+        "free": 0,
+        "boxRate": 200.0,
+        "looseRate": 200.0,
+        "mrp": 1880.0,
+        "discount": 0.0,
+        "cgst": 0.0,
+        "sgst": 0.0,
+        "cess": 0.0,
+        "addCess": 0.0,
+        "igst": 0.0,
+        "t1Amt": 100.0,
+        "t2Amt": 120.0,
+        "t3Amt": 0.0,
+        "t4Amt": 0.0,
+        "etd": 0.0,
+        "packing": 12,
+        "t1Rate": 0.0,
+        "t2Rate": 0.0,
+        "t3Rate": 2.0,
+        "t4Rate": 0.0,
+    }
