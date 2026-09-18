@@ -133,7 +133,8 @@ def test_document_normalization_ignores_bad_rows():
     rows = normalize_extracted_document(document, "DOCUMENT_PDF")
     assert len(rows) == 1
     assert rows[0].ml == 180
-    assert rows[0].packing == 48
+    assert rows[0].packing is None
+    assert rows[0].rawData["packing"] == "48"
     assert rows[0].confidence == 0.91
 
 
