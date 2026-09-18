@@ -34,6 +34,18 @@ class DocumentMappingSaveRequest(BaseModel):
     mappings: list[dict[str, Any]]
 
 
+class DocumentReviewItem(BaseModel):
+    id: str
+    name: str
+    brand: str
+    ml: int
+    quantity: int
+
+
+class DocumentReviewConfirmRequest(BaseModel):
+    items: list[DocumentReviewItem]
+
+
 def create_router(service: DocumentImportService) -> APIRouter:
     router = APIRouter(prefix="/api/v1/document-import", tags=["document-import"])
     purchase_adapter = DocumentPurchaseAdapter(service)
@@ -68,7 +80,27 @@ def create_router(service: DocumentImportService) -> APIRouter:
     @router.get("/jobs/{job_id}/items")
     async def get_job_items(job_id: str, request: Request):
         session = session_service.from_request(request)
-        return {"items": service.get_items(session, job_id)}
+        return {
+            "items": service.get_items(session, job_id),
+            "reviewItems": service.get_review_items(session, job_id),
+        }
+
+    @router.post("/jobs/{job_id}/review/confirm")
+    async def confirm_document_review(
+        job_id: str,
+        payload: DocumentReviewConfirmRequest,
+        request: Request,
+    ):
+        session = session_service.from_request(request)
+        try:
+            return await service.confirm_review(
+                session,
+                job_id,
+                [item.model_dump() for item in payload.items],
+            )
+        except MadhushalaApiError as exc:
+            status_code = exc.status_code if exc.status_code and exc.status_code >= 400 else 502
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
     @router.post("/jobs/{job_id}/mapping/save")
     async def save_document_mapping(job_id: str, payload: DocumentMappingSaveRequest, request: Request):
