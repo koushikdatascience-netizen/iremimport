@@ -849,6 +849,30 @@ function renderDocumentPreview(file) {
     setText(document.getElementById("review-filename"), file.name);
     setText(document.getElementById("review-filetype"), file.type || file.name.split(".").pop().toUpperCase());
     setText(document.getElementById("review-filesize"), formatBytes(file.size));
+    setText(document.getElementById("document-fullscreen-filename"), file.name);
+}
+
+function openDocumentFullscreen() {
+    if (!currentPreviewUrl || !currentDocumentFile) return;
+    const modal = document.getElementById("document-fullscreen");
+    const body = document.getElementById("document-fullscreen-body");
+    if (!modal || !body) return;
+
+    const isPdf = currentDocumentFile.type === "application/pdf" || currentDocumentFile.name.toLowerCase().endsWith(".pdf");
+    body.innerHTML = isPdf
+        ? `<iframe title="Full screen uploaded PDF preview" src="${currentPreviewUrl}"></iframe>`
+        : `<img alt="Full screen uploaded document preview" src="${currentPreviewUrl}">`;
+    setText(document.getElementById("document-fullscreen-filename"), currentDocumentFile.name);
+    modal.hidden = false;
+    document.body.classList.add("modal-open");
+}
+
+function closeDocumentFullscreen() {
+    const modal = document.getElementById("document-fullscreen");
+    const body = document.getElementById("document-fullscreen-body");
+    if (modal) modal.hidden = true;
+    if (body) body.innerHTML = "";
+    document.body.classList.remove("modal-open");
 }
 
 function renderDocumentReview(payload) {
@@ -874,6 +898,7 @@ function renderDocumentReview(payload) {
 }
 
 function resetDocumentImport() {
+    closeDocumentFullscreen();
     revokeDocumentPreview();
     currentDocumentFile = null;
     currentDocumentResult = null;
@@ -983,6 +1008,13 @@ function bindDropzone(id, handler) {
 bindDropzone("document-dropzone", uploadDocument);
 bindDropzone("qr-dropzone", uploadQr);
 document.getElementById("document-refresh")?.addEventListener("click", resetDocumentImport);
+document.getElementById("open-document-fullscreen")?.addEventListener("click", openDocumentFullscreen);
+document.getElementById("close-document-fullscreen")?.addEventListener("click", closeDocumentFullscreen);
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !document.getElementById("document-fullscreen")?.hidden) {
+        closeDocumentFullscreen();
+    }
+});
 document.getElementById("replace-document")?.addEventListener("click", resetDocumentImport);
 document.getElementById("document-upload-another")?.addEventListener("click", resetDocumentImport);
 document.getElementById("success-upload-another")?.addEventListener("click", resetDocumentImport);

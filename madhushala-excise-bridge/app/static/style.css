@@ -815,6 +815,62 @@ dd {
     object-fit: contain;
 }
 
+.document-preview-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.document-fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    background: #111827;
+}
+
+.document-fullscreen[hidden] {
+    display: none !important;
+}
+
+.document-fullscreen-toolbar {
+    flex: 0 0 auto;
+    min-height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    background: #ffffff;
+    border-bottom: 1px solid var(--line);
+}
+
+.document-fullscreen-toolbar strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.document-fullscreen-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    background: #2b2f36;
+}
+
+.document-fullscreen-body iframe,
+.document-fullscreen-body img {
+    width: 100%;
+    height: 100%;
+    border: 0;
+}
+
+.document-fullscreen-body img {
+    object-fit: contain;
+    background: #111827;
+}
+
 .document-file-meta,
 .document-metrics {
     display: grid;
