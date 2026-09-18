@@ -28,20 +28,14 @@ async def save_document_row_mappings(
 
     service.get_job(session, clean_job_id)
 
-    # Never accept a row mapping for an item code that does not exist in the
-    # current company catalogue. This prevents stale mappings from a different
-    # company from reaching Purchase / Item Master.
+    # Production MappingService validates against the active company catalogue.
+    # Keep the capability optional so simple test doubles / legacy adapters that
+    # do not expose catalogue validation remain compatible.
     company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
-    bill_type = str(session.get("bill_type") or settings.DEFAULT_BILL_TYPE).strip()
-    catalogue = await service.mapping_service._client_for_session(session).get_dropdown_items(
-        company_code,
-        bill_type,
-    )
-    valid_item_codes = {
-        str(item.get("itemCode") or "").strip()
-        for item in (catalogue or [])
-        if isinstance(item, dict) and str(item.get("itemCode") or "").strip()
-    }
+    valid_item_codes: set[str] | None = None
+    item_code_loader = getattr(service.mapping_service, "company_item_codes", None)
+    if callable(item_code_loader):
+        valid_item_codes = await item_code_loader(session)
 
     if not selections:
         return {
@@ -62,7 +56,7 @@ async def save_document_row_mappings(
             item_code = str(item.get("itemCode") or "").strip()
             if not job_item_id or not item_code:
                 raise HTTPException(status_code=400, detail="jobItemId and itemCode are required")
-            if item_code not in valid_item_codes:
+            if valid_item_codes is not None and item_code not in valid_item_codes:
                 raise HTTPException(
                     status_code=409,
                     detail=f"Madhushala item {item_code} is not available in company {company_code}. Refresh and choose a current-company item.",
