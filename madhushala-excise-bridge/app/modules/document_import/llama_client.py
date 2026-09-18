@@ -67,12 +67,13 @@ PRODUCT_SCHEMA: dict[str, Any] = {
 }
 
 EXTRACTION_PROMPT = (
-    "Extract only liquor/product item rows from this document. Preserve original product names. "
-    "Capture all purchase-line values visible on the row: batchNo, box/case quantity, loose bottles, "
-    "free quantity, rate, boxRate, looseRate, mrp, itemAmount/amount, discount, CGST, SGST, cess, "
-    "additional cess, IGST, T1/T2/T3/T4 amounts or rates, and ETD. Infer ML and packing only when "
-    "clearly visible. Use null when a value is missing or uncertain. Do not hallucinate. Ignore page "
-    "headers and summary rows, but keep row-level tax/fee columns because they are needed for purchase save."
+    "Extract the document header and liquor/product rows accurately. At document level prioritize "
+    "supplierName, invoiceNumber/document or permit number, and invoiceDate/document date. For each "
+    "product row preserve the original itemName and capture the physical bottle/unit quantity in "
+    "quantity. Capture ML/size when clearly visible or present in the product name. Do not convert "
+    "physical quantity into cases and do not infer commercial values. Other clearly visible row fields "
+    "may be extracted for audit/review, but they are not purchase inputs. Use null when a value is "
+    "missing or uncertain. Do not hallucinate. Ignore totals, summary rows and page headers as products."
 )
 
 
