@@ -138,39 +138,64 @@ class DocumentPurchaseAdapter:
             packing = master_packing or raw_packing
 
             row_keys = set(row.keys()) if hasattr(row, "keys") else set()
+            canonical_v2 = raw_int("canonicalQuantityVersion", fallback=0) >= 2
             persisted_box = _int_value(row["box"]) if "box" in row_keys else 0
             persisted_loose = _int_value(row["loose"]) if "loose" in row_keys else 0
             box = persisted_box or raw_int("canonicalBox", "box", "boxes", "case", "cases", fallback=0)
             loose = persisted_loose or raw_int("canonicalLoose", "loose", "looseQty", fallback=0)
 
-            if is_canonical_import:
-                # Canonical review owns the source quantities. Never reinterpret
-                # them after mapping. Item Master contributes only packing and
-                # commercial/tax fields.
-                if box <= 0 and loose <= 0:
-                    # Legacy jobs created before canonical box/loose may only
-                    # contain a single physical quantity. Keep them usable by
-                    # treating that old quantity as loose, never as cases.
-                    persisted_legacy = _int_value(row["quantity"])
-                    legacy = persisted_legacy or resolve_document_quantity(raw)
-                    if legacy > 0:
-                        loose = legacy
-                        if persisted_legacy <= 0:
-                            with conn() as db:
-                                db.execute(
-                                    "UPDATE import_items SET quantity=? WHERE id=?",
-                                    (float(legacy), row["id"]),
-                                )
-
+            if is_canonical_import and canonical_v2:
+                # Reviewed v2 quantities are semantic and immutable here:
+                # box=cases/cartons, loose=single bottles/units.
                 qnty = ((box * packing) + loose) if packing else (box + loose)
+            elif is_document_upload:
+                # Legacy PDF/image jobs had one physical quantity and always
+                # treated it as loose. Preserve that behavior for old jobs.
+                persisted_legacy = _int_value(row["quantity"])
+                legacy = persisted_legacy or resolve_document_quantity(raw)
+                if legacy > 0 and persisted_legacy <= 0:
+                    with conn() as db:
+                        db.execute(
+                            "UPDATE import_items SET quantity=? WHERE id=?",
+                            (float(legacy), row["id"]),
+                        )
+                box = 0
+                loose = legacy
+                qnty = legacy
             else:
+                # Legacy QR behavior: bottle totals beat ambiguous raw box
+                # shapes; a genuine case/loose shape is preserved only when it
+                # exactly represents qnty.
                 document_qnty = raw_int(
                     "qnty",
                     "qty",
                     "totalQty",
                     "totalQuantity",
+                    "No of Bottles Dispatched",
+                    "Bottles Dispatched",
+                    "No of Bottles Requested",
+                    "Bottles Requested",
                     fallback=row["quantity"],
                 )
+                has_explicit_bottle_total = any(
+                    _key(alias) in normalized_raw
+                    for alias in (
+                        "No of Bottles Dispatched",
+                        "Bottles Dispatched",
+                        "No of Bottles Requested",
+                        "Bottles Requested",
+                    )
+                )
+                represented_qnty = ((box * packing) + loose) if packing else (box + loose)
+                has_valid_case_loose_shape = bool(
+                    document_qnty and (box or loose) and represented_qnty == document_qnty
+                )
+                if document_qnty and (
+                    has_explicit_bottle_total
+                    or (is_qr and not has_valid_case_loose_shape)
+                ):
+                    box = 0
+                    loose = document_qnty
                 qnty = document_qnty or ((box * packing + loose) if packing else (box + loose))
 
             # Mirror the exact Madhushala Calculate contract used below:
@@ -217,6 +242,7 @@ class DocumentPurchaseAdapter:
                 "box": box,
                 "loose": loose,
                 "qnty": qnty,
+                "_canonicalQuantityVersion": 2 if canonical_v2 else 1,
                 "freeQnty": raw_int("freeQnty", "freeQty", "free", fallback=0),
                 "rate": rate,
                 "boxRate": box_rate,
