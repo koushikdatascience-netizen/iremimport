@@ -78,6 +78,7 @@ class DocumentPurchaseAdapter:
         source_type = str(job.get("source_type") or "").upper()
         is_qr = source_type == "QR_HTML"
         is_document_upload = source_type in {"DOCUMENT_PDF", "DOCUMENT_IMAGE"}
+        is_canonical_import = source_type in {"DOCUMENT_PDF", "DOCUMENT_IMAGE", "QR_HTML"}
         with conn() as db:
             rows = db.execute(
                 "SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id",
@@ -136,65 +137,33 @@ class DocumentPurchaseAdapter:
             raw_packing = raw_int("packing", "bottlePerCase", "bottlesPerCase", "caseQty", fallback=row["packing"])
             packing = master_packing or raw_packing
 
-            box = raw_int("box", "boxes", "case", "cases", fallback=0)
-            loose = raw_int("loose", "looseQty", fallback=0)
+            row_keys = set(row.keys()) if hasattr(row, "keys") else set()
+            persisted_box = _int_value(row["box"]) if "box" in row_keys else 0
+            persisted_loose = _int_value(row["loose"]) if "loose" in row_keys else 0
+            box = persisted_box or raw_int("canonicalBox", "box", "boxes", "case", "cases", fallback=0)
+            loose = persisted_loose or raw_int("canonicalLoose", "loose", "looseQty", fallback=0)
 
-            if is_document_upload:
-                # PDF/image is normalized to the same canonical purchase rule as
-                # QR bottle totals: document identity + one physical unit count.
-                # Mapping must never change that count.
-                persisted_qnty = _int_value(row["quantity"])
-                recovered_qnty = resolve_document_quantity(raw)
-                document_qnty = persisted_qnty or recovered_qnty
+            if is_canonical_import:
+                # Canonical review owns the source quantities. Never reinterpret
+                # them after mapping. Item Master contributes only packing and
+                # commercial/tax fields.
+                if box <= 0 and loose <= 0:
+                    # Legacy jobs created before canonical box/loose may only
+                    # contain a single physical quantity. Keep them usable by
+                    # treating that old quantity as loose, never as cases.
+                    legacy = _int_value(row["quantity"]) or resolve_document_quantity(raw)
+                    if legacy > 0:
+                        loose = legacy
 
-                # Self-heal older/current jobs that were extracted correctly but
-                # persisted before quantity aliases were normalized.
-                if recovered_qnty and not persisted_qnty:
-                    with conn() as db:
-                        db.execute(
-                            "UPDATE import_items SET quantity=? WHERE id=?",
-                            (float(recovered_qnty), row["id"]),
-                        )
-
-                box = 0
-                loose = document_qnty
-                qnty = document_qnty
+                qnty = ((box * packing) + loose) if packing else (box + loose)
             else:
                 document_qnty = raw_int(
                     "qnty",
                     "qty",
                     "totalQty",
                     "totalQuantity",
-                    "No of Bottles Dispatched",
-                    "Bottles Dispatched",
-                    "No of Bottles Requested",
-                    "Bottles Requested",
                     fallback=row["quantity"],
                 )
-
-                has_explicit_bottle_total = any(
-                    _key(alias) in normalized_raw
-                    for alias in (
-                        "No of Bottles Dispatched",
-                        "Bottles Dispatched",
-                        "No of Bottles Requested",
-                        "Bottles Requested",
-                    )
-                )
-                represented_qnty = ((box * packing) + loose) if packing else (box + loose)
-                has_valid_case_loose_shape = bool(
-                    document_qnty
-                    and (box or loose)
-                    and represented_qnty == document_qnty
-                )
-
-                if document_qnty and (
-                    has_explicit_bottle_total
-                    or (is_qr and not has_valid_case_loose_shape)
-                ):
-                    box = 0
-                    loose = document_qnty
-
                 qnty = document_qnty or ((box * packing + loose) if packing else (box + loose))
 
             # Mirror the exact Madhushala Calculate contract used below:
@@ -229,9 +198,9 @@ class DocumentPurchaseAdapter:
             # For uploaded documents, preserve the brand/item identity exactly
             # as extracted from the source document. Mapping contributes the
             # Madhushala itemCode and all commercial/master values.
-            item_name = extracted_name if is_document_upload and extracted_name else master_name
+            item_name = extracted_name if is_canonical_import and extracted_name else master_name
 
-            if is_document_upload and qnty <= 0:
+            if is_canonical_import and box <= 0 and loose <= 0:
                 missing_document_quantities.append(item_name)
 
             item = {
@@ -278,9 +247,9 @@ class DocumentPurchaseAdapter:
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "Document extraction did not provide a positive bottle quantity for: "
+                    "Document review does not contain a positive Box/Cases or Loose/Bottles quantity for: "
                     + ", ".join(missing_document_quantities[:5])
-                    + ". Purchase was not saved. Check the extracted quantities and re-upload the document."
+                    + ". Purchase was not saved. Correct the review row before continuing."
                 ),
             )
 
