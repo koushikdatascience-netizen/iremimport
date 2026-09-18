@@ -309,7 +309,7 @@ class DocumentImportService:
     def get_items(self, session: dict[str, Any], job_id: str) -> list[dict[str, Any]]:
         self.get_job(session, job_id)
         with conn() as db:
-            rows = db.execute("SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id", (job_id,)).fetchall()
+            rows = db.execute("SELECT * FROM import_items WHERE job_id=? ORDER BY rowid", (job_id,)).fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -364,7 +364,7 @@ class DocumentImportService:
         self.get_job(session, job_id)
         with conn() as db:
             rows = db.execute(
-                "SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id",
+                "SELECT * FROM import_items WHERE job_id=? ORDER BY rowid",
                 (job_id,),
             ).fetchall()
         return [self._review_row(row) for row in rows]
@@ -381,7 +381,7 @@ class DocumentImportService:
 
         with conn() as db:
             rows = db.execute(
-                "SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id",
+                "SELECT * FROM import_items WHERE job_id=? ORDER BY rowid",
                 (job_id,),
             ).fetchall()
             existing = {str(row["id"]): row for row in rows}
@@ -1075,7 +1075,7 @@ class DocumentImportService:
         bill_type = str(session.get("bill_type") or "AI").strip() or "AI"
         catalogue = await self._client_for_session(session).get_dropdown_items(company_code, bill_type)
         with conn() as db:
-            rows = db.execute("SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id", (job_id,)).fetchall()
+            rows = db.execute("SELECT * FROM import_items WHERE job_id=? ORDER BY rowid", (job_id,)).fetchall()
             items = []
             missing = []
             for row in rows:
