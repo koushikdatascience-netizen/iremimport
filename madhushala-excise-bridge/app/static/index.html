@@ -825,6 +825,62 @@ dd {
     object-fit: contain;
 }
 
+.document-preview-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.document-fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    background: #111827;
+}
+
+.document-fullscreen[hidden] {
+    display: none !important;
+}
+
+.document-fullscreen-toolbar {
+    flex: 0 0 auto;
+    min-height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    background: #ffffff;
+    border-bottom: 1px solid var(--line);
+}
+
+.document-fullscreen-toolbar strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.document-fullscreen-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    background: #2b2f36;
+}
+
+.document-fullscreen-body iframe,
+.document-fullscreen-body img {
+    width: 100%;
+    height: 100%;
+    border: 0;
+}
+
+.document-fullscreen-body img {
+    object-fit: contain;
+    background: #111827;
+}
+
 .document-file-meta,
 .document-metrics {
     display: grid;
@@ -2040,11 +2096,22 @@ body.mapping-mode {
             </ol>
         </section>
 
+        <section id="document-fullscreen" class="document-fullscreen" hidden aria-label="Full screen document preview">
+            <div class="document-fullscreen-toolbar">
+                <strong id="document-fullscreen-filename">Document Preview</strong>
+                <button id="close-document-fullscreen" type="button">Close</button>
+            </div>
+            <div id="document-fullscreen-body" class="document-fullscreen-body"></div>
+        </section>
+
         <section id="document-review-panel" class="document-review" hidden>
             <div class="document-preview-card">
                 <header>
                     <h2>Uploaded Document</h2>
-                    <button id="replace-document" type="button" class="secondary">Replace Document</button>
+                    <div class="document-preview-actions">
+                        <button id="open-document-fullscreen" type="button" class="secondary">Full Screen</button>
+                        <button id="replace-document" type="button" class="secondary">Replace Document</button>
+                    </div>
                 </header>
                 <div id="document-preview" class="document-preview"></div>
                 <dl class="document-file-meta">
@@ -3006,6 +3073,30 @@ function renderDocumentPreview(file) {
     setText(document.getElementById("review-filename"), file.name);
     setText(document.getElementById("review-filetype"), file.type || file.name.split(".").pop().toUpperCase());
     setText(document.getElementById("review-filesize"), formatBytes(file.size));
+    setText(document.getElementById("document-fullscreen-filename"), file.name);
+}
+
+function openDocumentFullscreen() {
+    if (!currentPreviewUrl || !currentDocumentFile) return;
+    const modal = document.getElementById("document-fullscreen");
+    const body = document.getElementById("document-fullscreen-body");
+    if (!modal || !body) return;
+
+    const isPdf = currentDocumentFile.type === "application/pdf" || currentDocumentFile.name.toLowerCase().endsWith(".pdf");
+    body.innerHTML = isPdf
+        ? `<iframe title="Full screen uploaded PDF preview" src="${currentPreviewUrl}"></iframe>`
+        : `<img alt="Full screen uploaded document preview" src="${currentPreviewUrl}">`;
+    setText(document.getElementById("document-fullscreen-filename"), currentDocumentFile.name);
+    modal.hidden = false;
+    document.body.classList.add("modal-open");
+}
+
+function closeDocumentFullscreen() {
+    const modal = document.getElementById("document-fullscreen");
+    const body = document.getElementById("document-fullscreen-body");
+    if (modal) modal.hidden = true;
+    if (body) body.innerHTML = "";
+    document.body.classList.remove("modal-open");
 }
 
 function renderDocumentReview(payload) {
@@ -3031,6 +3122,7 @@ function renderDocumentReview(payload) {
 }
 
 function resetDocumentImport() {
+    closeDocumentFullscreen();
     revokeDocumentPreview();
     currentDocumentFile = null;
     currentDocumentResult = null;
@@ -3140,6 +3232,13 @@ function bindDropzone(id, handler) {
 bindDropzone("document-dropzone", uploadDocument);
 bindDropzone("qr-dropzone", uploadQr);
 document.getElementById("document-refresh")?.addEventListener("click", resetDocumentImport);
+document.getElementById("open-document-fullscreen")?.addEventListener("click", openDocumentFullscreen);
+document.getElementById("close-document-fullscreen")?.addEventListener("click", closeDocumentFullscreen);
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !document.getElementById("document-fullscreen")?.hidden) {
+        closeDocumentFullscreen();
+    }
+});
 document.getElementById("replace-document")?.addEventListener("click", resetDocumentImport);
 document.getElementById("document-upload-another")?.addEventListener("click", resetDocumentImport);
 document.getElementById("success-upload-another")?.addEventListener("click", resetDocumentImport);
