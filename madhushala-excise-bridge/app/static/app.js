@@ -347,7 +347,18 @@ async function api(path, options = {}) {
         }
     }
     if (!response.ok) {
-        throw new Error(data?.detail || data?.error || `HTTP ${response.status}`);
+        const detail = data?.detail;
+        const message = (
+            detail && typeof detail === "object"
+                ? (detail.message || detail.error || JSON.stringify(detail))
+                : (detail || data?.error || `HTTP ${response.status}`)
+        );
+        const error = new Error(message);
+        error.status = response.status;
+        if (detail && typeof detail === "object" && detail.code) {
+            error.code = detail.code;
+        }
+        throw error;
     }
     return data;
 }
