@@ -42,6 +42,11 @@ jobs:
       - name: Compile application
         run: python -m compileall -q app
 
+      - name: Validate production Compose
+        env:
+          POSTGRES_PASSWORD: ci-placeholder-password
+        run: docker compose -f docker-compose.prod.yml -f docker-compose.observability.yml config >/dev/null
+
       - name: Run tests
         run: pytest -q
 
