@@ -531,8 +531,13 @@ function closeGuardrailModal() {
     pendingGuardrailAction = null;
 }
 
+function mappingRowKey(item) {
+    if (workspace.documentMapping && item?.jobItemId) return String(item.jobItemId);
+    return String(item?.exciseItemCode ?? "");
+}
+
 function mappedItemForRow(item) {
-    const code = selectedMappings.get(String(item.exciseItemCode)) || item.selectedItemCode || "";
+    const code = selectedMappings.get(mappingRowKey(item)) || item.selectedItemCode || "";
     if (!code) return null;
     return findMadhushalaItem(code) || item.selectedItem || {itemCode: code, itemName: "Mapped item"};
 }
@@ -543,7 +548,7 @@ function mappedItemMarkup(item) {
     return `<span class="mapped-choice done"><strong>${escapeHtml(mapped.itemCode || "")}</strong><span>${escapeHtml(mapped.itemName || "Mapped item")}</span></span>`;
 }
 function currentExciseItem() {
-    return workspace.unmappedItems.find((item) => String(item.exciseItemCode) === String(selectedExciseCode));
+    return workspace.unmappedItems.find((item) => mappingRowKey(item) === String(selectedExciseCode));
 }
 
 function renderWorkspace() {
@@ -560,18 +565,19 @@ function renderWorkspace() {
     }
 
     if (!selectedExciseCode && workspace.unmappedItems[0]) {
-        selectedExciseCode = String(workspace.unmappedItems[0].exciseItemCode);
+        selectedExciseCode = mappingRowKey(workspace.unmappedItems[0]);
     }
     if (selectedExciseCode && !currentExciseItem()) {
-        selectedExciseCode = workspace.unmappedItems[0] ? String(workspace.unmappedItems[0].exciseItemCode) : null;
+        selectedExciseCode = workspace.unmappedItems[0] ? mappingRowKey(workspace.unmappedItems[0]) : null;
     }
 
     const documentModeRows = Boolean(workspace.documentMapping || currentDocumentJobId);
     list.className = documentModeRows ? "list-body document-map-list" : "list-body";
     list.innerHTML = workspace.unmappedItems.map((item) => {
-        const code = String(item.exciseItemCode);
-        const selected = code === String(selectedExciseCode);
-        const mapped = selectedMappings.get(code) || item.selectedItemCode;
+        const code = String(item.exciseItemCode ?? "");
+        const rowKey = mappingRowKey(item);
+        const selected = rowKey === String(selectedExciseCode);
+        const mapped = selectedMappings.get(rowKey) || item.selectedItemCode;
         if (documentModeRows) {
             return `
                 <button class="unmapped-item document-map-row ${selected ? "selected" : ""}" data-excise="${escapeHtml(code)}" type="button">
@@ -589,9 +595,9 @@ function renderWorkspace() {
             </button>`;
     }).join("");
 
-    list.querySelectorAll("[data-excise]").forEach((button) => {
+    list.querySelectorAll("[data-row-key], [data-excise]").forEach((button) => {
         button.addEventListener("click", () => {
-            selectedExciseCode = button.dataset.excise;
+            selectedExciseCode = button.dataset.rowKey || button.dataset.excise;
             const search = document.getElementById("madhushala-search");
             if (search) search.value = "";
             renderWorkspace();
@@ -708,7 +714,7 @@ function runSearch() {
 }
 
 function updateSummary() {
-    const left = workspace.unmappedItems.filter((item) => !selectedMappings.get(String(item.exciseItemCode)) && !item.selectedItemCode).length;
+    const left = workspace.unmappedItems.filter((item) => !selectedMappings.get(mappingRowKey(item)) && !item.selectedItemCode).length;
     setText(document.getElementById("mapping-summary"), `${workspace.documentMapping ? "Document rows" : "Selected"}: ${selectedMappings.size} | Left: ${left}`);
     const submit = document.getElementById("submit-mappings");
     if (submit) submit.disabled = selectedMappings.size === 0;
@@ -724,7 +730,7 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
         const query = normalizedJobId ? `?jobId=${encodeURIComponent(normalizedJobId)}` : "?latestOnly=true";
         workspace = await api(`/mapping/workspace${query}`);
         currentDocumentJobId = normalizedJobId || currentDocumentJobId;
-        const codes = new Set((workspace.unmappedItems || []).map((item) => String(item.exciseItemCode)));
+        const codes = new Set((workspace.unmappedItems || []).map((item) => mappingRowKey(item)));
         selectedExciseCode = previousSelected && codes.has(String(previousSelected)) ? previousSelected : null;
         if (search) search.value = previousSearch;
         renderWorkspace();
@@ -754,10 +760,20 @@ function stopMappingAutoRefresh() {
 }
 
 async function saveMappings() {
-    const mappings = Array.from(selectedMappings.entries()).map(([exciseItemCode, itemCode]) => ({
-        exciseItemCode: Number(exciseItemCode),
-        itemCode,
-    }));
+    const mappings = Array.from(selectedMappings.entries()).map(([rowKey, itemCode]) => {
+        if (workspace.documentMapping) {
+            const row = (workspace.unmappedItems || []).find((item) => mappingRowKey(item) === String(rowKey));
+            return {
+                jobItemId: row?.jobItemId || String(rowKey),
+                exciseItemCode: Number(row?.exciseItemCode || 0),
+                itemCode,
+            };
+        }
+        return {
+            exciseItemCode: Number(rowKey),
+            itemCode,
+        };
+    });
     try {
         const result = await api("/mapping/submit", {method: "POST", body: JSON.stringify({mappings, jobId: currentDocumentJobId || null})});
         selectedMappings.clear();
