@@ -160,20 +160,23 @@ jobs:
 
           echo "== Validate Compose uses the live production identity =="
           cd "$APP_DIR"
-          docker compose -f docker-compose.prod.yml config >/tmp/madhushala-compose-$SHORT_SHA.yml
+          dc() {
+            docker compose -f docker-compose.prod.yml -f docker-compose.observability.yml "$@"
+          }
+          dc config >/tmp/madhushala-compose-$SHORT_SHA.yml
           grep -q 'madhushala-automation-platform_madhushala_automation_data' /tmp/madhushala-compose-$SHORT_SHA.yml
           grep -q 'container_name: madhushala_automation_web' /tmp/madhushala-compose-$SHORT_SHA.yml
 
           echo "== Build image =="
-          docker compose -f docker-compose.prod.yml build web
+          dc build web
 
           echo "== Start shared Redis cache =="
-          docker compose -f docker-compose.prod.yml up -d redis
+          dc up -d redis
 
           echo "== Wait for Redis =="
           REDIS_READY=0
           for attempt in $(seq 1 30); do
-            if docker compose -f docker-compose.prod.yml exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then
+            if dc exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then
               REDIS_READY=1
               break
             fi
@@ -181,12 +184,12 @@ jobs:
           done
           if [ "$REDIS_READY" -ne 1 ]; then
             echo "ERROR: Redis did not become ready"
-            docker compose -f docker-compose.prod.yml logs --tail=100 redis
+            dc logs --tail=100 redis
             exit 1
           fi
 
-          echo "== Deploy =="
-          docker compose -f docker-compose.prod.yml up -d --no-deps web
+          echo "== Deploy application =="
+          dc up -d --no-deps web
 
           echo "== Health check =="
           HEALTHY=0
@@ -200,14 +203,50 @@ jobs:
 
           if [ "$HEALTHY" -ne 1 ]; then
             echo "ERROR: health check failed"
-            docker compose -f docker-compose.prod.yml ps
-            docker compose -f docker-compose.prod.yml logs --tail=200 web
+            dc ps
+            dc logs --tail=200 web
             exit 1
           fi
 
           cat /tmp/madhushala-health.json
           echo
-          docker compose -f docker-compose.prod.yml ps
+
+          echo "== Start Prometheus and Grafana =="
+          dc up -d prometheus grafana
+
+          echo "== Verify Prometheus =="
+          PROM_READY=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1; then
+              PROM_READY=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$PROM_READY" -ne 1 ]; then
+            echo "ERROR: Prometheus did not become ready"
+            dc logs --tail=150 prometheus
+            exit 1
+          fi
+
+          echo "== Verify Grafana =="
+          GRAFANA_READY=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/api/health >/tmp/grafana-health.json 2>/dev/null; then
+              GRAFANA_READY=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$GRAFANA_READY" -ne 1 ]; then
+            echo "ERROR: Grafana did not become ready"
+            dc logs --tail=150 grafana
+            exit 1
+          fi
+
+          cat /tmp/grafana-health.json
+          echo
+          dc ps
 
           echo "== Record current release =="
           ln -sfn "$RELEASE_ROOT" "$DEPLOY_STATE/current"
