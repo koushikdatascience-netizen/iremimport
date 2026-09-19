@@ -1078,10 +1078,9 @@ def test_calculate_coverage_blocks_item_code_mismatch_even_when_count_matches():
 
 
 @pytest.mark.asyncio
-async def test_purchase_adapter_blocks_different_source_rows_mapped_to_same_item(monkeypatch):
+async def test_purchase_adapter_keeps_different_source_rows_mapped_to_same_item(monkeypatch):
     import json
     import sqlite3
-    from fastapi import HTTPException
     from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
     from app.modules.document_import import purchase_adapter as adapter_module
 
@@ -1118,13 +1117,23 @@ async def test_purchase_adapter_blocks_different_source_rows_mapped_to_same_item
             (
                 "r1", "job-1", "ROYAL STAG 750 ML", "royal stag 750 ml",
                 "ROYAL STAG", 750, None, 1, 1, 0, None, None, None, None,
-                1.0, json.dumps({"canonicalQuantityVersion": 2, "canonicalBox": 1, "canonicalLoose": 0}),
+                1.0, json.dumps({
+                    "canonicalQuantityVersion": 2,
+                    "canonicalBox": 1,
+                    "canonicalLoose": 0,
+                    "batchNo": "BATCH-A",
+                }),
                 "E1", "100010", "MAPPED", "2026-09-19T00:00:00"
             ),
             (
                 "r2", "job-1", "SIGNATURE 375 ML", "signature 375 ml",
-                "SIGNATURE", 375, None, 1, 1, 0, None, None, None, None,
-                1.0, json.dumps({"canonicalQuantityVersion": 2, "canonicalBox": 1, "canonicalLoose": 0}),
+                "SIGNATURE", 375, None, 2, 2, 0, None, None, None, None,
+                1.0, json.dumps({
+                    "canonicalQuantityVersion": 2,
+                    "canonicalBox": 2,
+                    "canonicalLoose": 0,
+                    "batchNo": "BATCH-B",
+                }),
                 "E2", "100010", "MAPPED", "2026-09-19T00:00:01"
             ),
         ],
@@ -1139,6 +1148,21 @@ async def test_purchase_adapter_blocks_different_source_rows_mapped_to_same_item
 
     monkeypatch.setattr(adapter_module, "conn", lambda: DbCtx())
 
+    async def fake_item_master(_service, _session, codes):
+        assert codes == ["100010", "100010"]
+        return {
+            "100010": {
+                "itemCode": "100010",
+                "itemName": "COMMON MADHUSHALA ITEM",
+                "packing": 12,
+                "purchaseRate": 100,
+                "purchaseRateCase": 1200,
+                "salesRate": 150,
+            }
+        }
+
+    monkeypatch.setattr(adapter_module, "load_item_master_details", fake_item_master)
+
     class DocumentService:
         def get_job(self, session, job_id):
             return {"id": job_id, "source_type": "DOCUMENT_PDF"}
@@ -1146,11 +1170,39 @@ async def test_purchase_adapter_blocks_different_source_rows_mapped_to_same_item
     adapter = DocumentPurchaseAdapter(DocumentService())
     session = {"shop_code": "SHOP", "company_code": "2"}
 
-    with pytest.raises(HTTPException) as exc_info:
-        await adapter.purchase_items(session, "job-1")
+    items = await adapter.purchase_items(session, "job-1")
 
-    assert exc_info.value.status_code == 409
-    assert "same Madhushala item" in str(exc_info.value.detail)
+    assert len(items) == 2
+    assert [item["itemCode"] for item in items] == ["100010", "100010"]
+    assert [item["itemName"] for item in items] == ["ROYAL STAG 750 ML", "SIGNATURE 375 ML"]
+    assert [item["batchNo"] for item in items] == ["BATCH-A", "BATCH-B"]
+    assert [item["box"] for item in items] == [1, 2]
+
+
+def test_merge_calculation_preserves_duplicate_itemcode_occurrences():
+    payload = {
+        "items": [
+            {"itemCode": "M00016", "batchNo": "A", "qnty": 12, "rate": 0, "itemAmount": 0},
+            {"itemCode": "M00016", "batchNo": "B", "qnty": 24, "rate": 0, "itemAmount": 0},
+        ]
+    }
+    response = {
+        "items": [
+            {"itemCode": "M00016", "quantity": 12, "rate": 10, "amount": 120},
+            {"itemCode": "M00016", "quantity": 24, "rate": 11, "amount": 264},
+        ]
+    }
+
+    PurchaseOrchestrator._validate_calculation_coverage(payload["items"], response)
+    purchase_orchestrator.merge_calculation(payload, response)
+
+    assert payload["items"][0]["qnty"] == 12
+    assert payload["items"][0]["rate"] == 10
+    assert payload["items"][0]["itemAmount"] == 120
+    assert payload["items"][1]["qnty"] == 24
+    assert payload["items"][1]["rate"] == 11
+    assert payload["items"][1]["itemAmount"] == 264
+
 
 
 def test_batch_persistence_result_detects_upstream_missing_batch():
