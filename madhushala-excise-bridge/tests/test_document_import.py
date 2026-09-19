@@ -1800,6 +1800,10 @@ async def test_confirm_review_omitted_batch_does_not_erase_extracted_batch(monke
     class MappingService:
         async def prepare_session_capture(self, *_args, **_kwargs):
             return None
+
+        async def prepare_document_job(self, *_args, **_kwargs):
+            return None
+
         async def workspace_for_session(self, *_args, **_kwargs):
             return {"unmappedItems": [], "madhushalaItems": []}
 
