@@ -1,7 +1,7 @@
 import asyncio
 
 from app.services.mapping_service import MappingService
-from app.services.matching_service import score_dropdown_search, suggest_matches
+from app.services.matching_service import MatchIndex, score_dropdown_search, suggest_matches
 
 
 def test_excise_payload_from_captured_item():
@@ -320,3 +320,144 @@ def test_company_item_codes_uses_shared_reference_catalogue(monkeypatch):
 
     assert calls["count"] == 1
     assert codes == {"M00001", "M00002"}
+
+
+def test_indexed_suggestions_preserve_best_match_and_reduce_candidates():
+    dropdown = [
+        {"itemCode": "A00002", "itemName": "ABERFILDY 12Y 750", "ml": "750", "packing": 12},
+        {"itemCode": "A00003", "itemName": "ABSOLUT VODKA 750", "ml": "750", "packing": 12},
+        {"itemCode": "R00001", "itemName": "ROYAL GREEN WHISKY 750", "ml": "750", "packing": 12},
+    ] + [
+        {"itemCode": f"X{index:05d}", "itemName": f"UNRELATED PRODUCT {index} 180", "ml": "180", "packing": 48}
+        for index in range(500)
+    ]
+    excise_item = {
+        "itemName": "Aberfeldy Single Highland Malt Scotch Whisky Aged 12 Years, 750 Ml. (Glass Bottle)",
+        "measureMl": 750,
+        "bottlesPerCase": 12,
+    }
+
+    index = MatchIndex(dropdown)
+    candidates = index.candidates(excise_item)
+    indexed = suggest_matches(excise_item, dropdown, index=index)
+    full_scan = suggest_matches(excise_item, dropdown)
+
+    assert len(candidates) < len(dropdown) / 10
+    assert indexed[0]["item"]["itemCode"] == "A00002"
+    assert indexed == full_scan
+
+
+def test_match_index_falls_back_when_no_index_signal_exists():
+    dropdown = [
+        {"itemCode": "A1", "itemName": "ALPHA", "ml": ""},
+        {"itemCode": "B1", "itemName": "BETA", "ml": ""},
+    ]
+    index = MatchIndex(dropdown)
+
+    candidates = index.candidates({"itemName": "ZZ"})
+
+    assert candidates == dropdown
+
+
+def test_prepare_document_job_uses_bounded_concurrency(monkeypatch):
+    import sqlite3
+    from contextlib import contextmanager
+    from app.services import mapping_service as mapping_module
+
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute(
+        """
+        CREATE TABLE import_jobs(
+            id TEXT, shop_code TEXT, session_id TEXT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE import_items(
+            id TEXT, job_id TEXT, raw_name TEXT, brand TEXT, ml INTEGER,
+            packing INTEGER, mrp REAL, rate REAL, barcode TEXT,
+            mapped_item_code TEXT, excise_item_code TEXT,
+            mapping_status TEXT, created_at TEXT, updated_at TEXT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE mappings_v2(
+            shop_code TEXT, company_code TEXT, excise_item_code TEXT,
+            madhushala_item_code TEXT
+        )
+        """
+    )
+    db.execute("INSERT INTO import_jobs VALUES (?,?,?)", ("job-1", "SHOP", "session-1"))
+    for index in range(12):
+        db.execute(
+            """
+            INSERT INTO import_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                f"row-{index}",
+                "job-1",
+                f"ITEM {index}",
+                f"ITEM {index}",
+                750,
+                12,
+                100,
+                90,
+                "",
+                "",
+                "",
+                "PENDING",
+                f"2026-09-20T00:00:{index:02d}+00:00",
+                "",
+            ),
+        )
+    db.commit()
+
+    @contextmanager
+    def fake_conn():
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+    monkeypatch.setattr(mapping_module, "conn", fake_conn)
+
+    service = MappingService()
+    active = {"count": 0, "max": 0}
+
+    async def fake_prepare(_client, payload, _unmapped):
+        active["count"] += 1
+        active["max"] = max(active["max"], active["count"])
+        try:
+            await asyncio.sleep(0.02)
+            return payload["itemName"].replace("ITEM ", ""), "submitted", []
+        finally:
+            active["count"] -= 1
+
+    monkeypatch.setattr(service, "_create_or_reuse_excise_item", fake_prepare)
+
+    result = asyncio.run(
+        service.prepare_document_job(
+            {
+                "shop_code": "SHOP",
+                "session_id": "session-1",
+                "company_code": "2",
+                "bill_type": "AI",
+                "madhushala_token": "token",
+            },
+            "job-1",
+        )
+    )
+
+    assert result["preparedCount"] == 12
+    assert active["max"] > 1
+    assert active["max"] <= mapping_module.settings.DOCUMENT_PREPARE_CONCURRENCY
+    saved = db.execute(
+        "SELECT COUNT(*) AS total FROM import_items WHERE mapping_status='UNMAPPED'"
+    ).fetchone()
+    assert saved["total"] == 12

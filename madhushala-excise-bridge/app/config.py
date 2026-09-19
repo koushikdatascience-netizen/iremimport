@@ -72,6 +72,7 @@ class Settings:
     MADHUSHALA_MAX_KEEPALIVE_CONNECTIONS: int = int(os.getenv("MADHUSHALA_MAX_KEEPALIVE_CONNECTIONS", "20"))
     MADHUSHALA_GET_RETRIES: int = int(os.getenv("MADHUSHALA_GET_RETRIES", "2"))
     MADHUSHALA_ITEM_FETCH_CONCURRENCY: int = int(os.getenv("MADHUSHALA_ITEM_FETCH_CONCURRENCY", "8"))
+    DOCUMENT_PREPARE_CONCURRENCY: int = int(os.getenv("DOCUMENT_PREPARE_CONCURRENCY", "6"))
 
     # Optional shared cache. With REDIS_URL unset the application uses a
     # process-local TTL cache, so current deployments continue to work without
