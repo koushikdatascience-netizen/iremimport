@@ -2897,6 +2897,7 @@ body.document-viewer-open {
                                 <th>Name</th>
                                 <th>Brand</th>
                                 <th>ML</th>
+                                <th>Batch No. & Date</th>
                                 <th>Box / Cases</th>
                                 <th>Loose / Bottles</th>
                                 <th>Source</th>
@@ -3989,6 +3990,7 @@ function reviewItemsFromPayload(payload) {
             name: String(item.name || ""),
             brand: String(item.brand || item.name || ""),
             ml: item.ml ?? "",
+            batchNo: String(item.batchNo || ""),
             box: item.box ?? 0,
             loose: item.loose ?? 0,
             sourceFile: String(item.sourceFile || ""),
@@ -4000,6 +4002,7 @@ function reviewItemsFromPayload(payload) {
         name: String(item.rawName || item.itemName || ""),
         brand: String(item.brand || item.rawName || item.itemName || ""),
         ml: item.ml ?? "",
+        batchNo: String(item.batchNo || item.rawData?.batchNo || item.rawData?.batch || ""),
         box: item.box ?? 0,
         loose: item.loose ?? 0,
         sourceFile: String(item.rawData?.sourceFilename || ""),
@@ -4032,6 +4035,7 @@ function collectReviewItems() {
         name: row.querySelector('[data-field="name"]')?.value || "",
         brand: row.querySelector('[data-field="brand"]')?.value || "",
         ml: row.querySelector('[data-field="ml"]')?.value || "",
+        batchNo: row.querySelector('[data-field="batchNo"]')?.value || "",
         box: row.querySelector('[data-field="box"]')?.value || "0",
         loose: row.querySelector('[data-field="loose"]')?.value || "0",
     }));
@@ -4052,7 +4056,7 @@ function updateReviewValidation() {
         }
         const current = items[index] || {};
         row.dataset.searchText = [
-            current.name, current.brand, current.ml, current.box, current.loose,
+            current.name, current.brand, current.ml, current.batchNo, current.box, current.loose,
             row.querySelector("[data-source-file]")?.dataset.sourceFile || "",
         ].join(" ");
         if (issues.length) invalid += 1;
@@ -4091,12 +4095,13 @@ function renderReviewTable(items) {
     tbody.innerHTML = items.map((item, index) => {
         const initialIssues = validateReviewItem(item);
         const source = item.sourceFile || "";
-        const searchText = [item.name, item.brand, item.ml, item.box, item.loose, source].join(" ");
+        const searchText = [item.name, item.brand, item.ml, item.batchNo, item.box, item.loose, source].join(" ");
         return '<tr data-review-id="' + escapeHtml(item.id) + '" data-search-text="' + escapeHtml(searchText) + '" class="' + (initialIssues.length ? "invalid-row" : "") + '">' +
             '<td class="row-number-cell"><span class="row-number">' + (index + 1) + '</span></td>' +
             '<td class="name-cell"><input data-field="name" type="text" value="' + escapeHtml(item.name) + '" maxlength="300" aria-label="Product name"><span class="document-row-issues">' + escapeHtml(initialIssues.join(" • ")) + '</span></td>' +
             '<td class="brand-cell"><input data-field="brand" type="text" value="' + escapeHtml(item.brand) + '" maxlength="300" aria-label="Brand"></td>' +
             '<td class="number-cell"><input data-field="ml" type="number" min="1" step="1" value="' + escapeHtml(item.ml) + '" aria-label="ML"></td>' +
+            '<td class="batch-cell"><input data-field="batchNo" type="text" value="' + escapeHtml(item.batchNo || "") + '" maxlength="200" aria-label="Batch No. and Date"></td>' +
             '<td class="number-cell"><input data-field="box" type="number" min="0" step="1" value="' + escapeHtml(item.box) + '" aria-label="Box or cases"></td>' +
             '<td class="number-cell"><input data-field="loose" type="number" min="0" step="1" value="' + escapeHtml(item.loose) + '" aria-label="Loose bottles"></td>' +
             '<td class="source-cell"><button type="button" class="source-jump" data-source-file="' + escapeHtml(source) + '" title="Open source file">' +

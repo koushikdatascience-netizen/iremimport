@@ -1481,3 +1481,31 @@ def test_company_scoped_product_mapping_does_not_leak_to_other_company(client):
 
     assert not str(row["mapped_item_code"] or "").strip()
     assert row["mapping_status"] != "MAPPED"
+
+
+def test_review_row_exposes_full_batch_number_and_date():
+    import json
+    from app.modules.document_import.service import DocumentImportService
+
+    row = {
+        "id": "row-1",
+        "raw_name": "MCDOWELLS NO 1 LUXURY WHISKY",
+        "normalized_name": "mcdowells no 1 luxury whisky",
+        "brand": "MCDOWELLS NO 1 LUXURY WHISKY",
+        "ml": 180,
+        "box": 3,
+        "loose": 0,
+        "quantity": 3,
+        "raw_data_json": json.dumps({
+            "batchNo": "265-1 & July,2026",
+            "sourceFilename": "3.pdf",
+            "canonicalBox": 3,
+            "canonicalLoose": 0,
+        }),
+    }
+
+    review = DocumentImportService._review_row(row)
+
+    assert review["batchNo"] == "265-1 & July,2026"
+    assert review["box"] == 3
+    assert review["loose"] == 0
