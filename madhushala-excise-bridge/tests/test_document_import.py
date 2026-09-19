@@ -1132,6 +1132,76 @@ def test_west_bengal_form3_keeps_all_six_original_rows_with_distinct_ml():
 
 
 
+
+
+def test_west_bengal_geometry_filter_ignores_rotated_watermark_chars():
+    from app.modules.document_import.pdf_extractor import _horizontal_cell_text
+
+    class FakePage:
+        def get_text(self, mode):
+            assert mode == "rawdict"
+            return {
+                "blocks": [
+                    {
+                        "lines": [
+                            {
+                                "dir": (0.7071067, -0.7071067),
+                                "spans": [{
+                                    "chars": [
+                                        {"c": "g", "bbox": (5, 5, 7, 8)},
+                                        {"c": ".", "bbox": (8, 5, 9, 8)},
+                                    ]
+                                }],
+                            },
+                            {
+                                "dir": (1.0, 0.0),
+                                "spans": [{
+                                    "chars": [
+                                        {"c": "1", "bbox": (2, 10, 3, 12)},
+                                        {"c": " ", "bbox": (3, 10, 4, 12)},
+                                        {"c": "-", "bbox": (4, 10, 5, 12)},
+                                        {"c": " ", "bbox": (5, 10, 6, 12)},
+                                        {"c": "0", "bbox": (6, 10, 7, 12)},
+                                    ]
+                                }],
+                            },
+                        ]
+                    }
+                ]
+            }
+
+    assert _horizontal_cell_text(FakePage(), (0, 0, 20, 20)) == "1 - 0"
+
+
+def test_west_bengal_candidate_count_uses_original_page_text_not_table_count():
+    from app.modules.document_import.pdf_extractor import _candidate_row_count
+
+    page1 = "ORIGINAL\n" + "\n".join(
+        f"IMFL Whisky ITEM {i} 750 Ml." for i in range(1, 8)
+    )
+    page2 = (
+        "ORIGINAL\n"
+        + "\n".join(f"IMFL Whisky ITEM {i} 180 Ml." for i in range(8, 17))
+        + "\nCopies : ii. The Duplicate copy shall be handed over to the Consignor."
+    )
+    duplicate = "DUPLICATE\n" + "\n".join(
+        f"IMFL Whisky ITEM {i} 750 Ml." for i in range(1, 8)
+    )
+
+    # Simulate partial table detection: only 15 table rows available.
+    partial_table_rows = [
+        ["IMFL", "Whisky", f"ITEM {i}", "750 Ml.", "", "", "1 - 0"]
+        for i in range(1, 16)
+    ]
+
+    pages = [
+        (1, page1, [partial_table_rows[:7]]),
+        (2, page2, [partial_table_rows[7:]]),
+        (3, duplicate, [partial_table_rows[:7]]),
+    ]
+
+    assert _candidate_row_count("WEST_BENGAL_FORM3", pages) == 16
+
 def test_west_bengal_watermark_contaminated_signature_row_is_not_dropped():
     from app.modules.document_import.pdf_extractor import _extract_west_bengal
 

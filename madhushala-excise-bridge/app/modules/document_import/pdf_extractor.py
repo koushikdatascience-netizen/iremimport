@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -165,7 +166,68 @@ def _product(
     )
 
 
-def _page_tables(page: fitz.Page) -> list[list[list[str]]]:
+def _horizontal_cell_text(page: fitz.Page, bbox: Any) -> str:
+    """Rebuild one table cell from horizontal glyphs only.
+
+    WB Form No. 3 contains a large diagonal www.wbexcise.gov.in watermark.
+    PyMuPDF table.extract() can splice pieces of that rotated text into normal
+    cells. Character-level reconstruction lets us keep only horizontal text
+    whose glyph centre actually falls inside the cell rectangle.
+    """
+    try:
+        rect = fitz.Rect(bbox)
+        payload = page.get_text("rawdict") or {}
+    except Exception:
+        return ""
+
+    chars: list[tuple[float, float, str]] = []
+    for block in payload.get("blocks", []) or []:
+        for line in block.get("lines", []) or []:
+            direction = line.get("dir") or (1.0, 0.0)
+            try:
+                dx, dy = float(direction[0]), float(direction[1])
+            except Exception:
+                dx, dy = 1.0, 0.0
+            # Keep ordinary horizontal left-to-right table text only.
+            if dx < 0.95 or abs(dy) > 0.08:
+                continue
+            for span in line.get("spans", []) or []:
+                for char in span.get("chars", []) or []:
+                    text = str(char.get("c") or "")
+                    if not text:
+                        continue
+                    try:
+                        char_rect = fitz.Rect(char.get("bbox"))
+                    except Exception:
+                        continue
+                    centre = fitz.Point(
+                        (char_rect.x0 + char_rect.x1) / 2,
+                        (char_rect.y0 + char_rect.y1) / 2,
+                    )
+                    if rect.contains(centre):
+                        chars.append((char_rect.y0, char_rect.x0, text))
+
+    if not chars:
+        return ""
+
+    chars.sort(key=lambda item: (item[0], item[1]))
+    lines: list[tuple[float, list[tuple[float, str]]]] = []
+    for y, x, text in chars:
+        if not lines or abs(lines[-1][0] - y) > 2.5:
+            lines.append((y, [(x, text)]))
+        else:
+            lines[-1][1].append((x, text))
+
+    rebuilt: list[str] = []
+    for _y, parts in lines:
+        parts.sort(key=lambda item: item[0])
+        line_text = "".join(text for _x, text in parts).strip()
+        if line_text:
+            rebuilt.append(line_text)
+    return "\n".join(rebuilt)
+
+
+def _page_tables(page: fitz.Page, *, horizontal_only: bool = False) -> list[list[list[str]]]:
     finder = getattr(page, "find_tables", None)
     if not callable(finder):
         return []
@@ -173,8 +235,21 @@ def _page_tables(page: fitz.Page) -> list[list[list[str]]]:
         found = finder()
     except Exception:
         return []
+
     output: list[list[list[str]]] = []
     for table in getattr(found, "tables", []) or []:
+        if horizontal_only:
+            clean_rows: list[list[str]] = []
+            for table_row in getattr(table, "rows", []) or []:
+                row_values: list[str] = []
+                for cell in getattr(table_row, "cells", []) or []:
+                    row_values.append(_horizontal_cell_text(page, cell) if cell else "")
+                if any(row_values):
+                    clean_rows.append(row_values)
+            if clean_rows:
+                output.append(clean_rows)
+            continue
+
         try:
             rows = table.extract()
         except Exception:
@@ -668,8 +743,28 @@ def _candidate_row_count(
     """
     selected_pages = pages
     if profile == "WEST_BENGAL_FORM3":
-        originals = [entry for entry in pages if re.search(r"\bORIGINAL\b", entry[1], re.IGNORECASE)]
+        def copy_label(page_text: str) -> str:
+            top_lines = [line.strip().upper() for line in (page_text or "").splitlines()[:25] if line.strip()]
+            for label in ("QUADRUPLICATE", "TRIPLICATE", "DUPLICATE", "ORIGINAL"):
+                if any(line == label for line in top_lines):
+                    return label
+            return ""
+
+        originals = [entry for entry in pages if copy_label(entry[1]) == "ORIGINAL"]
         selected_pages = originals or pages[:2]
+
+        # Independent text-layer completeness count. This does not depend on
+        # find_tables(), so a whole WB row cannot disappear silently if table
+        # detection or a watermark damages one cell.
+        text_rows: set[tuple[int, int]] = set()
+        for page_no, page_text, _page_tables in selected_pages:
+            row_index = 0
+            for line in (page_text or "").splitlines():
+                if re.match(r"^\s*(?:IMFL|OSBI|OS)\b", line, re.IGNORECASE):
+                    row_index += 1
+                    text_rows.add((page_no, row_index))
+        if text_rows:
+            return len(text_rows)
 
     signatures: set[str] = set()
 
@@ -777,18 +872,27 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         word_count = 0
         table_count = 0
 
-        for page_index, page in enumerate(document, start=1):
+        # First inspect the text layer so state/profile-specific table handling
+        # can be selected before extracting cells.
+        for page in document:
             text = page.get_text("text") or ""
             page_texts.append(text)
             try:
                 word_count += len(page.get_text("words") or [])
             except Exception:
                 pass
-            page_tables = _page_tables(page)
-            table_count += len(page_tables)
-            pages.append((page_index, text, page_tables))
 
         full_text = "\n".join(page_texts)
+        profile = _detect_profile(full_text)
+
+        # WB uses character-level horizontal-only cell reconstruction to remove
+        # the diagonal portal watermark before any business-field parsing.
+        horizontal_only = profile == "WEST_BENGAL_FORM3"
+        for page_index, page in enumerate(document, start=1):
+            page_tables = _page_tables(page, horizontal_only=horizontal_only)
+            table_count += len(page_tables)
+            pages.append((page_index, page_texts[page_index - 1], page_tables))
+
         text_chars = len(re.sub(r"\s+", "", full_text))
         if text_chars < 150 or word_count < 20:
             return None, {
@@ -800,7 +904,6 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
                 "pageCount": len(document),
             }
 
-        profile = _detect_profile(full_text)
         extractor = {
             "TELANGANA_ICDC": _extract_telangana,
             "WEST_BENGAL_FORM3": _extract_west_bengal,
