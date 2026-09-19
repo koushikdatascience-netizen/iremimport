@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
-from app.observability import get_correlation_id
+from app.observability import get_correlation_id, observe_madhushala_request
 from app.services.excise_tax_tags import apply_excise_tax_tags
 
 
@@ -189,7 +189,9 @@ class MadhushalaClient:
                     json_body=json_body,
                     headers=headers,
                 )
-                duration_ms = int((time.perf_counter() - started) * 1000)
+                duration_seconds = time.perf_counter() - started
+                duration_ms = int(duration_seconds * 1000)
+                observe_madhushala_request(method, path, response.status_code, duration_seconds)
                 logger.info(
                     "madhushala_http method=%s path=%s status=%s durationMs=%s attempt=%s",
                     method,
@@ -197,6 +199,14 @@ class MadhushalaClient:
                     response.status_code,
                     duration_ms,
                     attempt,
+                    extra={
+                        "event": "madhushala_http",
+                        "httpMethod": method,
+                        "upstreamPath": path,
+                        "statusCode": response.status_code,
+                        "durationMs": duration_ms,
+                        "attempt": attempt,
+                    },
                 )
                 if method == "GET" and response.status_code in _RETRYABLE_STATUS and attempt < max_attempts:
                     await asyncio.sleep((0.12 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.08))

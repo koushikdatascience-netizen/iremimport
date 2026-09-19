@@ -4,30 +4,43 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.automation.row_parser import normalize_raw_items
 from app.config import settings
 from app.db import close_db, conn, init_db
-from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
+from app.errors import error_payload, is_retryable_status, normalize_http_detail
+from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient, close_madhushala_http_clients
 from app.modules.document_import.routes import create_router as create_document_import_router
 from app.modules.document_import.service import DocumentImportService
+from app.observability import (
+    configure_json_logging,
+    get_correlation_id,
+    observe_http_request,
+    reset_correlation_id,
+    route_label,
+    set_correlation_id,
+)
 from app.services.session_service import session_service
 from app.services.cache_service import cache_service
 from app.services.mapping_service import MappingService
 
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+configure_json_logging(logging.INFO)
 logger = logging.getLogger("madhushala-excise-bridge")
 
 @asynccontextmanager
@@ -40,6 +53,7 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        await close_madhushala_http_clients()
         await cache_service.close()
         close_db()
 
@@ -111,6 +125,41 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-CRM-Integration-Key"],
 )
+
+
+@app.middleware("http")
+async def request_observability(request: Request, call_next):
+    correlation = request.headers.get("X-Correlation-ID")
+    token = set_correlation_id(correlation)
+    started = time.perf_counter()
+    response = None
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        duration = time.perf_counter() - started
+        route = route_label(request)
+        observe_http_request(request.method, route, status_code, duration)
+        duration_ms = int(duration * 1000)
+        logger.info(
+            "http_request method=%s route=%s status=%s durationMs=%s",
+            request.method,
+            route,
+            status_code,
+            duration_ms,
+            extra={
+                "event": "http_request",
+                "httpMethod": request.method,
+                "route": route,
+                "statusCode": status_code,
+                "durationMs": duration_ms,
+            },
+        )
+        if response is not None:
+            response.headers["X-Correlation-ID"] = get_correlation_id()
+        reset_correlation_id(token)
 
 mapping_service = MappingService()
 document_import_service = DocumentImportService(mapping_service)
@@ -239,15 +288,111 @@ def _apply_document_row_mapping_state(
     return workspace
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    code, message, details = normalize_http_detail(exc.status_code, exc.detail)
+    payload = error_payload(
+        code,
+        message,
+        retryable=is_retryable_status(exc.status_code),
+        details=details,
+    )
+    # Compatibility field for existing browser/client integrations. New clients
+    # should consume payload.error exclusively.
+    payload["detail"] = exc.detail
+    return JSONResponse(status_code=exc.status_code, content=payload, headers=exc.headers)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    details = jsonable_encoder(exc.errors())
+    payload = error_payload(
+        "VALIDATION_ERROR",
+        "Request validation failed.",
+        retryable=False,
+        details=details,
+    )
+    payload["detail"] = details
+    return JSONResponse(status_code=422, content=payload)
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error("Unhandled exception: %s", exc, exc_info=True)
-    return JSONResponse(status_code=500, content={"error": "Internal server error"})
+    logger.error(
+        "unhandled_exception type=%s message=%s",
+        type(exc).__name__,
+        exc,
+        exc_info=True,
+        extra={
+            "event": "unhandled_exception",
+            "exceptionType": type(exc).__name__,
+        },
+    )
+    payload = error_payload(
+        "INTERNAL_SERVER_ERROR",
+        "Internal server error.",
+        retryable=True,
+    )
+    payload["detail"] = "Internal server error."
+    return JSONResponse(status_code=500, content=payload)
 
 
-@app.get("/health")
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/health/live", include_in_schema=False)
+async def health_live():
+    return {
+        "status": "alive",
+        "service": "madhushala-excise-bridge",
+        "version": "2.1.1",
+    }
+
+
+async def _readiness_state() -> tuple[bool, dict[str, str]]:
+    dependencies: dict[str, str] = {}
+
+    try:
+        with conn() as db:
+            db.execute("SELECT 1").fetchone()
+        dependencies["database"] = "ok"
+    except Exception as exc:
+        dependencies["database"] = "error"
+        logger.error(
+            "readiness_dependency_failed dependency=database error=%s",
+            exc,
+            extra={"event": "readiness_dependency_failed", "dependency": "database"},
+        )
+
+    if settings.REDIS_URL:
+        redis_ok = await cache_service.ping()
+        dependencies["redis"] = "ok" if redis_ok else "error"
+    else:
+        dependencies["redis"] = "disabled"
+
+    ready = dependencies.get("database") == "ok" and dependencies.get("redis") != "error"
+    return ready, dependencies
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def health_ready():
+    ready, dependencies = await _readiness_state()
+    content = {
+        "status": "ready" if ready else "not_ready",
+        "service": "madhushala-excise-bridge",
+        "version": "2.1.1",
+        "dependencies": dependencies,
+    }
+    return JSONResponse(status_code=200 if ready else 503, content=content)
+
+
+@app.get("/health", include_in_schema=False)
 async def health_check():
-    return {"status": "ready", "version": "2.1.1"}
+    # Backward-compatible deployment health endpoint. New infrastructure should
+    # use /health/live for liveness and /health/ready for traffic readiness.
+    return await health_ready()
 
 
 async def validate_madhushala_context(shop_code: str, token: str, *, force: bool = False) -> None:
