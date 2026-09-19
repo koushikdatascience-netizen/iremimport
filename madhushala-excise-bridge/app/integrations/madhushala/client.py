@@ -438,6 +438,24 @@ class MadhushalaClient:
             headers=headers,
         )
 
+    async def get_purchase_for_edit(
+        self,
+        company_code: str,
+        year_code: str,
+        trn_no: str,
+    ) -> Any:
+        return await self._request(
+            "GET",
+            "/api/purchase/edit",
+            params={
+                "shopCode": self.shop_code,
+                "companyCode": str(company_code or "").strip(),
+                "yearCode": str(year_code or "").strip(),
+                "trnNo": str(trn_no or "").strip(),
+            },
+            headers=self._auth_headers("application/json"),
+        )
+
     async def save_purchase(self, payload: dict[str, Any]) -> Any:
         headers = self._auth_headers("application/json")
         headers["Content-Type"] = "application/json"
@@ -446,11 +464,19 @@ class MadhushalaClient:
             if field in request_payload:
                 request_payload[field] = self._purchase_datetime(request_payload[field])
         logger.info(
-            "purchase_save_outbound shopCode=%s companyCode=%s docNo=%s itemCount=%s",
+            "purchase_save_outbound shopCode=%s companyCode=%s docNo=%s itemCount=%s batches=%s",
             request_payload.get("shopCode"),
             request_payload.get("companyCode"),
             request_payload.get("docNo"),
             len(request_payload.get("items") or []),
+            [
+                {
+                    "itemCode": item.get("itemCode"),
+                    "batchNo": item.get("batchNo"),
+                }
+                for item in (request_payload.get("items") or [])
+                if str(item.get("batchNo") or "").strip()
+            ],
         )
         return await self._request(
             "POST",
