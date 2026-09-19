@@ -712,6 +712,11 @@ class DocumentImportService:
                 for doc in extracted_parts
                 if str(doc.invoiceNumber or "").strip()
             ]
+            transport_pass_numbers = [
+                str(getattr(doc, "transportPassNo", None) or "").strip()
+                for doc in extracted_parts
+                if str(getattr(doc, "transportPassNo", None) or "").strip()
+            ]
             doc_dates = [
                 str(doc.invoiceDate or "").strip()
                 for doc in extracted_parts
@@ -732,7 +737,14 @@ class DocumentImportService:
 
             merged_items: list[ExtractedProduct] = []
             for doc in extracted_parts:
-                merged_items.extend(doc.items or [])
+                doc_tp_pass = str(getattr(doc, "transportPassNo", None) or "").strip()
+                for item in (doc.items or []):
+                    if doc_tp_pass:
+                        payload = item.model_dump()
+                        payload["transportPassNo"] = doc_tp_pass
+                        merged_items.append(ExtractedProduct.model_validate(payload))
+                    else:
+                        merged_items.append(item)
 
             if not merged_items:
                 raise HTTPException(status_code=422, detail="No valid product rows were extracted")
@@ -741,6 +753,7 @@ class DocumentImportService:
                 documentType=next((doc.documentType for doc in extracted_parts if doc.documentType), "invoice"),
                 supplierName=next((doc.supplierName for doc in extracted_parts if doc.supplierName), None),
                 invoiceNumber=doc_numbers[0] if doc_numbers else None,
+                transportPassNo=transport_pass_numbers[0] if transport_pass_numbers else None,
                 invoiceDate=doc_dates[0] if doc_dates else None,
                 items=merged_items,
                 extractionEngine="batch",
