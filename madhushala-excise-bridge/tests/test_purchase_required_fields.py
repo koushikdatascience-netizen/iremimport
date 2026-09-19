@@ -344,3 +344,40 @@ async def test_separate_transport_pass_from_raw_row_beats_doc_number_fallback(mo
 
     assert resolved["docNo"] == "ICDC001261225018613"
     assert resolved["tpPassNo"] == "TP001261225018613"
+
+
+@pytest.mark.asyncio
+async def test_extracted_document_date_beats_transaction_date_default(monkeypatch):
+    monkeypatch.setattr(purchase_required, "conn", lambda: FakeDb([]))
+
+    class Service:
+        def get_job(self, session, job_id):
+            return {
+                "id": job_id,
+                "source_type": "DOCUMENT_PDF",
+                "invoice_number": "DOC-123",
+                "invoice_date": "17/08/2026",
+                "supplier_name": "",
+                "source_filename": "",
+            }
+
+        def _update_job(self, job_id, **fields):
+            pass
+
+    resolved = await purchase_required.resolve_required_purchase_header(
+        Service(),
+        {"shop_code": "SHOP-A"},
+        "job-doc-date",
+        {
+            "trnDate": "2026-09-19",
+            "docDate": "2026-09-19",
+            "_docDateEdited": False,
+            "supplierCode": "SUP-1",
+            "storeCode": "STORE-1",
+            "purchaseAccCode": "PUR-1",
+            "userCode": "U-1",
+        },
+    )
+
+    assert resolved["trnDate"] == "2026-09-19"
+    assert resolved["docDate"] == "2026-08-17"

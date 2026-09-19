@@ -3137,7 +3137,11 @@ function applyPurchaseHeader(header = {}) {
     const pairs = {
         "purchase-year-code": header.yearCode || defaultYearCode(),
         "purchase-trn-date": header.trnDate || today,
-        "purchase-doc-date": header.docDate || today,
+        "purchase-doc-date":
+            header.docDate
+            || currentDocumentResult?.extractedDocument?.invoiceDate
+            || currentDocumentResult?.job?.invoice_date
+            || today,
         "purchase-doc-no": header.docNo || currentDocumentResult?.extractedDocument?.invoiceNumber || "",
         "purchase-tp-pass-no": header.tpPassNo || "",
         "purchase-supplier-code": header.supplierCode || "",
