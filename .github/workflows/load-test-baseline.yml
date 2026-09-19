@@ -1,12 +1,11 @@
 name: Load Test Baseline
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - "madhushala-excise-bridge/loadtest/**"
-      - ".github/workflows/load-test-baseline.yml"
+  workflow_run:
+    workflows:
+      - Deploy Excise Bridge
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
@@ -14,6 +13,10 @@ permissions:
 
 jobs:
   k6:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'master')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
