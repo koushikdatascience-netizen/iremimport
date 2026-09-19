@@ -296,11 +296,14 @@ async def create_crm_session(payload: CrmSessionRequest, request: Request):
         shop_code, upstream_token, force=settings.is_production and not server_authenticated
     )
 
+    # Persist the exact token that was validated for this upstream session.
+    # In server-authenticated mode madhushala_token can be empty while
+    # MADHUSHALA_SERVICE_TOKEN was the token actually validated.
     response = session_service.create(
         shop_code,
         normalize_company_code(payload.companyCode),
         normalize_bill_type(payload.billType),
-        madhushala_token,
+        upstream_token,
     )
     return response
 
@@ -412,6 +415,14 @@ async def get_mapping_workspace(request: Request, latestOnly: bool = True, jobId
             job_id=jobId,
         )
     except MadhushalaApiError as exc:
+        if exc.status_code in (401, 403):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": "MADHUSHALA_AUTH_EXPIRED",
+                    "message": "Madhushala login/JWT is expired or invalid. Relaunch Excise Import from Madhushala CRM to create a fresh authenticated session.",
+                },
+            ) from exc
         handle_madhushala_error(exc)
     if jobId:
         workspace = _apply_document_row_mapping_state(workspace, session, jobId)
