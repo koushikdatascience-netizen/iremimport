@@ -946,6 +946,7 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
     assert products[0].model_dump()["packageType"] == "Pet Bottle"
     assert products[0].model_dump()["quantitySemantics"] == "capacity_is_ml_quantity_is_cases"
     assert products[0].model_dump()["rawPdfRow"]["Capacity"] == "180 (Pet Bottle)"
+    assert products[0].batchNo in (None, "")
     assert invoice_number == "tCSDR/2026-2027/00288547"
     assert invoice_date == "17/08/2026"
 
@@ -972,6 +973,7 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
     assert products[0].loose == 0
     assert products[0].model_dump()["quantitySemantics"] == "west_bengal_case_field_only"
     assert products[0].model_dump()["rawPdfRow"]["In Bottles"] == "144"
+    assert products[0].batchNo == "265-1 & July,2026"
 
 
 
@@ -1110,6 +1112,53 @@ def test_llama_schema_keeps_raw_jharkhand_row_unit_and_quantity_columns():
     assert "sourceRowNumber" in props
     assert "sourceUnitText" in props
     assert "sourceQuantityText" in props
+
+
+
+def test_document_identifiers_separate_invoice_and_transport_pass_by_profile():
+    from app.modules.document_import.pdf_extractor import (
+        _extract_jharkhand,
+        _extract_west_bengal,
+        _transport_pass_number,
+    )
+
+    # Jharkhand invoice can expose both a real Invoice No and a separate Permit No.
+    jh_text = (
+        "JHARKHAND STATE BEVERAGES CORPORATION LIMITED\n"
+        "Invoice No. : 003_COM_DHN_25-26/2026-2027/6267/61/6024\n"
+        "Permit No: DHA-2026-2027/6267\n"
+        "Invoice Date: 01/09/2026"
+    )
+    _, jh_doc_no, _ = _extract_jharkhand(jh_text, [])
+    assert jh_doc_no == "003_COM_DHN_25-26/2026-2027/6267/61/6024"
+    assert _transport_pass_number("JHARKHAND_EXCISE", jh_text) == "DHA-2026-2027/6267"
+
+    # WB Form No. 3 has a separate consignor Invoice No and Transport Pass No.
+    wb_text = (
+        "ORIGINAL\nWest Bengal Excise Foreign Liquor Form No 3\n"
+        "Transport Pass No. : tFLDR/2026-2027/07015578/P\n"
+        "Invoice No. of the Consignment\n"
+        "2026-2027/W/2022/007/01/031543 & Date 17/08/2026\n"
+        "Date : 17/08/2026"
+    )
+    _, wb_doc_no, _ = _extract_west_bengal(wb_text, [])
+    assert wb_doc_no == "2026-2027/W/2022/007/01/031543"
+    assert _transport_pass_number("WEST_BENGAL_FORM3", wb_text) == "tFLDR/2026-2027/07015578/P"
+
+
+def test_mp_batch_column_is_captured_only_when_source_cell_has_value():
+    from app.modules.document_import.pdf_extractor import _extract_madhya_pradesh
+
+    rows = [
+        ["Sl", "Label Name", "Batch", "Capacity", "Quantity in Cases", "Duty", "Mfg Amount", "VAT"],
+        ["1", "Masala country spirit [CL/2023-2024/0012]", "BATCH-42", "180 (Pet Bottle)", "109", "1", "2", "3"],
+    ]
+    products, _, _ = _extract_madhya_pradesh(
+        "Madhya Pradesh Excise Department\nDelivery Challan\nDemand Id- tCSDR/2026-2027/00288547\nDate- 17/08/2026",
+        [(1, "Delivery Challan", [rows])],
+    )
+    assert len(products) == 1
+    assert products[0].batchNo == "BATCH-42"
 
 def test_jharkhand_quantity_decoder_accepts_numeric_decimal_values():
     from app.modules.document_import.llama_client import _decode_jharkhand_quantity_text

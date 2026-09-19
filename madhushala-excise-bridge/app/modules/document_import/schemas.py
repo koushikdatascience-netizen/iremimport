@@ -59,6 +59,7 @@ class ExtractedDocument(BaseModel):
     documentType: DocumentType = "unknown"
     supplierName: str | None = None
     invoiceNumber: str | None = None
+    transportPassNo: str | None = None
     invoiceDate: str | None = None
     items: list[ExtractedProduct] = Field(default_factory=list)
 

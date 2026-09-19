@@ -270,3 +270,37 @@ async def test_document_header_falls_back_to_extracted_values_when_user_leaves_b
 
     assert resolved["docNo"] == "EXTRACTED-123"
     assert resolved["docDate"] == "2026-08-17"
+
+
+@pytest.mark.asyncio
+async def test_tp_pass_falls_back_to_doc_number_when_source_has_only_one_identifier(monkeypatch):
+    monkeypatch.setattr(purchase_required, "conn", lambda: FakeDb([]))
+
+    class Service:
+        def get_job(self, session, job_id):
+            return {
+                "id": job_id,
+                "source_type": "DOCUMENT_PDF",
+                "invoice_number": "ONLY-DOC-123",
+                "invoice_date": "2026-09-19",
+                "supplier_name": "",
+                "source_filename": "",
+            }
+
+        def _update_job(self, job_id, **fields):
+            pass
+
+    resolved = await purchase_required.resolve_required_purchase_header(
+        Service(),
+        {"shop_code": "SHOP-A"},
+        "job-one-id",
+        {
+            "supplierCode": "SUP-1",
+            "storeCode": "STORE-1",
+            "purchaseAccCode": "PUR-1",
+            "userCode": "U-1",
+        },
+    )
+
+    assert resolved["docNo"] == "ONLY-DOC-123"
+    assert resolved["tpPassNo"] == "ONLY-DOC-123"

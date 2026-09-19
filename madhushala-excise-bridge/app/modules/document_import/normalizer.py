@@ -88,7 +88,7 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
                     rate=None,
                     mrp=None,
                     amount=None,
-                    batchNo=None,
+                    batchNo=_clean_text(item.batchNo),
                     box=box or None,
                     loose=loose or None,
                     freeQnty=None,
