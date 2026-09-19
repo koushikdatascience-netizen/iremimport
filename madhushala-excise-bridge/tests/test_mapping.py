@@ -357,3 +357,107 @@ def test_match_index_falls_back_when_no_index_signal_exists():
     candidates = index.candidates({"itemName": "ZZ"})
 
     assert candidates == dropdown
+
+
+def test_prepare_document_job_uses_bounded_concurrency(monkeypatch):
+    import sqlite3
+    from contextlib import contextmanager
+    from app.services import mapping_service as mapping_module
+
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute(
+        """
+        CREATE TABLE import_jobs(
+            id TEXT, shop_code TEXT, session_id TEXT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE import_items(
+            id TEXT, job_id TEXT, raw_name TEXT, brand TEXT, ml INTEGER,
+            packing INTEGER, mrp REAL, rate REAL, barcode TEXT,
+            mapped_item_code TEXT, excise_item_code TEXT,
+            mapping_status TEXT, created_at TEXT, updated_at TEXT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE mappings_v2(
+            shop_code TEXT, company_code TEXT, excise_item_code TEXT,
+            madhushala_item_code TEXT
+        )
+        """
+    )
+    db.execute("INSERT INTO import_jobs VALUES (?,?,?)", ("job-1", "SHOP", "session-1"))
+    for index in range(12):
+        db.execute(
+            """
+            INSERT INTO import_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                f"row-{index}",
+                "job-1",
+                f"ITEM {index}",
+                f"ITEM {index}",
+                750,
+                12,
+                100,
+                90,
+                "",
+                "",
+                "",
+                "PENDING",
+                f"2026-09-20T00:00:{index:02d}+00:00",
+                "",
+            ),
+        )
+    db.commit()
+
+    @contextmanager
+    def fake_conn():
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+    monkeypatch.setattr(mapping_module, "conn", fake_conn)
+
+    service = MappingService()
+    active = {"count": 0, "max": 0}
+
+    async def fake_prepare(_client, payload, _unmapped):
+        active["count"] += 1
+        active["max"] = max(active["max"], active["count"])
+        try:
+            await asyncio.sleep(0.02)
+            return payload["itemName"].replace("ITEM ", ""), "submitted", []
+        finally:
+            active["count"] -= 1
+
+    monkeypatch.setattr(service, "_create_or_reuse_excise_item", fake_prepare)
+
+    result = asyncio.run(
+        service.prepare_document_job(
+            {
+                "shop_code": "SHOP",
+                "session_id": "session-1",
+                "company_code": "2",
+                "bill_type": "AI",
+                "madhushala_token": "token",
+            },
+            "job-1",
+        )
+    )
+
+    assert result["preparedCount"] == 12
+    assert active["max"] > 1
+    assert active["max"] <= mapping_module.settings.DOCUMENT_PREPARE_CONCURRENCY
+    saved = db.execute(
+        "SELECT COUNT(*) AS total FROM import_items WHERE mapping_status='UNMAPPED'"
+    ).fetchone()
+    assert saved["total"] == 12
