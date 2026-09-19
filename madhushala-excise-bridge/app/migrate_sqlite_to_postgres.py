@@ -82,10 +82,11 @@ def migrate(sqlite_path: str, database_url: str) -> None:
                         sql.SQL(", ").join(sql.Identifier(c) for c in columns),
                         sql.SQL(", ").join(sql.Placeholder() for _ in columns),
                     )
-                    target.executemany(
-                        statement,
-                        [tuple(row[c] for c in columns) for row in rows],
-                    )
+                    with target.cursor() as cursor:
+                        cursor.executemany(
+                            statement,
+                            [tuple(row[c] for c in columns) for row in rows],
+                        )
                 copied[table] = len(rows)
 
             for table in SERIAL_TABLES:
