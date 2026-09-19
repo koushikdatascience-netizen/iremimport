@@ -356,9 +356,10 @@ async function api(path, options = {}) {
         );
         const error = new Error(message);
         error.status = response.status;
-        error.code = apiError?.code || (
-            detail && typeof detail === "object" ? detail.code : undefined
-        );
+        error.code = apiError?.code;
+        if (!error.code && detail && typeof detail === "object") {
+            error.code = detail.code;
+        }
         error.correlationId = apiError?.correlationId || response.headers.get("X-Correlation-ID") || "";
         error.retryable = Boolean(apiError?.retryable);
         throw error;
