@@ -29,6 +29,7 @@ PRODUCT_SCHEMA: dict[str, Any] = {
                     "itemName": {"type": "string"},
                     "brand": {"type": "string"},
                     "ml": {"type": ["integer", "string", "null"]},
+                    "sourceRowNumber": {"type": ["integer", "string", "null"]},
                     "sourceUnitText": {"type": ["string", "null"]},
                     "packing": {"type": ["integer", "string", "null"]},
                     "quantity": {"type": ["number", "string", "null"]},
@@ -83,10 +84,16 @@ EXTRACTION_PROMPT = (
     "'180 ML' means sourceUnitText='180 ML' and ml=180. Always copy the exact printed quantity cell text into "
     "sourceQuantityText before interpreting "
     "it. Quantity semantics are strict: box means CASES/CARTONS and loose means individual BOTTLES/LOOSE UNITS. "
-    "Special Jharkhand rule: when the table heading is 'Quantity (Cases)' on a Jharkhand State Beverages "
-    "Corporation invoice, the printed value uses CASES.LOOSE notation, not a decimal fraction. For example "
-    "17.20 means box=17 and loose=20, 15.00 means box=15 and loose=0, and 2.04 means box=2 and loose=4. "
-    "Keep sourceQuantityText exactly as printed, including trailing zeroes. Special West Bengal rule: "
+    "Special Jharkhand rule: for JHARKHAND STATE BEVERAGES CORPORATION LIMITED invoices, preserve EVERY visible "
+    "product row, including continuation pages that may start directly with row 21, 22, 23, etc. The table columns are "
+    "Sr No, Brand Name, Label Name, Unit Name, Quantity (Cases), followed by financial columns. Copy the visible Sr No "
+    "to sourceRowNumber, copy Unit Name exactly to sourceUnitText, and copy Quantity (Cases) exactly to "
+    "sourceQuantityText before interpretation. Unit Name examples such as 180 ML, 375 ML, 500 ML, 600 ML (CL), "
+    "200 ML (CL), and 750 ML (FML) must populate ml with the numeric ML value. Quantity (Cases) uses CASES.LOOSE "
+    "notation, not a decimal fraction: 17.20 means box=17 and loose=20, 15.00 means box=15 and loose=0, "
+    "4.00 means box=4 and loose=0, and 2.04 means box=2 and loose=4. Never omit a visible product row because "
+    "its name repeats another row at a different ML. Keep sourceQuantityText exactly as printed, including trailing "
+    "zeroes. Special West Bengal rule: "
     "for West Bengal Excise Foreign Liquor Form No. 3 transport passes, extract product rows only from the "
     "top-level copy marked ORIGINAL. Ignore DUPLICATE, TRIPLICATE and QUADRUPLICATE copies of the same pass. "
     "For that WB form, use the compound 'In Cases' value as the purchase quantity: for example '3 - 0' means "
@@ -146,7 +153,13 @@ class LlamaCloudClient:
             raise LlamaCloudError("LlamaCloud did not return a file id")
         return str(file_id)
 
-    async def start_extraction(self, file_id: str) -> str | dict[str, Any]:
+    async def start_extraction(
+        self,
+        file_id: str,
+        *,
+        extraction_mode: str | None = None,
+        prompt: str | None = None,
+    ) -> str | dict[str, Any]:
         response = await self._request(
             "POST",
             "/api/v1/extraction/run",
@@ -154,8 +167,11 @@ class LlamaCloudClient:
             json={
                 "file_id": file_id,
                 "data_schema": PRODUCT_SCHEMA,
-                "config": {"extraction_target": "PER_DOC", "extraction_mode": settings.DOCUMENT_IMPORT_EXTRACTION_MODE},
-                "prompt": EXTRACTION_PROMPT,
+                "config": {
+                    "extraction_target": "PER_DOC",
+                    "extraction_mode": extraction_mode or settings.DOCUMENT_IMPORT_EXTRACTION_MODE,
+                },
+                "prompt": prompt or EXTRACTION_PROMPT,
             },
         )
         job_id = response.get("id") or response.get("job_id") if isinstance(response, dict) else None
@@ -174,9 +190,20 @@ class LlamaCloudClient:
             await asyncio.sleep(max(0.5, settings.DOCUMENT_IMPORT_POLL_SECONDS))
         raise LlamaCloudError("Timed out waiting for extraction")
 
-    async def extract_products(self, file_path: Path, filename: str) -> ExtractedDocument:
+    async def extract_products(
+        self,
+        file_path: Path,
+        filename: str,
+        *,
+        extraction_mode: str | None = None,
+        prompt: str | None = None,
+    ) -> ExtractedDocument:
         file_id = await self.upload_file(file_path, filename)
-        result_or_job = await self.start_extraction(file_id)
+        result_or_job = await self.start_extraction(
+            file_id,
+            extraction_mode=extraction_mode,
+            prompt=prompt,
+        )
         result = await self.poll_extraction(result_or_job) if isinstance(result_or_job, str) else result_or_job
         payload = result.get("data") or result.get("result") or result if isinstance(result, dict) else {}
         return ExtractedDocument.model_validate(payload)
@@ -211,7 +238,11 @@ class LlamaCloudClient:
         async def extract_page(page_number: int, page_path: Path) -> tuple[int, ExtractedDocument]:
             async with semaphore:
                 page_name = f"{Path(filename).stem}-page-{page_number}.pdf"
-                result = await self.extract_products(page_path, page_name)
+                result = await self.extract_products(
+                    page_path,
+                    page_name,
+                    extraction_mode=settings.DOCUMENT_IMPORT_SCANNED_EXTRACTION_MODE,
+                )
                 return page_number, result
 
         try:
