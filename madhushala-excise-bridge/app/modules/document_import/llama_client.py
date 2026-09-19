@@ -250,19 +250,10 @@ class LlamaCloudClient:
                 corrected_items.append(ExtractedProduct.model_validate(payload))
             merged_items = corrected_items
 
-        deduped_items: list[ExtractedProduct] = []
-        seen: set[tuple[str, str, str, str]] = set()
-        for item in merged_items:
-            signature = (
-                str(item.itemName or "").strip().casefold(),
-                str(item.ml or "").strip().casefold(),
-                str(item.box or 0),
-                str(item.loose or 0),
-            )
-            if signature in seen:
-                continue
-            seen.add(signature)
-            deduped_items.append(item)
+        # Page-by-page extraction has no overlapping document window.
+        # Preserve every extracted source row; identical products can be valid
+        # separate invoice lines and must not be silently dropped.
+        deduped_items = merged_items
 
         return ExtractedDocument(
             documentType=document_type,
