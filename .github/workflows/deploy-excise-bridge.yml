@@ -45,7 +45,10 @@ jobs:
       - name: Validate production Compose
         env:
           POSTGRES_PASSWORD: ci-placeholder-password
-        run: docker compose -f docker-compose.prod.yml -f docker-compose.observability.yml config >/dev/null
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.prod.yml -f docker-compose.observability.yml config >/dev/null
+          rm -f .env
 
       - name: Run tests
         run: pytest -q
