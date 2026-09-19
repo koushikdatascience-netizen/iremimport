@@ -13,6 +13,7 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
+from app.observability import observe_purchase_save
 from app.services.purchase_transaction_service import purchase_transaction_service
 from app.services.reference_data_service import reference_data_service
 
@@ -721,11 +722,23 @@ class PurchaseOrchestrator:
                 # Never blindly retry Purchase Save. A network failure can happen
                 # after Madhushala commits the accounting transaction.
                 status = "UNKNOWN" if isinstance(exc, MadhushalaApiError) and exc.status_code is None else "FAILED"
+                save_duration_seconds = time.perf_counter() - save_started
+                duration_ms = int(save_duration_seconds * 1000)
+                observe_purchase_save(status, save_duration_seconds)
                 purchase_transaction_service.update(job_id, status, error=str(exc))
-                purchase_transaction_service.record_event(tx_id, job_id, "SAVE", status, details={"error": str(exc)})
+                purchase_transaction_service.record_event(
+                    tx_id,
+                    job_id,
+                    "SAVE",
+                    status,
+                    duration_ms=duration_ms,
+                    details={"error": str(exc)},
+                )
                 raise
 
-            duration_ms = int((time.perf_counter() - save_started) * 1000)
+            save_duration_seconds = time.perf_counter() - save_started
+            duration_ms = int(save_duration_seconds * 1000)
+            observe_purchase_save("OK", save_duration_seconds)
             trn_no = purchase_transaction_service.response_trn_no(response)
 
             batch_persistence = {
