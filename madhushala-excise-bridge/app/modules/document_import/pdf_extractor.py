@@ -356,6 +356,27 @@ def _clean_west_bengal_brand(value: Any) -> str:
     return _clean(" ".join(lines))
 
 
+def _clean_west_bengal_noise_lines(value: Any) -> str:
+    raw = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.strip() for line in raw.split("\n") if line.strip()]
+    cleaned = [
+        line
+        for line in lines
+        if not re.fullmatch(r"[A-Za-z.]", line)
+    ]
+    return _clean(" ".join(cleaned))
+
+
+def _clean_west_bengal_case(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = text.replace("–", "-").replace("—", "-")
+    match = re.search(r"(\d+)\s*[-.]\s*(\d+)", text)
+    if match:
+        return f"{int(match.group(1))} - {int(match.group(2))}"
+    integer = re.search(r"(?<!\d)(\d+)(?!\d)", text)
+    return integer.group(1) if integer else ""
+
+
 def _extract_west_bengal(
     full_text: str,
     pages: list[tuple[int, str, list[list[list[str]]]]],
@@ -413,26 +434,34 @@ def _extract_west_bengal(
                     continue
 
                 name = _clean_west_bengal_brand(cells[name_idx])
-                cases, bottles = resolve_case_loose(cells[case_idx], None)
+                case_text = _clean_west_bengal_case(cells[case_idx])
+                cases, bottles = resolve_case_loose(case_text, None)
                 if not name or (cases <= 0 and bottles <= 0):
                     continue
+
+                batch_text = (
+                    _clean_west_bengal_noise_lines(cells[batch_idx])
+                    if batch_idx is not None and len(cells) > batch_idx
+                    else ""
+                )
+                measure_text = _clean_west_bengal_noise_lines(cells[unit_idx])
 
                 raw = {f"column{index + 1}": value for index, value in enumerate(cells)}
                 raw.update(
                     {
                         "Brand Name": name,
-                        "Measure": cells[unit_idx],
-                        "In Cases": cells[case_idx],
+                        "Measure": measure_text,
+                        "In Cases": case_text,
                         "In Bottles": cells[bottle_idx],
-                        "Batch No. & Date": cells[batch_idx] if batch_idx is not None and len(cells) > batch_idx else "",
+                        "Batch No. & Date": batch_text,
                     }
                 )
                 item = _product(
                     name=name,
-                    ml=cells[unit_idx],
+                    ml=measure_text,
                     box=cases,
                     loose=bottles,
-                    batch_no=cells[batch_idx] if batch_idx is not None and len(cells) > batch_idx else None,
+                    batch_no=batch_text or None,
                     raw=raw,
                     state="WEST_BENGAL",
                     page=page_no,
