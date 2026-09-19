@@ -905,16 +905,24 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
         "Comodity Group", "Kind Of Intoxicant", "Label Name", "Unit",
         "Physical Qty", "StockQty", "Qty", "Strength", "LPL", "BL",
     ], [
-        "1", "whisky", "ROYAL STAG DELUXE WHISKY", "750ML",
+        "1", "beer", "KINGFISHER FINEST STRONG BEER", "650 ML",
+        "0", "754", "17.20", "9.00-BL", "", "1498.24",
+    ], [
+        "2", "whisky", "ROYAL STAG DELUXE WHISKY", "750ML",
         "0", "754", "2.00", "9.00-BL", "", "1498.24",
     ]]
     products, _, _ = _extract_jharkhand(
-        "Government Of Jharkhand\nExcise Permit No: DHA-2026-2027/6267\nIssued Date 01/09/2026",
+        "Jharkhand State Beverages Corporation Limited\nExcise Permit No: DHA-2026-2027/6267\nIssued Date 01/09/2026",
         [(2, "INVOICE DETAIL", [jharkhand_rows])],
     )
-    assert len(products) == 1
-    assert products[0].box == 2
-    assert products[0].loose == 0
+    assert len(products) == 2
+    assert products[0].ml == 650
+    assert products[0].box == 17
+    assert products[0].loose == 20
+    assert products[0].model_dump()["quantitySemantics"] == "jharkhand_cases_dot_loose"
+    assert products[0].model_dump()["rawPdfRow"]["Quantity (Cases)"] == "17.20"
+    assert products[1].box == 2
+    assert products[1].loose == 0
 
     wb_rows = [
         [
@@ -934,6 +942,17 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
     assert len(products) == 1
     assert products[0].box == 3
     assert products[0].loose == 144
+
+
+
+
+def test_jharkhand_llama_quantity_decoder_preserves_two_digit_loose_suffix():
+    from app.modules.document_import.llama_client import _decode_jharkhand_quantity_text
+
+    assert _decode_jharkhand_quantity_text("17.20") == (17, 20)
+    assert _decode_jharkhand_quantity_text("15.00") == (15, 0)
+    assert _decode_jharkhand_quantity_text("2.04") == (2, 4)
+    assert _decode_jharkhand_quantity_text("20") is None
 
 
 def test_multi_pdf_batch_merges_same_purchase_into_one_review(client, monkeypatch):
