@@ -254,7 +254,7 @@ async function uploadQr(file) {
     }
     currentUploadKind = "qr";
     currentDocumentFile = file;
-    renderDocumentPreview(file);
+    renderDocumentPreviews([file]);
     setDocumentImportState("uploading");
     const elements = documentElements();
     setText(elements.progressTitle, "Scanning QR image");
