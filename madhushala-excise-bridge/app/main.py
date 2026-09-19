@@ -23,6 +23,7 @@ from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaCli
 from app.modules.document_import.routes import create_router as create_document_import_router
 from app.modules.document_import.service import DocumentImportService
 from app.services.session_service import session_service
+from app.services.cache_service import cache_service
 from app.services.mapping_service import MappingService
 
 
@@ -39,6 +40,7 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        await cache_service.close()
         close_db()
 
 
