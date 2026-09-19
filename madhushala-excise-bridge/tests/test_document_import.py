@@ -520,13 +520,13 @@ def test_up_excise_transport_pass_qr_exact_url_and_table_shape(client, monkeypat
     assert normalized[0]["rawName"] == "ROYAL STAG PREMIER WHISKY"
     assert normalized[0]["ml"] == 750
     assert normalized[0]["packing"] is None
-    assert normalized[0]["quantity"] == 26.0
-    assert normalized[0]["box"] == 2
+    assert normalized[0]["quantity"] == 24.0
+    assert normalized[0]["box"] == 0
     assert normalized[0]["loose"] == 24
     assert normalized[1]["rawName"] == "100 PIPERS DELUXE SCOTCH WHISKY"
     assert normalized[1]["ml"] == 180
     assert normalized[1]["packing"] is None
-    assert normalized[1]["box"] == 1
+    assert normalized[1]["box"] == 0
     assert normalized[1]["loose"] == 48
 
     items = client.get(
@@ -539,12 +539,64 @@ def test_up_excise_transport_pass_qr_exact_url_and_table_shape(client, monkeypat
     assert raw["transportPassNo"] == "WHOLESALE1501-FL2-RETAIL995782-FL4C-LUCK-Jun26_00000674"
     assert raw["transportPassType"] == "FG"
     assert raw["transportPassYear"] == "2026"
-    assert raw["box"] == 2
+    assert raw["sourceCases"] == 2
+    assert raw["sourceBottles"] == 24
+    assert raw["box"] == 0
     assert raw["loose"] == 24
-    assert raw["quantity"] == 26
+    assert raw["quantity"] == 24
     assert raw["qnty"] == 24
+    assert raw["quantitySemantics"] == "qr_bottles_as_loose_only"
     assert raw["bulkLitres"] == "18.00"
 
+
+
+
+def test_qr_quantity_rule_is_bottles_only_and_keeps_cases_as_audit_data():
+    from app.modules.document_import import up_excise_qr
+    from app.modules.document_import.normalizer import normalize_extracted_document
+
+    payload = {
+        "tables": [[
+            [
+                "Brand",
+                "Packaging Size",
+                "No of Cases Dispatched",
+                "No of Bottles Dispatched",
+            ],
+            [
+                "TEST QR ITEM",
+                "750 ML",
+                "3",
+                "36",
+            ],
+        ]]
+    }
+
+    document = up_excise_qr._document_from_payload(
+        payload,
+        {
+            "transportPassNo": "TP-QR-001",
+            "transportPassType": "FG",
+            "transportPassYear": "2026",
+        },
+    )
+
+    assert len(document.items) == 1
+    item = document.items[0]
+    raw = item.model_dump()
+
+    assert item.box == 0
+    assert item.loose == 36
+    assert item.quantity == 36
+    assert raw["sourceCases"] == 3
+    assert raw["sourceBottles"] == 36
+    assert raw["quantitySemantics"] == "qr_bottles_as_loose_only"
+
+    normalized = normalize_extracted_document(document, "QR_HTML")
+    assert len(normalized) == 1
+    assert normalized[0].box == 0
+    assert normalized[0].loose == 36
+    assert normalized[0].quantity == 36
 
 def test_up_excise_transport_pass_qr_reads_script_embedded_rows():
     from app.modules.document_import import up_excise_qr
@@ -581,8 +633,8 @@ def test_up_excise_transport_pass_qr_reads_script_embedded_rows():
     assert normalized[0].rawName == "Tenjaku Blended Whisky"
     assert normalized[0].ml == 700
     assert normalized[0].packing is None
-    assert normalized[0].quantity == 13.0
-    assert normalized[0].box == 1
+    assert normalized[0].quantity == 12.0
+    assert normalized[0].box == 0
     assert normalized[0].loose == 12
 
 def test_shop_cannot_read_other_shop_job(client, monkeypatch):
