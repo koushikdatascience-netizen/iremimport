@@ -1754,7 +1754,7 @@ async def test_confirm_review_omitted_batch_does_not_erase_extracted_batch(monke
         """
         CREATE TABLE import_jobs(
             id TEXT, shop_code TEXT, session_id TEXT, source_type TEXT,
-            status TEXT, error TEXT, updated_at TEXT
+            status TEXT, mapped_count INTEGER DEFAULT 0, error TEXT, updated_at TEXT
         )
         """
     )
@@ -1769,8 +1769,8 @@ async def test_confirm_review_omitted_batch_does_not_erase_extracted_batch(monke
         """
     )
     db.execute(
-        "INSERT INTO import_jobs VALUES (?,?,?,?,?,?,?)",
-        ("job-batch", "SHOP", "session", "DOCUMENT_PDF", "REVIEW", None, ""),
+        "INSERT INTO import_jobs VALUES (?,?,?,?,?,?,?,?)",
+        ("job-batch", "SHOP", "session", "DOCUMENT_PDF", "REVIEW", 0, None, ""),
     )
     db.execute(
         """
