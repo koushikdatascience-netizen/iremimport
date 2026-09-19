@@ -252,18 +252,33 @@ BEGIN
 END;
 """
 
+def _use_postgres() -> bool:
+    return settings.DATABASE_URL.lower().startswith(("postgresql://", "postgres://"))
+
+
 @contextmanager
 def conn():
+    if _use_postgres():
+        from app.postgres_backend import postgres_conn
+
+        with postgres_conn() as db:
+            yield db
+        return
+
     os.makedirs(os.path.dirname(settings.DATABASE_PATH) or ".", exist_ok=True)
     db = sqlite3.connect(settings.DATABASE_PATH)
     db.row_factory = sqlite3.Row
     try:
         yield db
         db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
-def init_db():
+
+def _init_sqlite():
     with conn() as db:
         db.executescript(SCHEMA)
         columns = {row["name"] for row in db.execute("PRAGMA table_info(captures)").fetchall()}
@@ -474,6 +489,22 @@ def init_db():
             END;
             """
         )
+
+def init_db():
+    if _use_postgres():
+        from app.postgres_backend import init_postgres
+
+        init_postgres()
+        return
+    _init_sqlite()
+
+
+def close_db():
+    if _use_postgres():
+        from app.postgres_backend import close_postgres_pool
+
+        close_postgres_pool()
+
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()

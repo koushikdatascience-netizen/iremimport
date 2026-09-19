@@ -91,10 +91,11 @@ class PurchaseTransactionService:
         with conn() as db:
             db.execute(
                 """
-                INSERT OR IGNORE INTO purchase_transactions(
+                INSERT INTO purchase_transactions(
                     id, job_id, shop_code, company_code, supplier_code, doc_no,
                     status, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO NOTHING
                 """,
                 (tx_id, job_id, shop_code, company_code, supplier_code, doc_no, "PREPARING", now, now),
             )
