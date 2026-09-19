@@ -670,6 +670,13 @@ def _transport_pass_number(profile: str, full_text: str) -> str | None:
     if profile == "WEST_BENGAL_FORM3":
         match = re.search(r"Transport\s*Pass\s*No\.?\s*:\s*([^\n\r]+)", full_text, re.IGNORECASE)
         return _clean(match.group(1)) if match else None
+    if profile == "TELANGANA_ICDC":
+        match = re.search(
+            r"\bT\s*\.?\s*P\s*\.?\s*(?:Number|No\.?|Pass\s*No\.?)\s*:\s*([^\n\r]+)",
+            full_text,
+            re.IGNORECASE,
+        )
+        return _clean(match.group(1)) if match else None
     if profile == "JHARKHAND_EXCISE":
         value = _header_value(
             full_text,
@@ -685,6 +692,7 @@ def _transport_pass_number(profile: str, full_text: str) -> str | None:
         full_text,
         r"Transport\s*Pass\s*No\.?",
         r"TP\s*Pass\s*No\.?",
+        r"T\s*\.?\s*P\s*\.?\s*(?:Number|No\.?)",
         r"Permit\s*No\.?",
     )
     return _clean(value) if value else None
