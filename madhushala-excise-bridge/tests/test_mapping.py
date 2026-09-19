@@ -238,3 +238,59 @@ def test_dropdown_search_requires_meaningful_word_match():
     assert score_dropdown_search(old_monk, "om") > score_dropdown_search(royal_green, "om")
     assert score_dropdown_search(after_dark, "after") > score_dropdown_search(old_monk, "after")
     assert score_dropdown_search(royal_green, "aft") == 0
+
+
+def test_excise_reuse_identity_keeps_same_name_different_ml_separate():
+    items = [
+        {"exciseItemCode": 101, "itemName": "McDowell's No. 1 Superior Whisky", "measureMl": "180"},
+        {"exciseItemCode": 102, "itemName": "McDowell's No. 1 Superior Whisky", "measureMl": "750"},
+        {"exciseItemCode": 201, "itemName": "McDowells No.1 Luxury Blended Whisky", "measureMl": "180"},
+        {"exciseItemCode": 202, "itemName": "McDowells No.1 Luxury Blended Whisky", "measureMl": "375"},
+        {"exciseItemCode": 203, "itemName": "McDowells No.1 Luxury Blended Whisky", "measureMl": "750"},
+    ]
+
+    by_identity, by_name = MappingService._unmapped_indexes(items)
+
+    assert MappingService._find_existing_excise(
+        {"itemName": "McDowell's No. 1 Superior Whisky", "measureMl": "180"},
+        by_identity,
+        by_name,
+    )["exciseItemCode"] == 101
+
+    assert MappingService._find_existing_excise(
+        {"itemName": "McDowell's No. 1 Superior Whisky", "measureMl": "750"},
+        by_identity,
+        by_name,
+    )["exciseItemCode"] == 102
+
+    assert MappingService._find_existing_excise(
+        {"itemName": "McDowells No.1 Luxury Blended Whisky", "measureMl": "180"},
+        by_identity,
+        by_name,
+    )["exciseItemCode"] == 201
+
+    assert MappingService._find_existing_excise(
+        {"itemName": "McDowells No.1 Luxury Blended Whisky", "measureMl": "375"},
+        by_identity,
+        by_name,
+    )["exciseItemCode"] == 202
+
+    assert MappingService._find_existing_excise(
+        {"itemName": "McDowells No.1 Luxury Blended Whisky", "measureMl": "750"},
+        by_identity,
+        by_name,
+    )["exciseItemCode"] == 203
+
+
+def test_excise_reuse_never_falls_back_to_name_when_ml_differs():
+    items = [
+        {"exciseItemCode": 101, "itemName": "Same Whisky", "measureMl": "180"},
+        {"exciseItemCode": 102, "itemName": "Same Whisky", "measureMl": "750"},
+    ]
+    by_identity, by_name = MappingService._unmapped_indexes(items)
+
+    assert MappingService._find_existing_excise(
+        {"itemName": "Same Whisky", "measureMl": "375"},
+        by_identity,
+        by_name,
+    ) is None

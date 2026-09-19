@@ -63,24 +63,61 @@ class MappingService:
         text = re.sub(r"[^a-z0-9]+", " ", text)
         return re.sub(r"\s+", " ", text).strip()
 
+    @staticmethod
+    def _measure_key(item: dict[str, Any]) -> str:
+        value = (
+            item.get("measureMl")
+            or item.get("ml")
+            or item.get("measure")
+            or item.get("size")
+            or ""
+        )
+        text = str(value or "").strip()
+        match = re.search(r"\d{2,5}", text)
+        return match.group(0) if match else ""
+
     @classmethod
-    def _unmapped_indexes(cls, items: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-        exact: dict[str, dict[str, Any]] = {}
-        normalized: dict[str, dict[str, Any]] = {}
+    def _excise_identity_key(cls, item: dict[str, Any]) -> tuple[str, str]:
+        name = cls._normalize_excise_name(str(item.get("itemName") or ""))
+        return name, cls._measure_key(item)
+
+    @classmethod
+    def _unmapped_indexes(
+        cls,
+        items: list[dict[str, Any]],
+    ) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+        by_identity: dict[tuple[str, str], dict[str, Any]] = {}
+        by_name: dict[str, list[dict[str, Any]]] = {}
         for item in items:
             name = str(item.get("itemName") or "").strip()
             if not name:
                 continue
-            exact.setdefault(name, item)
-            key = cls._normalize_excise_name(name)
-            if key:
-                normalized.setdefault(key, item)
-        return exact, normalized
+            normalized_name = cls._normalize_excise_name(name)
+            identity = cls._excise_identity_key(item)
+            by_identity.setdefault(identity, item)
+            by_name.setdefault(normalized_name, []).append(item)
+        return by_identity, by_name
 
     @classmethod
-    def _find_existing_excise(cls, payload: dict[str, str], exact: dict[str, dict[str, Any]], normalized: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
-        name = str(payload.get("itemName") or "").strip()
-        return exact.get(name) or normalized.get(cls._normalize_excise_name(name))
+    def _find_existing_excise(
+        cls,
+        payload: dict[str, str],
+        by_identity: dict[tuple[str, str], dict[str, Any]],
+        by_name: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any] | None:
+        identity = cls._excise_identity_key(payload)
+        match = by_identity.get(identity)
+        if match:
+            return match
+
+        # Never collapse same-name products with different ML. Name-only
+        # fallback is safe only when neither side exposes a measure and there
+        # is exactly one candidate.
+        name_key, measure_key = identity
+        candidates = by_name.get(name_key, [])
+        if not measure_key and len(candidates) == 1 and not cls._measure_key(candidates[0]):
+            return candidates[0]
+        return None
 
     @staticmethod
     def _is_duplicate_error(error: Exception) -> bool:
@@ -113,8 +150,8 @@ class MappingService:
                 return code, "submitted", current_unmapped
 
             refreshed = await client.get_unmapped_items()
-            exact, normalized = self._unmapped_indexes(refreshed)
-            existing = self._find_existing_excise(payload, exact, normalized)
+            by_identity, by_name = self._unmapped_indexes(refreshed)
+            existing = self._find_existing_excise(payload, by_identity, by_name)
             if existing:
                 code = existing.get("exciseItemCode")
                 logger.info("Excise item resolved after submit code=%s item=%s", code, payload.get("itemName"))
@@ -127,8 +164,8 @@ class MappingService:
             # Compatibility fallback for older Madhushala deployments. The important
             # ordering remains Save first -> Unmapped second.
             refreshed = await client.get_unmapped_items()
-            exact, normalized = self._unmapped_indexes(refreshed)
-            existing = self._find_existing_excise(payload, exact, normalized)
+            by_identity, by_name = self._unmapped_indexes(refreshed)
+            existing = self._find_existing_excise(payload, by_identity, by_name)
             if existing:
                 code = existing.get("exciseItemCode")
                 logger.info("Excise duplicate resolved after save code=%s item=%s", code, payload.get("itemName"))
