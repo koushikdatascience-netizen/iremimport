@@ -134,6 +134,7 @@ def _product(
     ml: Any,
     box: Any = 0,
     loose: Any = 0,
+    batch_no: Any = None,
     raw: dict[str, Any],
     state: str,
     page: int,
@@ -151,6 +152,7 @@ def _product(
         ml=measure,
         box=cases,
         loose=bottles,
+        batchNo=_clean(batch_no) or None,
         quantity=None,
         packing=None,
         confidence=1,
@@ -330,7 +332,7 @@ def _extract_jharkhand(
                         products.append(item)
 
     invoice_number = (
-        _header_value(full_text, r"Excise\s*Permit\s*No\.?", r"Registered\s*Permit\s*No\.?", r"Invoice\s*No\.?")
+        _header_value(full_text, r"Invoice\s*No\.?", r"Excise\s*Permit\s*No\.?", r"Registered\s*Permit\s*No\.?", r"Permit\s*No\.?")
         or None
     )
     date_match = re.search(
@@ -358,7 +360,7 @@ def _extract_west_bengal(
 
     for page_no, _page_text, page_tables in scan_pages:
         for rows in page_tables:
-            column_map: tuple[int, int, int, int] | None = None
+            column_map: tuple[int, int, int, int, int | None] | None = None
             skip_next_header = False
             for row_index, cells in enumerate(rows):
                 keys = [_key(cell) for cell in cells]
@@ -373,8 +375,9 @@ def _extract_west_bengal(
                     unit_idx = next((i for i, value in enumerate(combined) if "measure" in value), None)
                     case_idx = next((i for i, value in enumerate(combined) if "incases" in value), None)
                     bottle_idx = next((i for i, value in enumerate(combined) if "inbottles" in value), None)
+                    batch_idx = next((i for i, value in enumerate(combined) if "batchno" in value or value == "batch"), None)
                     if None not in (name_idx, unit_idx, case_idx, bottle_idx):
-                        column_map = (int(name_idx), int(unit_idx), int(case_idx), int(bottle_idx))
+                        column_map = (int(name_idx), int(unit_idx), int(case_idx), int(bottle_idx), int(batch_idx) if batch_idx is not None else None)
                         skip_next_header = True
                     continue
 
@@ -384,8 +387,9 @@ def _extract_west_bengal(
                 if not column_map or not cells:
                     continue
 
-                name_idx, unit_idx, case_idx, bottle_idx = column_map
-                if len(cells) <= max(column_map):
+                name_idx, unit_idx, case_idx, bottle_idx, batch_idx = column_map
+                required_indexes = [name_idx, unit_idx, case_idx, bottle_idx]
+                if len(cells) <= max(required_indexes):
                     continue
                 category = _clean(cells[0]).upper()
                 if category not in {"IMFL", "OSBI", "OS"}:
@@ -403,6 +407,7 @@ def _extract_west_bengal(
                         "Measure": cells[unit_idx],
                         "In Cases": cells[case_idx],
                         "In Bottles": cells[bottle_idx],
+                        "Batch No. & Date": cells[batch_idx] if batch_idx is not None and len(cells) > batch_idx else "",
                     }
                 )
                 item = _product(
@@ -410,6 +415,7 @@ def _extract_west_bengal(
                     ml=cells[unit_idx],
                     box=cases,
                     loose=bottles,
+                    batch_no=cells[batch_idx] if batch_idx is not None and len(cells) > batch_idx else None,
                     raw=raw,
                     state="WEST_BENGAL",
                     page=page_no,
@@ -418,8 +424,11 @@ def _extract_west_bengal(
                 if item:
                     products.append(item)
 
-    number_match = re.search(r"Transport\s*Pass\s*No\.?\s*:\s*([^\n\r]+)", full_text, re.IGNORECASE)
-    invoice_number = _clean(number_match.group(1)) if number_match else None
+    compact_text = re.sub(r"\s+", "", full_text)
+    invoice_match = re.search(r"(20\d{2}-20\d{2}/W/\d{4}/\d{3}/\d{2}/\d{6})", compact_text, re.IGNORECASE)
+    pass_match = re.search(r"Transport\s*Pass\s*No\.?\s*:\s*([^\n\r]+)", full_text, re.IGNORECASE)
+    transport_pass_no = _clean(pass_match.group(1)) if pass_match else None
+    invoice_number = invoice_match.group(1) if invoice_match else transport_pass_no
     date_match = re.search(r"\bDate\s*:\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})", full_text, re.IGNORECASE)
     invoice_date = _normalize_date(date_match.group(1)) if date_match else None
     return _dedupe(products), invoice_number, invoice_date
@@ -439,7 +448,7 @@ def _extract_madhya_pradesh(
 
     for page_no, _page_text, page_tables in pages:
         for rows in page_tables:
-            mapping: tuple[int, int, int] | None = None
+            mapping: tuple[int, int, int, int | None] | None = None
             for cells in rows:
                 keys = [_key(cell) for cell in cells]
 
@@ -452,15 +461,17 @@ def _extract_madhya_pradesh(
                     ),
                     None,
                 )
+                batch_idx = next((i for i, key in enumerate(keys) if key in {"batch", "batchno", "batchnumber"}), None)
                 if label_idx is not None and capacity_idx is not None and cases_idx is not None:
-                    mapping = (label_idx, capacity_idx, cases_idx)
+                    mapping = (label_idx, capacity_idx, cases_idx, batch_idx)
                     continue
 
                 if mapping is None or not cells:
                     continue
 
-                label_idx, capacity_idx, cases_idx = mapping
-                if len(cells) <= max(mapping):
+                label_idx, capacity_idx, cases_idx, batch_idx = mapping
+                required_indexes = [label_idx, capacity_idx, cases_idx]
+                if len(cells) <= max(required_indexes):
                     continue
 
                 serial = _clean(cells[0])
@@ -483,6 +494,7 @@ def _extract_madhya_pradesh(
                         "Label Name": name,
                         "Capacity": capacity,
                         "Quantity in Cases": cells[cases_idx],
+                        "Batch": cells[batch_idx] if batch_idx is not None and len(cells) > batch_idx else "",
                         "packageType": package_type,
                     }
                 )
@@ -492,6 +504,7 @@ def _extract_madhya_pradesh(
                     ml=f"{measure} ML",
                     box=cases,
                     loose=loose,
+                    batch_no=cells[batch_idx] if batch_idx is not None and len(cells) > batch_idx else None,
                     raw=raw,
                     state="MADHYA_PRADESH",
                     page=page_no,
@@ -653,6 +666,30 @@ def _candidate_row_count(
     return len(signatures)
 
 
+def _transport_pass_number(profile: str, full_text: str) -> str | None:
+    if profile == "WEST_BENGAL_FORM3":
+        match = re.search(r"Transport\s*Pass\s*No\.?\s*:\s*([^\n\r]+)", full_text, re.IGNORECASE)
+        return _clean(match.group(1)) if match else None
+    if profile == "JHARKHAND_EXCISE":
+        value = _header_value(
+            full_text,
+            r"Excise\s*Permit\s*No\.?",
+            r"Registered\s*Permit\s*No\.?",
+            r"Permit\s*No\.?",
+        )
+        return _clean(value) if value else None
+
+    # Generic fallback for other state documents only when the label explicitly
+    # denotes a transport/pass/permit number. Do not treat challan/demand ids as TP.
+    value = _header_value(
+        full_text,
+        r"Transport\s*Pass\s*No\.?",
+        r"TP\s*Pass\s*No\.?",
+        r"Permit\s*No\.?",
+    )
+    return _clean(value) if value else None
+
+
 def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict[str, Any]]:
     """PyMuPDF-first deterministic PDF extraction.
 
@@ -734,6 +771,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             documentType="invoice",
             supplierName=None,
             invoiceNumber=invoice_number,
+            transportPassNo=_transport_pass_number(profile, full_text),
             invoiceDate=invoice_date,
             items=products,
             extractionEngine="pymupdf-state-adapter",
