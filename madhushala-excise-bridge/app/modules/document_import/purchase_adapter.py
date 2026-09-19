@@ -110,8 +110,14 @@ class DocumentPurchaseAdapter:
         # full reviewed document into only a few effective purchase lines.
         mapped_sources: dict[str, list[tuple[str, int]]] = {}
         for row, code in row_codes:
-            source_name = str(row["raw_name"] or row["normalized_name"] or row["id"] or "").strip()
-            source_ml = _int_value(row["ml"])
+            row_keys = set(row.keys()) if hasattr(row, "keys") else set()
+            source_name = str(
+                (row["raw_name"] if "raw_name" in row_keys else "")
+                or (row["normalized_name"] if "normalized_name" in row_keys else "")
+                or (row["id"] if "id" in row_keys else "")
+                or ""
+            ).strip()
+            source_ml = _int_value(row["ml"]) if "ml" in row_keys else 0
             mapped_sources.setdefault(code, []).append((source_name, source_ml))
 
         collisions: list[str] = []
