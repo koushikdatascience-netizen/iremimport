@@ -1,7 +1,7 @@
 import asyncio
 
 from app.services.mapping_service import MappingService
-from app.services.matching_service import score_dropdown_search, suggest_matches
+from app.services.matching_service import MatchIndex, score_dropdown_search, suggest_matches
 
 
 def test_excise_payload_from_captured_item():
@@ -320,3 +320,40 @@ def test_company_item_codes_uses_shared_reference_catalogue(monkeypatch):
 
     assert calls["count"] == 1
     assert codes == {"M00001", "M00002"}
+
+
+def test_indexed_suggestions_preserve_best_match_and_reduce_candidates():
+    dropdown = [
+        {"itemCode": "A00002", "itemName": "ABERFILDY 12Y 750", "ml": "750", "packing": 12},
+        {"itemCode": "A00003", "itemName": "ABSOLUT VODKA 750", "ml": "750", "packing": 12},
+        {"itemCode": "R00001", "itemName": "ROYAL GREEN WHISKY 750", "ml": "750", "packing": 12},
+    ] + [
+        {"itemCode": f"X{index:05d}", "itemName": f"UNRELATED PRODUCT {index} 180", "ml": "180", "packing": 48}
+        for index in range(500)
+    ]
+    excise_item = {
+        "itemName": "Aberfeldy Single Highland Malt Scotch Whisky Aged 12 Years, 750 Ml. (Glass Bottle)",
+        "measureMl": 750,
+        "bottlesPerCase": 12,
+    }
+
+    index = MatchIndex(dropdown)
+    candidates = index.candidates(excise_item)
+    indexed = suggest_matches(excise_item, dropdown, index=index)
+    full_scan = suggest_matches(excise_item, dropdown)
+
+    assert len(candidates) < len(dropdown) / 10
+    assert indexed[0]["item"]["itemCode"] == "A00002"
+    assert indexed == full_scan
+
+
+def test_match_index_falls_back_when_no_index_signal_exists():
+    dropdown = [
+        {"itemCode": "A1", "itemName": "ALPHA", "ml": ""},
+        {"itemCode": "B1", "itemName": "BETA", "ml": ""},
+    ]
+    index = MatchIndex(dropdown)
+
+    candidates = index.candidates({"itemName": "ZZ"})
+
+    assert candidates == dropdown
