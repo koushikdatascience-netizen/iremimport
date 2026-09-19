@@ -1115,6 +1115,26 @@ def test_llama_schema_keeps_raw_jharkhand_row_unit_and_quantity_columns():
 
 
 
+
+
+def test_telangana_icdc_extracts_separate_tp_number():
+    from app.modules.document_import.pdf_extractor import _extract_telangana, _transport_pass_number
+
+    text = (
+        "GOVERNMENT OF TELANGANA\n"
+        "INVOICE CUM DELIVERY CHALLAN\n"
+        "ICDC001261225018613\n"
+        "ICDC Number ICDC001261225018613\n"
+        "Invoice Date: 26-Dec-2025\n"
+        "T.P.Number: TP001261225018613"
+    )
+
+    _, doc_no, _ = _extract_telangana(text, [])
+    tp_no = _transport_pass_number("TELANGANA_ICDC", text)
+
+    assert doc_no == "ICDC001261225018613"
+    assert tp_no == "TP001261225018613"
+
 def test_document_identifiers_separate_invoice_and_transport_pass_by_profile():
     from app.modules.document_import.pdf_extractor import (
         _extract_jharkhand,
