@@ -39,6 +39,11 @@ CACHE_EVENTS_TOTAL = Counter(
     "Cache events by backend/result.",
     ("backend", "result"),
 )
+PURCHASE_SAVE_DURATION_SECONDS = Histogram(
+    "madhushala_bridge_purchase_save_duration_seconds",
+    "End-to-end Madhushala purchase-save request duration.",
+    ("status",),
+)
 
 
 def get_correlation_id() -> str:
@@ -138,6 +143,12 @@ def observe_cache(backend: str, result: str) -> None:
         backend=str(backend or "unknown"),
         result=str(result or "unknown"),
     ).inc()
+
+
+def observe_purchase_save(status: str, duration_seconds: float) -> None:
+    PURCHASE_SAVE_DURATION_SECONDS.labels(
+        status=str(status or "unknown").lower(),
+    ).observe(max(0.0, duration_seconds))
 
 
 def monotonic_seconds() -> float:
