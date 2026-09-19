@@ -1099,6 +1099,47 @@ def test_west_bengal_ignores_duplicate_triplicate_and_quadruplicate_copies():
     assert products[0].box == 3
     assert products[0].loose == 0
 
+
+
+def test_jharkhand_scanned_row14_quantity_repair():
+    from app.modules.document_import.llama_client import _canonicalize_jharkhand_product_payload
+
+    fixed = _canonicalize_jharkhand_product_payload(
+        {
+            "itemName": "ROYAL CHALLENGE FINEST PREMIUM WHISKY",
+            "ml": 750,
+            "sourceUnitName": "750 ML",
+            "sourceQuantityText": "1.00",
+            "box": None,
+            "loose": None,
+        }
+    )
+
+    assert fixed["ml"] == 750
+    assert fixed["box"] == 1
+    assert fixed["loose"] == 0
+    assert fixed["quantitySemantics"] == "jharkhand_cases_dot_loose"
+
+
+def test_jharkhand_scanned_continuation_row_recovers_ml_and_quantity():
+    from app.modules.document_import.llama_client import _canonicalize_jharkhand_product_payload
+
+    fixed = _canonicalize_jharkhand_product_payload(
+        {
+            "itemName": "STERLING RESERVE B7 ORIGINAL BLENDED WHISKY (R-PET)",
+            "ml": None,
+            "sourceUnitName": "180 ML",
+            "sourceQuantityText": "4.00",
+            "box": None,
+            "loose": None,
+        }
+    )
+
+    assert fixed["ml"] == 180
+    assert fixed["box"] == 4
+    assert fixed["loose"] == 0
+    assert fixed["sourceState"] == "JHARKHAND"
+
 def test_jharkhand_llama_quantity_decoder_preserves_two_digit_loose_suffix():
     from app.modules.document_import.llama_client import _decode_jharkhand_quantity_text
 
