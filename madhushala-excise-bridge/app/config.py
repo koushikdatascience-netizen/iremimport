@@ -79,6 +79,9 @@ class Settings:
     # horizontally scalable without changing the purchase flow.
     REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
     CACHE_PREFIX: str = os.getenv("CACHE_PREFIX", "madhushala-bridge:v1")
+    CACHE_LOCK_TTL_SECONDS: int = int(os.getenv("CACHE_LOCK_TTL_SECONDS", "30"))
+    CACHE_LOCK_WAIT_SECONDS: float = float(os.getenv("CACHE_LOCK_WAIT_SECONDS", "10"))
+    CACHE_LOCK_POLL_SECONDS: float = float(os.getenv("CACHE_LOCK_POLL_SECONDS", "0.05"))
     CACHE_MASTER_TTL_SECONDS: int = int(os.getenv("CACHE_MASTER_TTL_SECONDS", "1800"))
     CACHE_USER_TTL_SECONDS: int = int(os.getenv("CACHE_USER_TTL_SECONDS", "900"))
     CACHE_SCHEME_TTL_SECONDS: int = int(os.getenv("CACHE_SCHEME_TTL_SECONDS", "900"))
