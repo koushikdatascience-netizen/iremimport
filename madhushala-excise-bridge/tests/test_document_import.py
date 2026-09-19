@@ -1055,7 +1055,10 @@ async def test_west_bengal_native_extraction_never_merges_llama_copy_rows(monkey
         should_not_run_llama,
     )
 
-    service = DocumentImportService()
+    class FakeMappingService:
+        pass
+
+    service = DocumentImportService(FakeMappingService())
     extracted, meta = await service._extract_upload_part(
         b"%PDF-1.4 wb-test",
         "pdf",
