@@ -1130,6 +1130,56 @@ def test_west_bengal_form3_keeps_all_six_original_rows_with_distinct_ml():
 
 
 
+
+
+def test_west_bengal_watermark_contaminated_signature_row_is_not_dropped():
+    from app.modules.document_import.pdf_extractor import _extract_west_bengal
+
+    rows = [
+        [
+            "Kind of Foreign Liquor(IMFL/OSBI/OS)", "Category", "Brand Name", "Measure",
+            "Strength", "Batch No. & Date", "Quantity", "", "", "", "Amount",
+        ],
+        ["", "", "", "", "", "", "In Cases", "In Bottles", "In B.L", "In LPL", ""],
+        [
+            "IMFL",
+            "Whisky",
+            "Signature Premier Grain\nWhisky [Pet Bottle]",
+            "180 Ml.",
+            "42.8 %v/v",
+            "220-4&\nJuly,2026",
+            "g\n1 - 0\n.",
+            "48",
+            "8.64",
+            "6.48",
+            "6739.20",
+        ],
+    ]
+
+    products, _, _ = _extract_west_bengal(
+        "Transport Pass No. : tFLDR/2026-2027/06975939/P\nDate : 10/08/2026",
+        [(2, "ORIGINAL\nWest Bengal Excise Foreign Liquor Form No 3", [rows])],
+    )
+
+    assert len(products) == 1
+    assert products[0].itemName == "Signature Premier Grain Whisky [Pet Bottle]"
+    assert products[0].ml == 180
+    assert products[0].box == 1
+    assert products[0].loose == 0
+    assert products[0].batchNo == "220-4& July,2026"
+
+
+def test_west_bengal_noise_cleanup_preserves_real_batch_and_measure_values():
+    from app.modules.document_import.pdf_extractor import (
+        _clean_west_bengal_case,
+        _clean_west_bengal_noise_lines,
+    )
+
+    assert _clean_west_bengal_case("g\n1 - 0\n.") == "1 - 0"
+    assert _clean_west_bengal_noise_lines("e\n258-2&\nJuly,2026") == "258-2& July,2026"
+    assert _clean_west_bengal_noise_lines("s\ni\n079-1&\nMay,2026") == "079-1& May,2026"
+    assert _clean_west_bengal_noise_lines("e\n375 Ml.") == "375 Ml."
+
 def test_west_bengal_brand_cleanup_removes_only_standalone_watermark_w():
     from app.modules.document_import.pdf_extractor import _clean_west_bengal_brand
 
