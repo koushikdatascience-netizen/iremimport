@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -82,7 +83,12 @@ EXTRACTION_PROMPT = (
     "Special Jharkhand rule: when the table heading is 'Quantity (Cases)' on a Jharkhand State Beverages "
     "Corporation invoice, the printed value uses CASES.LOOSE notation, not a decimal fraction. For example "
     "17.20 means box=17 and loose=20, 15.00 means box=15 and loose=0, and 2.04 means box=2 and loose=4. "
-    "Keep sourceQuantityText exactly as printed, including trailing zeroes. Special Madhya Pradesh rule: "
+    "Keep sourceQuantityText exactly as printed, including trailing zeroes. Special West Bengal rule: "
+    "for West Bengal Excise Foreign Liquor Form No. 3 transport passes, extract product rows only from the "
+    "top-level copy marked ORIGINAL. Ignore DUPLICATE, TRIPLICATE and QUADRUPLICATE copies of the same pass. "
+    "For that WB form, use the compound 'In Cases' value as the purchase quantity: for example '3 - 0' means "
+    "box=3 and loose=0. The separate 'In Bottles' column is audit-only for this purchase flow and must not "
+    "populate loose. Special Madhya Pradesh rule: "
     "for 'Madhya Pradesh Excise Department' 'Delivery Challan' documents, the 'Capacity' column is the "
     "bottle/container capacity and must populate ml (for example '180 (Pet Bottle)' means ml=180 and "
     "packageType='Pet Bottle'); it is never a quantity. 'Quantity in Cases' is the case count, so set box "
@@ -221,6 +227,28 @@ class LlamaCloudClient:
         invoice_date = None
         document_profile = None
 
+        wb_original_page: int | None = None
+        source_doc = fitz.open(file_path)
+        try:
+            page_labels: dict[int, str] = {}
+            for index, page in enumerate(source_doc, start=1):
+                text = page.get_text("text") or ""
+                top = "\n".join(text.splitlines()[:25]).upper()
+                label = ""
+                if "QUADRUPLICATE" in top:
+                    label = "QUADRUPLICATE"
+                elif "TRIPLICATE" in top:
+                    label = "TRIPLICATE"
+                elif "DUPLICATE" in top:
+                    label = "DUPLICATE"
+                elif re.search(r"\bORIGINAL\b", top):
+                    label = "ORIGINAL"
+                page_labels[index] = label
+                if label == "ORIGINAL" and wb_original_page is None:
+                    wb_original_page = index
+        finally:
+            source_doc.close()
+
         for page_number, page_document in page_results:
             if document_type == "unknown" and page_document.documentType != "unknown":
                 document_type = page_document.documentType
@@ -233,9 +261,24 @@ class LlamaCloudClient:
             if not document_profile and "jharkhand" in str(page_document.supplierName or "").casefold():
                 document_profile = "JHARKHAND_STATE_BEVERAGES"
 
+            page_label = page_labels.get(page_number, "")
+            is_wb_page = "west bengal" in str(page_document.supplierName or "").casefold() or (
+                "WEST_BENGAL" in str(page_profile or "").upper()
+            )
+            if wb_original_page is not None and page_label in {"DUPLICATE", "TRIPLICATE", "QUADRUPLICATE"}:
+                continue
+
             for item in page_document.items:
                 payload = item.model_dump()
                 payload["sourcePage"] = page_number
+                if wb_original_page is not None and page_number == wb_original_page:
+                    case_text = str(payload.get("box") or payload.get("sourceQuantityText") or "").strip()
+                    match = re.fullmatch(r"(\d+)\s*[-.]\s*(\d+)", case_text)
+                    if match:
+                        payload["box"] = int(match.group(1))
+                        payload["loose"] = int(match.group(2))
+                        payload["quantitySemantics"] = "west_bengal_case_field_only"
+                        payload["sourceState"] = "WEST_BENGAL"
                 merged_items.append(ExtractedProduct.model_validate(payload))
 
         if document_profile == "JHARKHAND_STATE_BEVERAGES":
