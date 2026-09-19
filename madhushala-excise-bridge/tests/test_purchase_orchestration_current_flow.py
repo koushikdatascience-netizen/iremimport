@@ -263,6 +263,16 @@ async def test_orchestrator_mirrors_current_itemwise_save_payload(monkeypatch):
             captured["save"] = json.loads(json.dumps(payload))
             return {"success": True, "trnNo": "1024"}
 
+        async def get_purchase_for_edit(self, company_code, year_code, trn_no):
+            captured["readback_args"] = (company_code, year_code, trn_no)
+            return {
+                "items": [{
+                    "itemCode": "100003",
+                    "batchNo": "1",
+                    "qnty": 48,
+                }]
+            }
+
     result = await purchase_orchestrator.execute(
         session={"shop_code": "hedu_test", "company_code": "2"},
         job_id="job-1",
@@ -310,6 +320,9 @@ async def test_orchestrator_mirrors_current_itemwise_save_payload(monkeypatch):
     assert saved["items"][0]["batchNo"] == "1"
     assert saved["items"][0]["rate"] == 10.42
     assert saved["items"][0]["mrp"] == 280.0
+    assert captured["readback_args"] == ("2", "", "1024")
+    assert result["batchPersistence"]["checked"] is True
+    assert result["batchPersistence"]["ok"] is True
     assert saved["items"][0]["itemAmount"] == 500.0
     assert "packing" not in saved["items"][0]
     assert "boxRate" not in saved["items"][0]
@@ -1138,3 +1151,16 @@ async def test_purchase_adapter_blocks_different_source_rows_mapped_to_same_item
 
     assert exc_info.value.status_code == 409
     assert "same Madhushala item" in str(exc_info.value.detail)
+
+
+def test_batch_persistence_result_detects_upstream_missing_batch():
+    result = purchase_orchestrator._batch_persistence_result(
+        [{"itemCode": "M001", "batchNo": "220-4& July,2026"}],
+        {"items": [{"itemCode": "M001", "batchNo": ""}]},
+    )
+
+    assert result["checked"] is True
+    assert result["ok"] is False
+    assert result["missing"] == [
+        {"itemCode": "M001", "batchNo": "220-4& July,2026"}
+    ]
