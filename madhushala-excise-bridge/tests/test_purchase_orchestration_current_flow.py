@@ -231,6 +231,7 @@ async def test_orchestrator_mirrors_current_itemwise_save_payload(monkeypatch):
             return {
                 "items": [{
                     "itemCode": "100003",
+                    "batchNo": "",
                     "quantity": 48,
                     "looseRate": 10.42,
                     "mrp": 280,
@@ -306,6 +307,7 @@ async def test_orchestrator_mirrors_current_itemwise_save_payload(monkeypatch):
     assert saved["taxAmount"] == 110.0
     assert saved["netAmount"] == 610.0
     assert saved["items"][0]["qnty"] == 48
+    assert saved["items"][0]["batchNo"] == "1"
     assert saved["items"][0]["rate"] == 10.42
     assert saved["items"][0]["mrp"] == 280.0
     assert saved["items"][0]["itemAmount"] == 500.0
