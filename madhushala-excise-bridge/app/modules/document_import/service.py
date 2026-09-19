@@ -614,7 +614,7 @@ class DocumentImportService:
                         "fallbackReason": meta.get("reason") or "no_usable_local_extraction",
                         "pageItemCounts": getattr(extracted, "pageItemCounts", None),
                     }
-                elif meta.get("needsFallback"):
+                elif meta.get("needsFallback") and meta.get("profile") != "WEST_BENGAL_FORM3":
                     secondary = await LlamaCloudClient().extract_scanned_pdf_pages(temp_path, filename)
                     primary_count = len(extracted.items or [])
                     secondary_count = len(secondary.items or [])
@@ -627,6 +627,18 @@ class DocumentImportService:
                         "primaryProductCount": primary_count,
                         "secondaryProductCount": secondary_count,
                         "mergedProductCount": len(extracted.items or []),
+                    }
+                elif meta.get("profile") == "WEST_BENGAL_FORM3":
+                    # WB Form No. 3 contains ORIGINAL/DUPLICATE/TRIPLICATE/
+                    # QUADRUPLICATE copies of the same liquor table. Once the
+                    # deterministic ORIGINAL table is found, never merge a
+                    # page-by-page Llama extraction back into it or repeated
+                    # copy rows will be reintroduced.
+                    meta = {
+                        **meta,
+                        "engine": "pymupdf-state-adapter",
+                        "needsFallback": False,
+                        "fallbackSuppressed": "west_bengal_original_is_authoritative",
                     }
                 else:
                     meta = {
