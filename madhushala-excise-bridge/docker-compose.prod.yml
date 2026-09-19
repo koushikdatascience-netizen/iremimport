@@ -1,6 +1,24 @@
 name: madhushala-automation-platform
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-madhushala_bridge}
+      POSTGRES_USER: ${POSTGRES_USER:-madhushala_bridge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required when the postgres profile is enabled}
+    volumes:
+      - madhushala_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-madhushala_bridge} -d ${POSTGRES_DB:-madhushala_bridge}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
   web:
     build:
       context: .
@@ -36,3 +54,5 @@ volumes:
   madhushala_automation_data:
     external: true
     name: madhushala-automation-platform_madhushala_automation_data
+  madhushala_postgres_data:
+    name: madhushala-automation-platform_postgres_data
