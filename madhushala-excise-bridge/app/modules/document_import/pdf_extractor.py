@@ -743,8 +743,28 @@ def _candidate_row_count(
     """
     selected_pages = pages
     if profile == "WEST_BENGAL_FORM3":
-        originals = [entry for entry in pages if re.search(r"\bORIGINAL\b", entry[1], re.IGNORECASE)]
+        def copy_label(page_text: str) -> str:
+            top_lines = [line.strip().upper() for line in (page_text or "").splitlines()[:25] if line.strip()]
+            for label in ("QUADRUPLICATE", "TRIPLICATE", "DUPLICATE", "ORIGINAL"):
+                if any(line == label for line in top_lines):
+                    return label
+            return ""
+
+        originals = [entry for entry in pages if copy_label(entry[1]) == "ORIGINAL"]
         selected_pages = originals or pages[:2]
+
+        # Independent text-layer completeness count. This does not depend on
+        # find_tables(), so a whole WB row cannot disappear silently if table
+        # detection or a watermark damages one cell.
+        text_rows: set[tuple[int, int]] = set()
+        for page_no, page_text, _page_tables in selected_pages:
+            row_index = 0
+            for line in (page_text or "").splitlines():
+                if re.match(r"^\s*(?:IMFL|OSBI|OS)\b", line, re.IGNORECASE):
+                    row_index += 1
+                    text_rows.add((page_no, row_index))
+        if text_rows:
+            return len(text_rows)
 
     signatures: set[str] = set()
 
