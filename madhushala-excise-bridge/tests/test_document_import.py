@@ -980,6 +980,65 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
 
 
 
+
+
+def test_pdf_dedupe_preserves_same_name_same_quantity_when_ml_differs():
+    from app.modules.document_import.pdf_extractor import _dedupe
+    from app.modules.document_import.schemas import ExtractedProduct
+
+    rows = [
+        ExtractedProduct(
+            itemName="McDowell's No. 1 Superior Whisky",
+            brand="McDowell's No. 1 Superior Whisky",
+            ml=180,
+            box=1,
+            loose=0,
+            sourcePage=1,
+            rawPdfRow={"column1": "IMFL"},
+        ),
+        ExtractedProduct(
+            itemName="McDowell's No. 1 Superior Whisky",
+            brand="McDowell's No. 1 Superior Whisky",
+            ml=750,
+            box=1,
+            loose=0,
+            sourcePage=1,
+            rawPdfRow={"column1": "IMFL"},
+        ),
+        ExtractedProduct(
+            itemName="McDowells No.1 Luxury Blended Whisky",
+            brand="McDowells No.1 Luxury Blended Whisky",
+            ml=180,
+            box=3,
+            loose=0,
+            sourcePage=1,
+            rawPdfRow={"column1": "IMFL"},
+        ),
+        ExtractedProduct(
+            itemName="McDowells No.1 Luxury Blended Whisky",
+            brand="McDowells No.1 Luxury Blended Whisky",
+            ml=375,
+            box=3,
+            loose=0,
+            sourcePage=1,
+            rawPdfRow={"column1": "IMFL"},
+        ),
+        ExtractedProduct(
+            itemName="McDowells No.1 Luxury Blended Whisky",
+            brand="McDowells No.1 Luxury Blended Whisky",
+            ml=750,
+            box=3,
+            loose=0,
+            sourcePage=1,
+            rawPdfRow={"column1": "IMFL"},
+        ),
+    ]
+
+    deduped = _dedupe(rows)
+
+    assert len(deduped) == 5
+    assert [int(item.ml) for item in deduped] == [180, 750, 180, 375, 750]
+
 def test_west_bengal_form3_keeps_all_six_original_rows_with_distinct_ml():
     from app.modules.document_import.pdf_extractor import _extract_west_bengal
 
