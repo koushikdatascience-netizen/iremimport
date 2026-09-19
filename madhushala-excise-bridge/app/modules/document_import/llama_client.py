@@ -29,6 +29,7 @@ PRODUCT_SCHEMA: dict[str, Any] = {
                     "itemName": {"type": "string"},
                     "brand": {"type": "string"},
                     "ml": {"type": ["integer", "string", "null"]},
+                    "sourceUnitText": {"type": ["string", "null"]},
                     "packing": {"type": ["integer", "string", "null"]},
                     "quantity": {"type": ["number", "string", "null"]},
                     "sourceQuantityText": {"type": ["string", "null"]},
@@ -77,8 +78,10 @@ EXTRACTION_PROMPT = (
     "invoiceDate as the source document date, and documentProfile. Set documentProfile to "
     "'JHARKHAND_STATE_BEVERAGES' when the page/document is issued by JHARKHAND STATE BEVERAGES CORPORATION "
     "LIMITED or is a continuation of that invoice format; otherwise use null unless another profile is known. "
-    "For every product preserve the complete printed liquor name in itemName and brand, and extract the "
-    "ML/measure. Always copy the exact printed quantity cell text into sourceQuantityText before interpreting "
+    "For every product preserve the complete printed liquor name in itemName and brand. Always copy the exact "
+    "printed Unit Name/Measure cell into sourceUnitText, and extract its ML value into ml. For example, Unit Name "
+    "'180 ML' means sourceUnitText='180 ML' and ml=180. Always copy the exact printed quantity cell text into "
+    "sourceQuantityText before interpreting "
     "it. Quantity semantics are strict: box means CASES/CARTONS and loose means individual BOTTLES/LOOSE UNITS. "
     "Special Jharkhand rule: when the table heading is 'Quantity (Cases)' on a Jharkhand State Beverages "
     "Corporation invoice, the printed value uses CASES.LOOSE notation, not a decimal fraction. For example "
@@ -285,15 +288,33 @@ class LlamaCloudClient:
             corrected_items: list[ExtractedProduct] = []
             for item in merged_items:
                 payload = item.model_dump()
-                raw_quantity = payload.get("sourceQuantityText")
-                decoded = _decode_jharkhand_quantity_text(raw_quantity)
+                quantity_candidates = (
+                    payload.get("sourceQuantityText"),
+                    payload.get("box"),
+                    payload.get("quantity"),
+                )
+                decoded = next(
+                    (
+                        value
+                        for candidate in quantity_candidates
+                        if (value := _decode_jharkhand_quantity_text(candidate)) is not None
+                    ),
+                    None,
+                )
                 if decoded is not None:
                     box, loose = decoded
                     payload["box"] = box
                     payload["loose"] = loose
-                    payload["quantity"] = raw_quantity
+                    payload["quantity"] = payload.get("sourceQuantityText") or payload.get("quantity")
                     payload["quantitySemantics"] = "jharkhand_cases_dot_loose"
                     payload["sourceState"] = "JHARKHAND"
+
+                if not payload.get("ml"):
+                    unit_text = str(payload.get("sourceUnitText") or "").strip()
+                    unit_match = re.search(r"(\d{2,5})\s*m\.?l\.?", unit_text, re.IGNORECASE)
+                    if unit_match:
+                        payload["ml"] = int(unit_match.group(1))
+
                 corrected_items.append(ExtractedProduct.model_validate(payload))
             merged_items = corrected_items
 
