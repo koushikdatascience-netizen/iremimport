@@ -42,6 +42,14 @@ jobs:
       - name: Compile application
         run: python -m compileall -q app
 
+      - name: Validate production Compose
+        env:
+          POSTGRES_PASSWORD: ci-placeholder-password
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.prod.yml -f docker-compose.observability.yml config >/dev/null
+          rm -f .env
+
       - name: Run tests
         run: pytest -q
 
@@ -136,6 +144,13 @@ jobs:
             -v "$BACKUPS:/backup" \
             alpine sh -c "tar czf /backup/madhushala-data-$STAMP-$SHORT_SHA.tar.gz -C /data ."
 
+          if docker inspect madhushala_postgres >/dev/null 2>&1; then
+            echo "== Back up PostgreSQL =="
+            docker exec madhushala_postgres \
+              pg_dump -U madhushala_bridge -d madhushala_bridge \
+              | gzip > "$BACKUPS/madhushala-postgres-$STAMP-$SHORT_SHA.sql.gz"
+          fi
+
           echo "== Create immutable release =="
           mkdir -p "$RELEASE_ROOT"
           git -C "$REPO" archive "$DEPLOY_SHA" "$SERVICE_DIR" | tar -x -C "$RELEASE_ROOT"
@@ -157,6 +172,47 @@ jobs:
             fi
           fi
           chmod 600 "$APP_DIR/.env" "$CONFIG_ENV" || true
+
+          set_env_value() {
+            key="$1"
+            value="$2"
+            file="$3"
+            tmp="$(mktemp)"
+            awk -F= -v key="$key" '$1 != key { print }' "$file" > "$tmp"
+            printf '%s=%s\n' "$key" "$value" >> "$tmp"
+            mv "$tmp" "$file"
+            chmod 600 "$file"
+          }
+
+          CURRENT_DATABASE_URL="$(grep -E '^DATABASE_URL=' "$CONFIG_ENV" | tail -n 1 | cut -d= -f2- || true)"
+          MIGRATE_SQLITE=0
+          LOCAL_POSTGRES=0
+
+          if printf '%s' "$CURRENT_DATABASE_URL" | grep -Eq '^postgres(ql)?://'; then
+            DATABASE_URL="$CURRENT_DATABASE_URL"
+            if printf '%s' "$DATABASE_URL" | grep -q '@postgres:5432/'; then
+              LOCAL_POSTGRES=1
+              POSTGRES_PASSWORD="$(grep -E '^POSTGRES_PASSWORD=' "$CONFIG_ENV" | tail -n 1 | cut -d= -f2- || true)"
+              if [ -z "$POSTGRES_PASSWORD" ]; then
+                echo "ERROR: local PostgreSQL URL exists but POSTGRES_PASSWORD is missing"
+                exit 1
+              fi
+            fi
+            echo "Database backend: PostgreSQL"
+          else
+            echo "Database backend: SQLite; one-time migration to local PostgreSQL required"
+            MIGRATE_SQLITE=1
+            LOCAL_POSTGRES=1
+            POSTGRES_PASSWORD="$(grep -E '^POSTGRES_PASSWORD=' "$CONFIG_ENV" | tail -n 1 | cut -d= -f2- || true)"
+            if [ -z "$POSTGRES_PASSWORD" ]; then
+              POSTGRES_PASSWORD="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+            fi
+            DATABASE_URL="postgresql://madhushala_bridge:$POSTGRES_PASSWORD@postgres:5432/madhushala_bridge"
+          fi
+
+          if [ "$LOCAL_POSTGRES" -eq 1 ]; then
+            export POSTGRES_PASSWORD
+          fi
 
           echo "== Validate Compose uses the live production identity =="
           cd "$APP_DIR"
@@ -188,8 +244,63 @@ jobs:
             exit 1
           fi
 
-          echo "== Deploy application =="
-          dc up -d --no-deps web
+          if [ "$LOCAL_POSTGRES" -eq 1 ]; then
+            echo "== Start PostgreSQL =="
+            dc --profile local-postgres up -d postgres
+
+            POSTGRES_READY=0
+            for attempt in $(seq 1 30); do
+              if dc --profile local-postgres exec -T postgres \
+                pg_isready -U madhushala_bridge -d madhushala_bridge >/dev/null 2>&1; then
+                POSTGRES_READY=1
+                break
+              fi
+              sleep 2
+            done
+            if [ "$POSTGRES_READY" -ne 1 ]; then
+              echo "ERROR: PostgreSQL did not become ready"
+              dc --profile local-postgres logs --tail=150 postgres
+              exit 1
+            fi
+          fi
+
+          if [ "$MIGRATE_SQLITE" -eq 1 ]; then
+            echo "== Quiesce old API for consistent SQLite migration =="
+            OLD_WEB_STOPPED=0
+            if docker inspect "$LIVE_CONTAINER" >/dev/null 2>&1; then
+              docker stop "$LIVE_CONTAINER" >/dev/null
+              OLD_WEB_STOPPED=1
+            fi
+            migration_failed() {
+              if [ "$OLD_WEB_STOPPED" -eq 1 ]; then
+                echo "Migration failed; restarting previous production container"
+                docker start "$LIVE_CONTAINER" >/dev/null 2>&1 || true
+              fi
+            }
+            trap migration_failed ERR
+
+            echo "== Migrate SQLite to PostgreSQL =="
+            docker run --rm \
+              --network madhushala-automation-platform_default \
+              -e DATABASE_URL="$DATABASE_URL" \
+              -e SQLITE_PATH=/app/data/bridge.db \
+              -v "$LIVE_VOLUME:/app/data:ro" \
+              madhushala-automation-platform-web:latest \
+              python -m app.migrate_sqlite_to_postgres
+
+            set_env_value "POSTGRES_PASSWORD" "$POSTGRES_PASSWORD" "$CONFIG_ENV"
+            set_env_value "DATABASE_URL" "$DATABASE_URL" "$CONFIG_ENV"
+            set_env_value "DB_POOL_MIN_SIZE" "1" "$CONFIG_ENV"
+            set_env_value "DB_POOL_MAX_SIZE" "10" "$CONFIG_ENV"
+            cp "$CONFIG_ENV" "$APP_DIR/.env"
+            chmod 600 "$APP_DIR/.env"
+            trap - ERR
+          else
+            cp "$CONFIG_ENV" "$APP_DIR/.env"
+          fi
+
+          echo "== Deploy singleton browser plus two API replicas =="
+          dc up -d web api1 api2 api-gateway
 
           echo "== Health check =="
           HEALTHY=0
@@ -204,7 +315,7 @@ jobs:
           if [ "$HEALTHY" -ne 1 ]; then
             echo "ERROR: health check failed"
             dc ps
-            dc logs --tail=200 web
+            dc logs --tail=200 api-gateway api1 api2 web
             exit 1
           fi
 
