@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from app.config import settings
+from app.observability import observe_cache
 
 
 logger = logging.getLogger("madhushala-excise-bridge.cache")
@@ -84,17 +85,21 @@ class CacheService:
             try:
                 raw = await redis_client.get(full_key)
                 if raw is not None:
+                    observe_cache("redis", "hit")
                     return json.loads(raw)
+                observe_cache("redis", "miss")
             except Exception as exc:
                 logger.warning("cache_get redis_failed key=%s error=%s", key, exc)
 
         entry = self._memory.get(full_key)
         if entry is None:
+            observe_cache("memory", "miss")
             return None
         if entry.expires_at <= time.monotonic():
             self._memory.pop(full_key, None)
             return None
         try:
+            observe_cache("memory", "hit")
             return json.loads(entry.value)
         except Exception:
             self._memory.pop(full_key, None)
@@ -215,6 +220,18 @@ class CacheService:
                     return value
 
                 await asyncio.sleep(max(0.01, float(settings.CACHE_LOCK_POLL_SECONDS)))
+
+    async def ping(self) -> bool:
+        if not settings.REDIS_URL:
+            return True
+        redis_client = await self._redis_client()
+        if redis_client is None:
+            return False
+        try:
+            return bool(await redis_client.ping())
+        except Exception as exc:
+            logger.warning("cache_ping_failed error=%s", exc)
+            return False
 
     async def close(self) -> None:
         if self._redis is not None:
