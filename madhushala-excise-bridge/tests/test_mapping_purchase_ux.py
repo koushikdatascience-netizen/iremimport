@@ -46,3 +46,11 @@ def test_purchase_context_runs_on_mapping_page_and_restores_header():
     assert 'restoreMappingHeader()' in script
     assert 'window.applyPurchaseHeader(window.loadPurchaseHeader(jobId))' in script
     assert 'window.__purchaseContext' in script
+
+
+def test_mapping_frontend_preserves_structured_auth_error_code():
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+
+    assert 'error.code = detail.code;' in script
+    assert 'MADHUSHALA_AUTH_EXPIRED' in script
+    assert 'Madhushala login expired. Please reopen Excise Import from Madhushala CRM' in script
