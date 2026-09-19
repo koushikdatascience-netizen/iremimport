@@ -347,7 +347,18 @@ async function api(path, options = {}) {
         }
     }
     if (!response.ok) {
-        throw new Error(data?.detail || data?.error || `HTTP ${response.status}`);
+        const detail = data?.detail;
+        const message = (
+            detail && typeof detail === "object"
+                ? (detail.message || detail.error || JSON.stringify(detail))
+                : (detail || data?.error || `HTTP ${response.status}`)
+        );
+        const error = new Error(message);
+        error.status = response.status;
+        if (detail && typeof detail === "object" && detail.code) {
+            error.code = detail.code;
+        }
+        throw error;
     }
     return data;
 }
@@ -734,7 +745,16 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
         renderWorkspace();
         if (previousSearch) runSearch();
     } catch (error) {
-        if (!options.quiet) showToast(error.message || "Could not load mapping", "error");
+        if (!options.quiet) {
+            const authExpired = error?.code === "MADHUSHALA_AUTH_EXPIRED"
+                || String(error?.message || "").includes("Madhushala login/JWT is expired");
+            showToast(
+                authExpired
+                    ? "Madhushala login expired. Please reopen Excise Import from Madhushala CRM, then continue this import."
+                    : (error.message || "Could not load mapping"),
+                "error",
+            );
+        }
     }
 }
 
