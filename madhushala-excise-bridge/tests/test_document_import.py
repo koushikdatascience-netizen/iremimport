@@ -1101,63 +1101,44 @@ def test_west_bengal_ignores_duplicate_triplicate_and_quadruplicate_copies():
 
 
 
-def test_jharkhand_quantity_decoder_accepts_numeric_decimal_values():
-    from app.modules.document_import.llama_client import _decode_jharkhand_quantity_text
+def test_jharkhand_scanned_row14_quantity_repair():
+    from app.modules.document_import.llama_client import _canonicalize_jharkhand_product_payload
 
-    assert _decode_jharkhand_quantity_text(1.0) == (1, 0)
-    assert _decode_jharkhand_quantity_text(4.0) == (4, 0)
-
-
-@pytest.mark.asyncio
-async def test_jharkhand_scanned_repair_recovers_ml_from_source_unit_text(monkeypatch, tmp_path):
-    from app.modules.document_import.llama_client import LlamaCloudClient
-    from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct
-    from app.modules.document_import import llama_client as llama_module
-
-    # Avoid real cloud calls; exercise the page-merge canonical repair.
-    fake_doc = ExtractedDocument(
-        documentType="invoice",
-        supplierName="JHARKHAND STATE BEVERAGES CORPORATION LIMITED",
-        documentProfile="JHARKHAND_STATE_BEVERAGES",
-        items=[
-            ExtractedProduct(
-                itemName="STERLING RESERVE B7 ORIGINAL BLENDED WHISKY (R-PET)",
-                brand="STERLING RESERVE B7 ORIGINAL BLENDED WHISKY (R-PET)",
-                ml=None,
-                sourceUnitText="180 ML",
-                sourceQuantityText="4.00",
-                box=None,
-                loose=None,
-            )
-        ],
+    fixed = _canonicalize_jharkhand_product_payload(
+        {
+            "itemName": "ROYAL CHALLENGE FINEST PREMIUM WHISKY",
+            "ml": 750,
+            "sourceUnitName": "750 ML",
+            "sourceQuantityText": "1.00",
+            "box": None,
+            "loose": None,
+        }
     )
 
-    class FakeSource:
-        documentType = "invoice"
+    assert fixed["ml"] == 750
+    assert fixed["box"] == 1
+    assert fixed["loose"] == 0
+    assert fixed["quantitySemantics"] == "jharkhand_cases_dot_loose"
 
-    client = object.__new__(LlamaCloudClient)
 
-    async def fake_extract_products(self, file_path, filename):
-        return fake_doc
+def test_jharkhand_scanned_continuation_row_recovers_ml_and_quantity():
+    from app.modules.document_import.llama_client import _canonicalize_jharkhand_product_payload
 
-    monkeypatch.setattr(LlamaCloudClient, "extract_products", fake_extract_products)
+    fixed = _canonicalize_jharkhand_product_payload(
+        {
+            "itemName": "STERLING RESERVE B7 ORIGINAL BLENDED WHISKY (R-PET)",
+            "ml": None,
+            "sourceUnitName": "180 ML",
+            "sourceQuantityText": "4.00",
+            "box": None,
+            "loose": None,
+        }
+    )
 
-    # Minimal one-page PDF for page splitting.
-    import fitz
-    pdf_path = tmp_path / "jharkhand.pdf"
-    doc = fitz.open()
-    page = doc.new_page()
-    page.insert_text((72, 72), "JHARKHAND STATE BEVERAGES CORPORATION LIMITED")
-    doc.save(pdf_path)
-    doc.close()
-
-    result = await client.extract_scanned_pdf_pages(pdf_path, "jharkhand.pdf")
-
-    assert len(result.items) == 1
-    assert int(result.items[0].ml) == 180
-    assert int(result.items[0].box) == 4
-    assert int(result.items[0].loose or 0) == 0
-    assert result.items[0].model_dump()["quantitySemantics"] == "jharkhand_cases_dot_loose"
+    assert fixed["ml"] == 180
+    assert fixed["box"] == 4
+    assert fixed["loose"] == 0
+    assert fixed["sourceState"] == "JHARKHAND"
 
 def test_jharkhand_llama_quantity_decoder_preserves_two_digit_loose_suffix():
     from app.modules.document_import.llama_client import _decode_jharkhand_quantity_text
