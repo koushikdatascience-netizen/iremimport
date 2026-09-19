@@ -352,6 +352,7 @@ class DocumentImportService:
             "name": name,
             "brand": brand,
             "ml": ml or None,
+            "batchNo": str(raw.get("batchNo") or raw.get("batch") or "").strip(),
             "box": box,
             "loose": loose,
             "sourceFile": str(raw.get("sourceFilename") or "").strip(),
@@ -404,6 +405,7 @@ class DocumentImportService:
             row_id = str(item.get("id") or "").strip()
             name = " ".join(str(item.get("name") or "").split()).strip()
             brand = " ".join(str(item.get("brand") or "").split()).strip()
+            batch_no = str(item.get("batchNo") or "").strip()
             try:
                 ml_decimal = Decimal(str(item.get("ml") or "0"))
                 box_decimal = Decimal(str(item.get("box") or "0"))
@@ -431,6 +433,8 @@ class DocumentImportService:
                 row_errors.append("Enter at least one case/box or loose bottle")
             if len(name) > 300 or len(brand) > 300:
                 row_errors.append("Name and Brand must be 300 characters or fewer")
+            if len(batch_no) > 200:
+                row_errors.append("Batch No. must be 200 characters or fewer")
             if row_errors:
                 validation_errors.append(f"Row {position}: " + "; ".join(row_errors))
                 continue
@@ -448,6 +452,7 @@ class DocumentImportService:
                     "itemName": name,
                     "brand": brand,
                     "ml": ml,
+                    "batchNo": batch_no,
                     "box": box,
                     "loose": loose,
                     "canonicalBox": box,
@@ -463,6 +468,7 @@ class DocumentImportService:
                     "name": name,
                     "brand": brand,
                     "ml": ml,
+                    "batchNo": batch_no,
                     "box": box,
                     "loose": loose,
                     "quantity": box + loose,
