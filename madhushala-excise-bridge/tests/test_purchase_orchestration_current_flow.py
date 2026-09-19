@@ -1010,3 +1010,129 @@ async def test_document_purchase_uses_reviewed_cases_and_loose_with_item_master_
     assert item["itemName"] == "SEAGRAMS IMPERIAL BLUE CLASSIC GRAIN WHISKY"
     assert item["discount"] == 0.0
     db.close()
+
+
+def test_calculate_coverage_blocks_partial_item_list():
+    from fastapi import HTTPException
+    from app.services.purchase_orchestrator import PurchaseOrchestrator
+
+    expected = [
+        {"itemCode": "100001"},
+        {"itemCode": "100002"},
+        {"itemCode": "100003"},
+        {"itemCode": "100004"},
+        {"itemCode": "100005"},
+    ]
+    response = {
+        "items": [
+            {"itemCode": "100001"},
+            {"itemCode": "100002"},
+            {"itemCode": "100003"},
+            {"itemCode": "100004"},
+        ]
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        PurchaseOrchestrator._validate_calculation_coverage(expected, response)
+
+    assert exc_info.value.status_code == 502
+    assert "Expected 5 item(s) but received 4" in str(exc_info.value.detail)
+    assert "Purchase was not saved" in str(exc_info.value.detail)
+
+
+def test_calculate_coverage_blocks_item_code_mismatch_even_when_count_matches():
+    from fastapi import HTTPException
+    from app.services.purchase_orchestrator import PurchaseOrchestrator
+
+    expected = [
+        {"itemCode": "100001"},
+        {"itemCode": "100002"},
+    ]
+    response = {
+        "items": [
+            {"itemCode": "100001"},
+            {"itemCode": "999999"},
+        ]
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        PurchaseOrchestrator._validate_calculation_coverage(expected, response)
+
+    assert exc_info.value.status_code == 502
+    assert "different item codes" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_purchase_adapter_blocks_different_source_rows_mapped_to_same_item(monkeypatch):
+    import json
+    import sqlite3
+    from fastapi import HTTPException
+    from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
+    from app.modules.document_import import purchase_adapter as adapter_module
+
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute(
+        """
+        CREATE TABLE import_items(
+          id TEXT, job_id TEXT, raw_name TEXT, normalized_name TEXT, brand TEXT,
+          ml INTEGER, packing INTEGER, quantity REAL, box INTEGER, loose INTEGER,
+          rate REAL, mrp REAL, amount REAL, barcode TEXT, confidence REAL,
+          raw_data_json TEXT, excise_item_code TEXT, mapped_item_code TEXT,
+          mapping_status TEXT, created_at TEXT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE mappings_v2(
+          shop_code TEXT, company_code TEXT, excise_item_code TEXT,
+          madhushala_item_code TEXT
+        )
+        """
+    )
+    db.executemany(
+        """
+        INSERT INTO import_items(
+          id, job_id, raw_name, normalized_name, brand, ml, packing, quantity,
+          box, loose, rate, mrp, amount, barcode, confidence, raw_data_json,
+          excise_item_code, mapped_item_code, mapping_status, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        [
+            (
+                "r1", "job-1", "ROYAL STAG 750 ML", "royal stag 750 ml",
+                "ROYAL STAG", 750, None, 1, 1, 0, None, None, None, None,
+                1.0, json.dumps({"canonicalQuantityVersion": 2, "canonicalBox": 1, "canonicalLoose": 0}),
+                "E1", "100010", "MAPPED", "2026-09-19T00:00:00"
+            ),
+            (
+                "r2", "job-1", "SIGNATURE 375 ML", "signature 375 ml",
+                "SIGNATURE", 375, None, 1, 1, 0, None, None, None, None,
+                1.0, json.dumps({"canonicalQuantityVersion": 2, "canonicalBox": 1, "canonicalLoose": 0}),
+                "E2", "100010", "MAPPED", "2026-09-19T00:00:01"
+            ),
+        ],
+    )
+    db.commit()
+
+    class DbCtx:
+        def __enter__(self):
+            return db
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(adapter_module, "conn", lambda: DbCtx())
+
+    class DocumentService:
+        def get_job(self, session, job_id):
+            return {"id": job_id, "source_type": "DOCUMENT_PDF"}
+
+    adapter = DocumentPurchaseAdapter(DocumentService())
+    session = {"shop_code": "SHOP", "company_code": "2"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapter.purchase_items(session, "job-1")
+
+    assert exc_info.value.status_code == 409
+    assert "same Madhushala item" in str(exc_info.value.detail)
