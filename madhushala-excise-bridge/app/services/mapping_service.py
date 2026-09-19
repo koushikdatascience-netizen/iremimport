@@ -13,6 +13,7 @@ from app.db import conn
 from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
 from app.modules.document_import.quantity import extract_physical_quantity
 from app.services.matching_service import suggest_matches
+from app.services.reference_data_service import reference_data_service
 
 logger = logging.getLogger("madhushala-excise-bridge")
 
@@ -499,9 +500,7 @@ class MappingService:
 
     async def company_item_codes(self, session: dict[str, Any]) -> set[str]:
         """Return valid Madhushala item codes for the active company scope."""
-        company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
-        bill_type = str(session.get("bill_type") or settings.DEFAULT_BILL_TYPE).strip()
-        rows = await self._client_for_session(session).get_dropdown_items(company_code, bill_type)
+        rows = await reference_data_service.catalogue(session)
         return {
             str(item.get("itemCode") or "").strip()
             for item in (rows or [])
@@ -518,8 +517,7 @@ class MappingService:
         shop_code = session["shop_code"]
         client = self._client_for_session(session)
         company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
-        bill_type = str(session.get("bill_type") or settings.DEFAULT_BILL_TYPE).strip()
-        madhushala_items = await client.get_dropdown_items(company_code, bill_type)
+        madhushala_items = await reference_data_service.catalogue(session)
         valid_item_codes = {
             str(item.get("itemCode") or "").strip()
             for item in madhushala_items

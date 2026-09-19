@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -32,7 +33,7 @@ class CacheService:
         self._locks: dict[str, asyncio.Lock] = {}
         self._locks_guard = asyncio.Lock()
         self._redis: Any | None = None
-        self._redis_disabled = False
+        self._redis_retry_after = 0.0
 
     def _key(self, key: str) -> str:
         return f"{settings.CACHE_PREFIX}:{key}"
@@ -46,10 +47,12 @@ class CacheService:
             return lock
 
     async def _redis_client(self) -> Any | None:
-        if not settings.REDIS_URL or self._redis_disabled:
+        if not settings.REDIS_URL:
             return None
         if self._redis is not None:
             return self._redis
+        if time.monotonic() < self._redis_retry_after:
+            return None
         try:
             import redis.asyncio as redis  # type: ignore
 
@@ -63,11 +66,15 @@ class CacheService:
             )
             await client.ping()
             self._redis = client
+            self._redis_retry_after = 0.0
             logger.info("cache_backend=redis status=ready")
             return self._redis
         except Exception as exc:
-            self._redis_disabled = True
-            logger.warning("cache_backend=memory redis_unavailable=%s", exc)
+            # Redis is an acceleration layer, not the system of record. Degrade
+            # to the local cache temporarily and retry Redis after a short
+            # cooldown instead of permanently disabling it for the process.
+            self._redis_retry_after = time.monotonic() + 5.0
+            logger.warning("cache_backend=memory redis_unavailable=%s retryInSeconds=5", exc)
             return None
 
     async def get_json(self, key: str) -> Any | None:
@@ -116,6 +123,32 @@ class CacheService:
             except Exception as exc:
                 logger.warning("cache_delete redis_failed key=%s error=%s", key, exc)
 
+    async def _acquire_redis_lock(self, redis_client: Any, key: str) -> tuple[str, str] | None:
+        owner = secrets.token_hex(16)
+        lock_key = self._key(f"lock:{key}")
+        acquired = await redis_client.set(
+            lock_key,
+            owner,
+            nx=True,
+            ex=max(1, int(settings.CACHE_LOCK_TTL_SECONDS)),
+        )
+        if acquired:
+            return lock_key, owner
+        return None
+
+    @staticmethod
+    async def _release_redis_lock(redis_client: Any, lock_key: str, owner: str) -> None:
+        script = """
+        if redis.call('get', KEYS[1]) == ARGV[1] then
+            return redis.call('del', KEYS[1])
+        end
+        return 0
+        """
+        try:
+            await redis_client.eval(script, 1, lock_key, owner)
+        except Exception as exc:
+            logger.warning("cache_lock_release_failed key=%s error=%s", lock_key, exc)
+
     async def get_or_load(
         self,
         key: str,
@@ -126,14 +159,62 @@ class CacheService:
         if cached is not None:
             return cached
 
+        # Local lock collapses concurrent misses inside one FastAPI worker.
         lock = await self._get_lock(key)
         async with lock:
             cached = await self.get_json(key)
             if cached is not None:
                 return cached
-            value = await loader()
-            await self.set_json(key, value, ttl_seconds)
-            return value
+
+            redis_client = await self._redis_client()
+            if redis_client is None:
+                value = await loader()
+                await self.set_json(key, value, ttl_seconds)
+                return value
+
+            # Redis lock collapses the same cache miss across every FastAPI
+            # replica. Only the lock owner calls the Madhushala upstream API;
+            # other replicas wait for the newly populated cache value.
+            deadline = time.monotonic() + max(0.1, float(settings.CACHE_LOCK_WAIT_SECONDS))
+            while True:
+                acquired: tuple[str, str] | None = None
+                try:
+                    acquired = await self._acquire_redis_lock(redis_client, key)
+                except Exception as exc:
+                    logger.warning("cache_lock_acquire_failed key=%s error=%s", key, exc)
+
+                if acquired is not None:
+                    lock_key, owner = acquired
+                    try:
+                        # Double-check after acquiring: another owner may have
+                        # populated the value just before this lock was won.
+                        cached = await self.get_json(key)
+                        if cached is not None:
+                            return cached
+                        value = await loader()
+                        await self.set_json(key, value, ttl_seconds)
+                        return value
+                    finally:
+                        await self._release_redis_lock(redis_client, lock_key, owner)
+
+                cached = await self.get_json(key)
+                if cached is not None:
+                    return cached
+
+                if time.monotonic() >= deadline:
+                    # Graceful degradation: because the process-local lock is
+                    # still held, this creates at most one fallback upstream
+                    # load per replica rather than one per waiting request.
+                    logger.warning(
+                        "cache_lock_wait_timeout key=%s waitSeconds=%s fallback=local_loader",
+                        key,
+                        settings.CACHE_LOCK_WAIT_SECONDS,
+                    )
+                    value = await loader()
+                    await self.set_json(key, value, ttl_seconds)
+                    return value
+
+                await asyncio.sleep(max(0.01, float(settings.CACHE_LOCK_POLL_SECONDS)))
 
     async def close(self) -> None:
         if self._redis is not None:
@@ -142,6 +223,7 @@ class CacheService:
             except Exception:
                 pass
         self._redis = None
+        self._redis_retry_after = 0.0
 
 
 cache_service = CacheService()

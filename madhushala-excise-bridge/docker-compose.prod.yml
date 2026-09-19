@@ -1,6 +1,27 @@
 name: madhushala-automation-platform
 
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - "256mb"
+      - --maxmemory-policy
+      - allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
   web:
     build:
       context: .
@@ -17,6 +38,7 @@ services:
       BROWSER_PROFILE_DIR: /app/data/browser_profile
       CAPTURES_DIR: /app/data/captures
       MAPPINGS_DIR: /app/data/mappings
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "127.0.0.1:8091:8091"
       - "127.0.0.1:6080:6080"
@@ -25,6 +47,9 @@ services:
     shm_size: "1gb"
     security_opt:
       - no-new-privileges:true
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8091/health || exit 1"]
       interval: 30s
