@@ -966,12 +966,44 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
     )
     assert len(products) == 1
     assert products[0].box == 3
-    # "3 - 0" is a compound Case value, so its suffix is the loose
-    # quantity and the separate "In Bottles" value must be ignored.
+    # West Bengal Form No. 3 uses the compound Case field as the purchase
+    # quantity source. "3 - 0" means box=3, loose=0; the separate
+    # "In Bottles" value is audit-only for this profile.
     assert products[0].loose == 0
+    assert products[0].model_dump()["quantitySemantics"] == "west_bengal_case_field_only"
+    assert products[0].model_dump()["rawPdfRow"]["In Bottles"] == "144"
 
 
 
+
+
+
+def test_west_bengal_ignores_duplicate_triplicate_and_quadruplicate_copies():
+    from app.modules.document_import.pdf_extractor import _extract_west_bengal
+
+    rows = [
+        [
+            "Kind of Foreign Liquor(IMFL/OSBI/OS)", "Category", "Brand Name", "Measure",
+            "Strength", "Batch No. & Date", "Quantity", "", "", "", "Amount",
+        ],
+        ["", "", "", "", "", "", "In Cases", "In Bottles", "In B.L", "In LPL", ""],
+        ["IMFL", "Whisky", "TEST 750", "750 Ml.", "25 Under Proof", "B1", "3 - 0", "36", "27.00", "20.25", "1000.00"],
+    ]
+    pages = [
+        (1, "ORIGINAL\nWest Bengal Excise Foreign Liquor Form No 3", [rows]),
+        (3, "DUPLICATE\nWest Bengal Excise Foreign Liquor Form No 3", [rows]),
+        (5, "TRIPLICATE\nWest Bengal Excise Foreign Liquor Form No 3", [rows]),
+        (7, "QUADRUPLICATE\nWest Bengal Excise Foreign Liquor Form No 3", [rows]),
+    ]
+
+    products, _, _ = _extract_west_bengal(
+        "Transport Pass No. : tFLDR/2026-2027/07015578/P\nDate : 17/08/2026",
+        pages,
+    )
+
+    assert len(products) == 1
+    assert products[0].box == 3
+    assert products[0].loose == 0
 
 def test_jharkhand_llama_quantity_decoder_preserves_two_digit_loose_suffix():
     from app.modules.document_import.llama_client import _decode_jharkhand_quantity_text
