@@ -93,8 +93,8 @@ class Settings:
     LLAMA_CLOUD_BASE_URL: str = os.getenv("LLAMA_CLOUD_BASE_URL", "https://api.cloud.llamaindex.ai").rstrip("/")
     DOCUMENT_IMPORT_EXTRACTION_MODE: str = os.getenv("DOCUMENT_IMPORT_EXTRACTION_MODE", "FAST").strip().upper() or "FAST"
     DOCUMENT_IMPORT_SCANNED_EXTRACTION_MODE: str = os.getenv(
-        "DOCUMENT_IMPORT_SCANNED_EXTRACTION_MODE", "ACCURATE"
-    ).strip().upper() or "ACCURATE"
+        "DOCUMENT_IMPORT_SCANNED_EXTRACTION_MODE", "MULTIMODAL"
+    ).strip().upper() or "MULTIMODAL"
     DOCUMENT_IMPORT_POLL_SECONDS: float = float(os.getenv("DOCUMENT_IMPORT_POLL_SECONDS", "1"))
     DOCUMENT_IMPORT_MAX_MB: int = int(os.getenv("DOCUMENT_IMPORT_MAX_MB", "20"))
     DOCUMENT_IMPORT_MAX_FILES: int = int(os.getenv("DOCUMENT_IMPORT_MAX_FILES", "12"))
