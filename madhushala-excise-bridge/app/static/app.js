@@ -961,6 +961,7 @@ function reviewItemsFromPayload(payload) {
             ml: item.ml ?? "",
             box: item.box ?? 0,
             loose: item.loose ?? 0,
+            batchNo: String(item.batchNo || ""),
             sourceFile: String(item.sourceFile || ""),
             issues: Array.isArray(item.issues) ? item.issues : [],
         }));
@@ -972,6 +973,7 @@ function reviewItemsFromPayload(payload) {
         ml: item.ml ?? "",
         box: item.box ?? 0,
         loose: item.loose ?? 0,
+        batchNo: String(item.batchNo || item.rawData?.batchNo || item.rawData?.["Batch No. & Date"] || ""),
         sourceFile: String(item.rawData?.sourceFilename || ""),
         issues: [],
     }));
@@ -1004,6 +1006,7 @@ function collectReviewItems() {
         ml: row.querySelector('[data-field="ml"]')?.value || "",
         box: row.querySelector('[data-field="box"]')?.value || "0",
         loose: row.querySelector('[data-field="loose"]')?.value || "0",
+        batchNo: row.querySelector('[data-field="batchNo"]')?.value || "",
     }));
 }
 
@@ -1022,7 +1025,7 @@ function updateReviewValidation() {
         }
         const current = items[index] || {};
         row.dataset.searchText = [
-            current.name, current.brand, current.ml, current.box, current.loose,
+            current.name, current.brand, current.ml, current.box, current.loose, current.batchNo,
             row.querySelector("[data-source-file]")?.dataset.sourceFile || "",
         ].join(" ");
         if (issues.length) invalid += 1;
@@ -1061,7 +1064,7 @@ function renderReviewTable(items) {
     tbody.innerHTML = items.map((item, index) => {
         const initialIssues = validateReviewItem(item);
         const source = item.sourceFile || "";
-        const searchText = [item.name, item.brand, item.ml, item.box, item.loose, source].join(" ");
+        const searchText = [item.name, item.brand, item.ml, item.box, item.loose, item.batchNo, source].join(" ");
         return '<tr data-review-id="' + escapeHtml(item.id) + '" data-search-text="' + escapeHtml(searchText) + '" class="' + (initialIssues.length ? "invalid-row" : "") + '">' +
             '<td class="row-number-cell"><span class="row-number">' + (index + 1) + '</span></td>' +
             '<td class="name-cell"><input data-field="name" type="text" value="' + escapeHtml(item.name) + '" maxlength="300" aria-label="Product name"><span class="document-row-issues">' + escapeHtml(initialIssues.join(" • ")) + '</span></td>' +
@@ -1069,6 +1072,7 @@ function renderReviewTable(items) {
             '<td class="number-cell"><input data-field="ml" type="number" min="1" step="1" value="' + escapeHtml(item.ml) + '" aria-label="ML"></td>' +
             '<td class="number-cell"><input data-field="box" type="number" min="0" step="1" value="' + escapeHtml(item.box) + '" aria-label="Box or cases"></td>' +
             '<td class="number-cell"><input data-field="loose" type="number" min="0" step="1" value="' + escapeHtml(item.loose) + '" aria-label="Loose bottles"></td>' +
+            '<td class="batch-cell"><input data-field="batchNo" type="text" value="' + escapeHtml(item.batchNo || "") + '" maxlength="200" aria-label="Batch No. and Date"></td>' +
             '<td class="source-cell"><button type="button" class="source-jump" data-source-file="' + escapeHtml(source) + '" title="Open source file">' +
                 (source ? escapeHtml(source) : "Source") +
             '</button></td>' +
