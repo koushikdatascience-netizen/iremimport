@@ -54,3 +54,9 @@ def test_mapping_frontend_preserves_structured_auth_error_code():
     assert 'error.code = detail.code;' in script
     assert 'MADHUSHALA_AUTH_EXPIRED' in script
     assert 'Madhushala login expired. Please reopen Excise Import from Madhushala CRM' in script
+
+
+def test_review_confirmation_sends_batch_number():
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+
+    assert 'batchNo: String(item.batchNo || "").trim(),' in script

@@ -405,7 +405,24 @@ class DocumentImportService:
             row_id = str(item.get("id") or "").strip()
             name = " ".join(str(item.get("name") or "").split()).strip()
             brand = " ".join(str(item.get("brand") or "").split()).strip()
-            batch_no = str(item.get("batchNo") or "").strip()
+            submitted_batch = item.get("batchNo")
+            batch_no = str(submitted_batch or "").strip()
+            try:
+                existing_raw = json.loads(existing[row_id]["raw_data_json"] or "{}")
+                if not isinstance(existing_raw, dict):
+                    existing_raw = {}
+            except Exception:
+                existing_raw = {}
+            if submitted_batch is None:
+                # Backward-compatible safety: older/stale frontends may omit
+                # batchNo entirely. Omission must never erase a batch that was
+                # already extracted from the source document.
+                batch_no = str(
+                    existing_raw.get("batchNo")
+                    or existing_raw.get("batch")
+                    or ""
+                ).strip()
+
             try:
                 ml_decimal = Decimal(str(item.get("ml") or "0"))
                 box_decimal = Decimal(str(item.get("box") or "0"))
@@ -439,13 +456,7 @@ class DocumentImportService:
                 validation_errors.append(f"Row {position}: " + "; ".join(row_errors))
                 continue
 
-            raw: dict[str, Any] = {}
-            try:
-                loaded = json.loads(existing[row_id]["raw_data_json"] or "{}")
-                if isinstance(loaded, dict):
-                    raw = loaded
-            except Exception:
-                raw = {}
+            raw: dict[str, Any] = dict(existing_raw)
 
             raw.update(
                 {

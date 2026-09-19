@@ -1739,3 +1739,89 @@ def test_review_row_exposes_full_batch_number_and_date():
     assert review["batchNo"] == "265-1 & July,2026"
     assert review["box"] == 3
     assert review["loose"] == 0
+
+
+@pytest.mark.asyncio
+async def test_confirm_review_omitted_batch_does_not_erase_extracted_batch(monkeypatch):
+    import json
+    import sqlite3
+    from app.modules.document_import.service import DocumentImportService
+    from app.modules.document_import import service as service_module
+
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute(
+        """
+        CREATE TABLE import_jobs(
+            id TEXT, shop_code TEXT, session_id TEXT, source_type TEXT,
+            status TEXT, error TEXT, updated_at TEXT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE import_items(
+            id TEXT, job_id TEXT, raw_name TEXT, normalized_name TEXT, brand TEXT,
+            ml INTEGER, packing INTEGER, quantity REAL, box INTEGER, loose INTEGER,
+            mapping_status TEXT, excise_item_code TEXT, mapped_item_code TEXT,
+            raw_data_json TEXT, updated_at TEXT
+        )
+        """
+    )
+    db.execute(
+        "INSERT INTO import_jobs VALUES (?,?,?,?,?,?,?)",
+        ("job-batch", "SHOP", "session", "DOCUMENT_PDF", "REVIEW", None, ""),
+    )
+    db.execute(
+        """
+        INSERT INTO import_items(
+            id, job_id, raw_name, normalized_name, brand, ml, packing, quantity,
+            box, loose, mapping_status, excise_item_code, mapped_item_code,
+            raw_data_json, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            "row-1", "job-batch", "Signature Premier Grain Whisky", "signature premier grain whisky",
+            "Signature Premier Grain Whisky", 180, None, 1, 1, 0, "PENDING", None, None,
+            json.dumps({"batchNo": "220-4& July,2026", "canonicalQuantityVersion": 2, "canonicalBox": 1, "canonicalLoose": 0}),
+            "",
+        ),
+    )
+    db.commit()
+
+    class DbCtx:
+        def __enter__(self):
+            return db
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(service_module, "conn", lambda: DbCtx())
+
+    class MappingService:
+        async def prepare_session_capture(self, *_args, **_kwargs):
+            return None
+        async def workspace_for_session(self, *_args, **_kwargs):
+            return {"unmappedItems": [], "madhushalaItems": []}
+
+    service = DocumentImportService(MappingService())
+    session = {"shop_code": "SHOP", "session_id": "session"}
+
+    await service.confirm_review(
+        session,
+        "job-batch",
+        [{
+            "id": "row-1",
+            "name": "Signature Premier Grain Whisky",
+            "brand": "Signature Premier Grain Whisky",
+            "ml": 180,
+            "box": 1,
+            "loose": 0,
+            # intentionally omit batchNo to simulate stale frontend
+        }],
+    )
+
+    row = db.execute(
+        "SELECT raw_data_json FROM import_items WHERE id='row-1'"
+    ).fetchone()
+    raw = json.loads(row["raw_data_json"])
+    assert raw["batchNo"] == "220-4& July,2026"
