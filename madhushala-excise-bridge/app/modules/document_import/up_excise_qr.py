@@ -479,9 +479,13 @@ def _document_from_payload(
             "Total Bulk Litres",
         )
 
-        extracted_box = box_count
+        # QR/HTML transport-pass imports intentionally use physical bottle
+        # quantity only. Cases from the portal are audit data, not purchase box
+        # quantity for this source type. Keep PDF/image quantity semantics fully
+        # separate in their own document-import adapters.
+        extracted_box = 0
         extracted_loose = bottle_count
-        extracted_quantity = (box_count + bottle_count) or None
+        extracted_quantity = bottle_count or None
 
         raw = {
             **meta,
@@ -489,10 +493,13 @@ def _document_from_payload(
             "packageType": package_type,
             "measureMl": ml,
             "packagingSize": _clean(package_size),
+            "sourceCases": box_count,
+            "sourceBottles": bottle_count,
             "box": extracted_box,
             "loose": extracted_loose,
             "quantity": extracted_quantity,
             "qnty": bottle_count or bottles,
+            "quantitySemantics": "qr_bottles_as_loose_only",
             "bulkLitres": _clean(bulk_litres),
             "liquorType": _clean(_first_present(row, "Liquor Type")),
             "liquorSubType": _clean(
