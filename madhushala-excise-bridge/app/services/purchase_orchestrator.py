@@ -277,6 +277,99 @@ class PurchaseOrchestrator:
             payload[field] = 0
 
     @staticmethod
+    def _validate_source_batch_preservation(
+        items: list[dict[str, Any]],
+        snapshots: list[dict[str, Any]],
+    ) -> None:
+        for index, source in enumerate(snapshots):
+            expected = str(source.get("batchNo") or "").strip()
+            if not expected:
+                continue
+            actual = (
+                str(items[index].get("batchNo") or "").strip()
+                if index < len(items)
+                else ""
+            )
+            if actual != expected:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Reviewed source batch was lost before Purchase Save. "
+                        f"Item {source.get('itemCode') or index + 1}: "
+                        f"expected batch '{expected}', got '{actual}'. "
+                        "Purchase was not saved."
+                    ),
+                )
+
+    @staticmethod
+    def _find_purchase_items(value: Any) -> list[dict[str, Any]]:
+        if isinstance(value, list):
+            if value and all(isinstance(item, dict) for item in value):
+                return [item for item in value if isinstance(item, dict)]
+            for item in value:
+                found = PurchaseOrchestrator._find_purchase_items(item)
+                if found:
+                    return found
+            return []
+        if not isinstance(value, dict):
+            return []
+        for key in ("items", "Items", "itemDetails", "purchaseItems", "lines", "details"):
+            nested = value.get(key)
+            if isinstance(nested, list) and any(isinstance(item, dict) for item in nested):
+                return [item for item in nested if isinstance(item, dict)]
+        for nested in value.values():
+            found = PurchaseOrchestrator._find_purchase_items(nested)
+            if found:
+                return found
+        return []
+
+    @staticmethod
+    def _batch_persistence_result(
+        expected_items: list[dict[str, Any]],
+        readback: Any,
+    ) -> dict[str, Any]:
+        expected = [
+            {
+                "itemCode": str(item.get("itemCode") or "").strip(),
+                "batchNo": str(item.get("batchNo") or "").strip(),
+            }
+            for item in expected_items
+            if str(item.get("batchNo") or "").strip()
+        ]
+        if not expected:
+            return {"checked": False, "ok": True, "reason": "no_source_batches"}
+
+        rows = PurchaseOrchestrator._find_purchase_items(readback)
+        if not rows:
+            return {
+                "checked": True,
+                "ok": False,
+                "reason": "purchase_readback_contains_no_item_rows",
+                "expected": expected,
+            }
+
+        by_code: dict[str, list[str]] = {}
+        for row in rows:
+            code = str(_dict_value(row, "itemCode", "code") or "").strip()
+            batch = str(_dict_value(row, "batchNo", "batch") or "").strip()
+            by_code.setdefault(code, []).append(batch)
+
+        missing: list[dict[str, str]] = []
+        for item in expected:
+            code = item["itemCode"]
+            batch = item["batchNo"]
+            if batch not in by_code.get(code, []):
+                missing.append(item)
+
+        return {
+            "checked": True,
+            "ok": not missing,
+            "expected": expected,
+            "missing": missing,
+            "persistedByItemCode": by_code,
+        }
+
+    @staticmethod
     def _source_owned_item_fields(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Snapshot fields owned by the source/review rather than Calculate."""
         return [
@@ -606,6 +699,7 @@ class PurchaseOrchestrator:
                     item.pop(helper_key, None)
 
             self._restore_source_owned_item_fields(payload.get("items") or [], source_owned_items)
+            self._validate_source_batch_preservation(payload.get("items") or [], source_owned_items)
             self._validate_final_payload(payload)
             payload_hash = purchase_transaction_service.payload_hash(payload)
             purchase_transaction_service.update(job_id, "READY", payload_hash=payload_hash)
@@ -624,6 +718,48 @@ class PurchaseOrchestrator:
 
             duration_ms = int((time.perf_counter() - save_started) * 1000)
             trn_no = purchase_transaction_service.response_trn_no(response)
+
+            batch_persistence = {
+                "checked": False,
+                "ok": True,
+                "reason": "readback_not_attempted",
+            }
+            expected_batches = [
+                item for item in (payload.get("items") or [])
+                if str(item.get("batchNo") or "").strip()
+            ]
+            if trn_no and expected_batches:
+                try:
+                    readback = await client.get_purchase_for_edit(
+                        payload.get("companyCode") or "",
+                        payload.get("yearCode") or "",
+                        trn_no,
+                    )
+                    batch_persistence = self._batch_persistence_result(
+                        expected_batches,
+                        readback,
+                    )
+                    if not batch_persistence.get("ok"):
+                        logger.error(
+                            "purchase_batch_not_persisted jobId=%s trnNo=%s result=%s",
+                            job_id,
+                            trn_no,
+                            batch_persistence,
+                        )
+                except Exception as exc:
+                    batch_persistence = {
+                        "checked": False,
+                        "ok": False,
+                        "reason": "purchase_readback_failed",
+                        "error": str(exc),
+                    }
+                    logger.warning(
+                        "purchase_batch_readback_failed jobId=%s trnNo=%s error=%s",
+                        job_id,
+                        trn_no,
+                        exc,
+                    )
+
             purchase_transaction_service.update(
                 job_id,
                 "SAVED",
@@ -665,6 +801,7 @@ class PurchaseOrchestrator:
                 },
                 "duplicateCheck": duplicate_response,
                 "madhushalaResponse": response,
+                "batchPersistence": batch_persistence,
                 "transaction": purchase_transaction_service.get(job_id),
             }
 
