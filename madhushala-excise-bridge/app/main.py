@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from app.automation.row_parser import normalize_raw_items
 from app.config import settings
-from app.db import conn, init_db
+from app.db import close_db, conn, init_db
 from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
 from app.modules.document_import.routes import create_router as create_document_import_router
 from app.modules.document_import.service import DocumentImportService
@@ -36,7 +36,10 @@ async def lifespan(_app: FastAPI):
     session_service.cleanup_expired()
     await mapping_service.initialize()
     logger.info("Madhushala Automation Platform started env=%s", settings.APP_ENV)
-    yield
+    try:
+        yield
+    finally:
+        close_db()
 
 
 PUBLIC_PREFIX = "/excise-import"
