@@ -29,3 +29,11 @@ def test_qr_upload_uses_current_multi_file_preview_function():
 
         assert "renderDocumentPreviews([file]);" in qr_upload
         assert "renderDocumentPreview(file);" not in qr_upload
+
+
+def test_purchase_header_prefers_extracted_document_date():
+    for source_path in (APP_JS, INDEX_HTML):
+        source = source_path.read_text(encoding="utf-8")
+        assert '"purchase-trn-date": header.trnDate || today' in source
+        assert 'currentDocumentResult?.extractedDocument?.invoiceDate' in source
+        assert 'currentDocumentResult?.job?.invoice_date' in source
