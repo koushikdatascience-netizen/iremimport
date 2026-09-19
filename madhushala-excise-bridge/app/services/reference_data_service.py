@@ -184,6 +184,29 @@ class MadhushalaReferenceDataService:
         value = await cache_service.get_or_load(cache_key, settings.CACHE_ITEM_TTL_SECONDS, load)
         return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
+    async def fresh_catalogue(self, session: dict[str, Any]) -> list[dict[str, Any]]:
+        """Bypass catalogue cache for company-scope validation.
+
+        Mapping uses Madhushala's live purchase dropdown. Purchase validation
+        must be able to re-check that same source before declaring a mapping
+        invalid, otherwise a stale cache can create a false company mismatch.
+        """
+        shop, company, bill_type = self._scope(session)
+        client = self.client_for_session(session)
+        rows = await client.get_dropdown_items(company, bill_type)
+        rows = [row for row in (rows or []) if isinstance(row, dict)]
+        logger.info(
+            "catalogue_fresh_validation shopCode=%s companyCode=%s billType=%s rows=%s",
+            shop,
+            company,
+            bill_type,
+            len(rows),
+        )
+        cache_key = f"catalogue:{shop}:{company}:{bill_type}"
+        await cache_service.set_json(cache_key, rows, settings.CACHE_ITEM_TTL_SECONDS)
+        return rows
+
+
     async def item(self, session: dict[str, Any], item_code: str, catalogue: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         shop, company, _ = self._scope(session)
         code = str(item_code or "").strip()
