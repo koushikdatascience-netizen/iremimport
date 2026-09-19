@@ -98,3 +98,28 @@ def test_pdf_normalizer_uses_bottles_when_case_is_missing():
     assert len(rows) == 1
     assert rows[0].box is None
     assert rows[0].loose == 30
+
+
+def test_calculate_request_preserves_canonical_box_and_loose():
+    from app.services.purchase_orchestrator import purchase_orchestrator
+
+    request = purchase_orchestrator.build_calculation_request(
+        {
+            "shopCode": "SHOP_A",
+            "companyCode": "2",
+            "schemeCode": "",
+            "items": [
+                {
+                    "itemCode": "ITEM1",
+                    "box": 15,
+                    "loose": 78,
+                    "qnty": 15 * 12 + 78,
+                    "_canonicalQuantityVersion": 2,
+                }
+            ],
+        },
+        {},
+    )
+
+    assert request["items"][0]["box"] == 15
+    assert request["items"][0]["loose"] == 78
