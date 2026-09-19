@@ -246,13 +246,21 @@ def _augment_calculation_response(
 
     rows = container.get("items") or container.get("Items") or container.get("itemDetails")
     if isinstance(rows, list):
-        source_by_code = {str(item.get("itemCode") or "").strip(): item for item in purchase_items}
+        source_by_code: dict[str, list[dict[str, Any]]] = {}
+        for source_item in purchase_items:
+            code = str(source_item.get("itemCode") or "").strip()
+            source_by_code.setdefault(code, []).append(source_item)
+
+        used_by_code: dict[str, int] = {}
         for row in rows:
             if not isinstance(row, dict):
                 continue
             code = str(_dict_value(row, "itemCode", "code") or "").strip()
             master = item_master.get(code) or {}
-            source = source_by_code.get(code) or {}
+            occurrence = used_by_code.get(code, 0)
+            matching = source_by_code.get(code) or []
+            source = matching[occurrence] if occurrence < len(matching) else {}
+            used_by_code[code] = occurrence + 1
             loose_rate, box_rate, mrp, _ = _commercial_values(master)
 
             if _dict_value(row, "quantity", "qnty", "qty") is None:
