@@ -223,6 +223,8 @@ async def test_document_header_uses_user_edited_doc_number_and_date(monkeypatch)
         {
             "docNo": "USER-EDITED-999",
             "docDate": "2026-09-19",
+            "_docNoEdited": True,
+            "_docDateEdited": True,
             "supplierCode": "SUP-1",
             "storeCode": "STORE-1",
             "purchaseAccCode": "PUR-1",
