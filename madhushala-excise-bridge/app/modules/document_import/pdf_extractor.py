@@ -81,9 +81,17 @@ def _header_value(text: str, *labels: str) -> str | None:
 
 def _dedupe(products: list[ExtractedProduct]) -> list[ExtractedProduct]:
     deduped: list[ExtractedProduct] = []
-    seen: set[tuple[str, int | None, int, int]] = set()
+    seen: set[tuple[Any, ...]] = set()
     for product in products:
+        payload = product.model_dump()
+        raw = payload.get("rawPdfRow") if isinstance(payload.get("rawPdfRow"), dict) else {}
+        source_page = payload.get("sourcePage")
+        source_row = raw.get("column1") or raw.get("S.No") or raw.get("Sr No") or raw.get("Sl No")
+        # Include physical row identity so two legitimate repeated invoice
+        # lines are never collapsed merely because product/ML/quantity match.
         signature = (
+            source_page,
+            str(source_row or "").strip(),
             _key(product.itemName),
             _ml(product.ml, product.itemName),
             _int(product.box),
