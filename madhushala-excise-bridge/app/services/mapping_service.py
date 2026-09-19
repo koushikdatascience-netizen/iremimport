@@ -304,6 +304,7 @@ class MappingService:
         client = self._client(token)
         unmapped = await client.get_unmapped_items()
         madhushala_items = await client.get_dropdown_items(settings.DEFAULT_COMPANY_CODE, settings.DEFAULT_BILL_TYPE)
+        match_index = MatchIndex(madhushala_items)
         rows = []
         latest_codes, latest_names, latest_scope_active = self._latest_unmapped_scope(capture) if latest_only else (set(), set(), False)
 
@@ -319,7 +320,7 @@ class MappingService:
                 excise_context.update(imported.get("capturedItem") or {})
                 excise_context["canonicalKey"] = imported.get("canonicalKey")
 
-            suggestions = suggest_matches(excise_context, madhushala_items)
+            suggestions = suggest_matches(excise_context, madhushala_items, index=match_index)
             rows.append(
                 {
                     "exciseItemCode": unmapped_item.get("exciseItemCode"),
