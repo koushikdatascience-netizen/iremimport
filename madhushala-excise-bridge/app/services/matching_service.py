@@ -43,6 +43,72 @@ def tokens(value: str) -> set[str]:
     }
 
 
+def _trigrams(value: str) -> set[str]:
+    compact = normalize_match_text(value).replace(" ", "")
+    if len(compact) < 3:
+        return {compact} if compact else set()
+    return {compact[index:index + 3] for index in range(len(compact) - 2)}
+
+
+class MatchIndex:
+    """Pre-index a Madhushala catalogue so every source row does not scan it all."""
+
+    def __init__(self, items: list[dict[str, Any]]) -> None:
+        self.items = [item for item in items if isinstance(item, dict)]
+        self.by_ml: dict[int, list[int]] = {}
+        self.by_token: dict[str, list[int]] = {}
+        self.by_trigram: dict[str, list[int]] = {}
+
+        for index, item in enumerate(self.items):
+            ml = ml_value(item)
+            if ml:
+                self.by_ml.setdefault(ml, []).append(index)
+
+            name = str(item.get("itemName") or "")
+            for token in tokens(name):
+                self.by_token.setdefault(token, []).append(index)
+            for trigram in _trigrams(name):
+                self.by_trigram.setdefault(trigram, []).append(index)
+
+    def candidates(self, excise_item: dict[str, Any]) -> list[dict[str, Any]]:
+        name = str(excise_item.get("itemName") or excise_item.get("brand") or "")
+        source_ml = ml_value(
+            {
+                "measureMl": excise_item.get("measureMl"),
+                "ml": excise_item.get("ml"),
+                "itemName": name,
+            }
+        )
+        indexes: set[int] = set()
+
+        if source_ml:
+            indexes.update(self.by_ml.get(source_ml, []))
+
+        for token in tokens(name):
+            indexes.update(self.by_token.get(token, []))
+
+        source_trigrams = _trigrams(name)
+        trigram_hits: dict[int, int] = {}
+        for trigram in source_trigrams:
+            for index in self.by_trigram.get(trigram, []):
+                trigram_hits[index] = trigram_hits.get(index, 0) + 1
+
+        if source_trigrams:
+            threshold = max(2, len(source_trigrams) // 5)
+            indexes.update(
+                index
+                for index, count in trigram_hits.items()
+                if count >= threshold
+            )
+
+        # Preserve correctness for unusual/noisy source names: if the index
+        # cannot find any credible candidates, fall back to the full catalogue.
+        if not indexes:
+            return self.items
+
+        return [self.items[index] for index in sorted(indexes)]
+
+
 def ml_value(item: dict[str, Any]) -> int:
     explicit = item.get("ml") or item.get("measureMl")
     if explicit:
@@ -114,8 +180,10 @@ def suggest_matches(
     madhushala_items: list[dict[str, Any]],
     *,
     limit: int = 8,
+    index: MatchIndex | None = None,
 ) -> list[dict[str, Any]]:
-    scored = [score_item(excise_item, item) for item in madhushala_items]
+    candidates = index.candidates(excise_item) if index is not None else madhushala_items
+    scored = [score_item(excise_item, item) for item in candidates]
     useful = [entry for entry in scored if entry["score"] > 0]
     return sorted(useful, key=lambda entry: entry["score"], reverse=True)[:limit]
 
