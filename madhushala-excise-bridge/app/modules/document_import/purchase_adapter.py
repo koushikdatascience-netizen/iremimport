@@ -104,6 +104,38 @@ class DocumentPurchaseAdapter:
         if not row_codes:
             raise HTTPException(status_code=400, detail="No items available for purchase save")
 
+        # Prevent distinct reviewed source products from collapsing onto the
+        # same Madhushala stock item. Madhushala Calculate/Save identifies
+        # purchase lines by itemCode, so a bad many-to-one mapping can turn a
+        # full reviewed document into only a few effective purchase lines.
+        mapped_sources: dict[str, list[tuple[str, int]]] = {}
+        for row, code in row_codes:
+            source_name = str(row["raw_name"] or row["normalized_name"] or row["id"] or "").strip()
+            source_ml = _int_value(row["ml"])
+            mapped_sources.setdefault(code, []).append((source_name, source_ml))
+
+        collisions: list[str] = []
+        for code, sources in mapped_sources.items():
+            identities = {
+                (re.sub(r"[^a-z0-9]+", " ", name.casefold()).strip(), ml)
+                for name, ml in sources
+            }
+            if len(identities) > 1:
+                labels = ", ".join(
+                    f"{name}{f' {ml}ML' if ml else ''}"
+                    for name, ml in sources[:4]
+                )
+                collisions.append(f"{code} <- {labels}")
+
+        if collisions:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Multiple different document items are mapped to the same Madhushala item. "
+                    "Remap these rows before saving: " + " | ".join(collisions[:5])
+                ),
+            )
+
         # Do not rely on the Purchase dropdown summary here. Calculate requires
         # the full Item Master record for each mapped item, so call /api/items/{id}
         # first and retain that exact snapshot for the Calculate client facade.
