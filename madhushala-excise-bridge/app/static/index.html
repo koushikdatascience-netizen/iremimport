@@ -4180,6 +4180,11 @@ async function uploadDocuments(files, kind = "pdf") {
     }
 
     currentUploadKind = kind;
+    currentDocumentJobId = "";
+    currentDocumentResult = null;
+    currentReviewItems = [];
+    const existingBody = document.getElementById("document-items-table-body");
+    if (existingBody) existingBody.innerHTML = "";
     renderDocumentPreviews(selectedFiles);
     const form = new FormData();
     selectedFiles.forEach((file) => form.append("files", file));
@@ -4252,6 +4257,12 @@ async function initDocumentImport() {
 document.getElementById("open-portal")?.addEventListener("click", openPortal);
 document.getElementById("madhushala-search")?.addEventListener("input", runSearch);
 document.getElementById("submit-mappings")?.addEventListener("click", saveMappings);
+document.getElementById("pdf-file")?.addEventListener("click", (event) => {
+    event.currentTarget.value = "";
+});
+document.getElementById("image-file")?.addEventListener("click", (event) => {
+    event.currentTarget.value = "";
+});
 document.getElementById("pdf-file")?.addEventListener("change", (event) => {
     const files = Array.from(event.target.files || []);
     if (files.length) void uploadDocuments(files, "pdf");
