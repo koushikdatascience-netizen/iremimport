@@ -884,6 +884,7 @@ def test_review_confirm_persists_edits_then_starts_mapping(client, monkeypatch):
 def test_pymupdf_state_adapters_emit_canonical_box_loose():
     from app.modules.document_import.pdf_extractor import (
         _extract_jharkhand,
+        _extract_madhya_pradesh,
         _extract_telangana,
         _extract_west_bengal,
     )
@@ -923,6 +924,30 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
     assert products[0].model_dump()["rawPdfRow"]["Quantity (Cases)"] == "17.20"
     assert products[1].box == 2
     assert products[1].loose == 0
+
+
+
+    mp_rows = [[
+        "Sl", "Label Name", "Batch", "Capacity", "Quantity in Cases",
+        "Duty", "Mfg Amount", "VAT",
+    ], [
+        "1", "Masala country spirit [CL/2023-2024/0012]", "",
+        "180 (Pet Bottle)", "109", "283263.75", "79134.00", "51230.00",
+    ]]
+    products, invoice_number, invoice_date = _extract_madhya_pradesh(
+        "Madhya Pradesh Excise Department\nDelivery Challan\nDemand Id- tCSDR/2026-2027/00288547\nDate- 17/08/2026",
+        [(1, "Madhya Pradesh Excise Department Delivery Challan", [mp_rows])],
+    )
+    assert len(products) == 1
+    assert products[0].itemName.startswith("Masala country spirit")
+    assert products[0].ml == 180
+    assert products[0].box == 109
+    assert products[0].loose == 0
+    assert products[0].model_dump()["packageType"] == "Pet Bottle"
+    assert products[0].model_dump()["quantitySemantics"] == "capacity_is_ml_quantity_is_cases"
+    assert products[0].model_dump()["rawPdfRow"]["Capacity"] == "180 (Pet Bottle)"
+    assert invoice_number == "tCSDR/2026-2027/00288547"
+    assert invoice_date == "17/08/2026"
 
     wb_rows = [
         [
