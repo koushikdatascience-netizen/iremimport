@@ -216,6 +216,46 @@ class PurchaseOrchestrator:
                 return [item for item in items if isinstance(item, dict)]
         return []
 
+    @staticmethod
+    def _validate_calculation_coverage(expected_items: list[dict[str, Any]], response: Any) -> None:
+        """Block partial purchases when Calculate omits expected item lines."""
+        calculated = PurchaseOrchestrator._calculated_items(response)
+        if len(calculated) != len(expected_items):
+            expected_codes = [str(item.get("itemCode") or "").strip() for item in expected_items]
+            returned_codes = [
+                str(_dict_value(item, "itemCode", "code") or "").strip()
+                for item in calculated
+            ]
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Madhushala Calculate returned an incomplete item list. "
+                    f"Expected {len(expected_items)} item(s) but received {len(calculated)}. "
+                    f"Expected codes: {', '.join(expected_codes[:12]) or '[none]'}. "
+                    f"Returned codes: {', '.join(returned_codes[:12]) or '[none]'}. "
+                    "Purchase was not saved."
+                ),
+            )
+
+        expected_counts: dict[str, int] = {}
+        returned_counts: dict[str, int] = {}
+        for item in expected_items:
+            code = str(item.get("itemCode") or "").strip()
+            expected_counts[code] = expected_counts.get(code, 0) + 1
+        for item in calculated:
+            code = str(_dict_value(item, "itemCode", "code") or "").strip()
+            returned_counts[code] = returned_counts.get(code, 0) + 1
+
+        if expected_counts != returned_counts:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Madhushala Calculate returned different item codes than requested. "
+                    f"Expected {expected_counts}; returned {returned_counts}. "
+                    "Purchase was not saved."
+                ),
+            )
+
     def _reset_calculation_owned_values(self, payload: dict[str, Any]) -> None:
         """Prevent Item Master/source-document financial values from leaking into Save.
 
@@ -481,6 +521,7 @@ class PurchaseOrchestrator:
             duplicate_response: Any = None
             try:
                 calculation = await calculate_task
+                self._validate_calculation_coverage(payload.get("items") or [], calculation)
                 self.merge_calculation(payload, calculation)
                 duration_ms = int((time.perf_counter() - calc_started) * 1000)
                 purchase_transaction_service.record_event(
