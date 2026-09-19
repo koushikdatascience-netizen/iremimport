@@ -1101,6 +1101,16 @@ def test_west_bengal_ignores_duplicate_triplicate_and_quadruplicate_copies():
 
 
 
+
+
+def test_llama_schema_keeps_raw_jharkhand_row_unit_and_quantity_columns():
+    from app.modules.document_import.llama_client import PRODUCT_SCHEMA
+
+    props = PRODUCT_SCHEMA["properties"]["items"]["items"]["properties"]
+    assert "sourceRowNumber" in props
+    assert "sourceUnitText" in props
+    assert "sourceQuantityText" in props
+
 def test_jharkhand_quantity_decoder_accepts_numeric_decimal_values():
     from app.modules.document_import.llama_client import _decode_jharkhand_quantity_text
 
@@ -1137,7 +1147,10 @@ async def test_jharkhand_scanned_repair_recovers_ml_from_source_unit_text(monkey
 
     client = object.__new__(LlamaCloudClient)
 
-    async def fake_extract_products(self, file_path, filename):
+    requested_modes = []
+
+    async def fake_extract_products(self, file_path, filename, **kwargs):
+        requested_modes.append(kwargs.get("extraction_mode"))
         return fake_doc
 
     monkeypatch.setattr(LlamaCloudClient, "extract_products", fake_extract_products)
@@ -1158,6 +1171,8 @@ async def test_jharkhand_scanned_repair_recovers_ml_from_source_unit_text(monkey
     assert int(result.items[0].box) == 4
     assert int(result.items[0].loose or 0) == 0
     assert result.items[0].model_dump()["quantitySemantics"] == "jharkhand_cases_dot_loose"
+    assert requested_modes == [llama_module.settings.DOCUMENT_IMPORT_SCANNED_EXTRACTION_MODE]
+    assert requested_modes[0] == "ACCURATE"
 
 def test_jharkhand_llama_quantity_decoder_preserves_two_digit_loose_suffix():
     from app.modules.document_import.llama_client import _decode_jharkhand_quantity_text
