@@ -36,6 +36,19 @@ def _int(value: Any) -> int:
         return 0
 
 
+def _jharkhand_case_loose(value: Any) -> tuple[int, int]:
+    """Decode Jharkhand Quantity (Cases) values like 17.20 as 17 cases + 20 loose.
+
+    The decimal point is a separator in this document format, not a fractional
+    case. Preserve the printed two-digit suffix as loose bottles.
+    """
+    text = _clean(value).replace(",", "")
+    match = re.search(r"(\d+)\.(\d{1,2})", text)
+    if match:
+        return max(0, int(match.group(1))), max(0, int(match.group(2)))
+    return _int(text), 0
+
+
 def _ml(*values: Any) -> int | None:
     for value in values:
         text = _clean(value)
@@ -68,9 +81,17 @@ def _header_value(text: str, *labels: str) -> str | None:
 
 def _dedupe(products: list[ExtractedProduct]) -> list[ExtractedProduct]:
     deduped: list[ExtractedProduct] = []
-    seen: set[tuple[str, int | None, int, int]] = set()
+    seen: set[tuple[Any, ...]] = set()
     for product in products:
+        payload = product.model_dump()
+        raw = payload.get("rawPdfRow") if isinstance(payload.get("rawPdfRow"), dict) else {}
+        source_page = payload.get("sourcePage")
+        source_row = raw.get("column1") or raw.get("S.No") or raw.get("Sr No") or raw.get("Sl No")
+        # Include physical row identity so two legitimate repeated invoice
+        # lines are never collapsed merely because product/ML/quantity match.
         signature = (
+            source_page,
+            str(source_row or "").strip(),
             _key(product.itemName),
             _ml(product.ml, product.itemName),
             _int(product.box),
@@ -253,27 +274,31 @@ def _extract_jharkhand(
                     if len(cells) <= max(name_idx, qty_idx):
                         continue
                     name = cells[name_idx]
-                    cases = _int(cells[qty_idx])
+                    raw_qty = cells[qty_idx]
+                    cases, loose = _jharkhand_case_loose(raw_qty)
                     unit = cells[unit_idx] if unit_idx >= 0 and len(cells) > unit_idx else ""
-                    if not name or cases <= 0:
+                    if not name or (cases <= 0 and loose <= 0):
                         continue
                     raw = {f"column{index + 1}": value for index, value in enumerate(cells)}
                     raw.update(
                         {
                             "Label Name": name,
                             "Unit": unit,
-                            "Qty": cases,
+                            "Qty": raw_qty,
+                            "Quantity (Cases)": raw_qty,
+                            "decodedCases": cases,
+                            "decodedLoose": loose,
                         }
                     )
                     item = _product(
                         name=name,
                         ml=unit,
                         box=cases,
-                        loose=0,
+                        loose=loose,
                         raw=raw,
                         state="JHARKHAND",
                         page=page_no,
-                        semantics="qty_is_cases",
+                        semantics="jharkhand_cases_dot_loose",
                     )
                     if item:
                         products.append(item)

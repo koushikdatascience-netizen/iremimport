@@ -19,6 +19,7 @@ PRODUCT_SCHEMA: dict[str, Any] = {
         "supplierName": {"type": ["string", "null"]},
         "invoiceNumber": {"type": ["string", "null"]},
         "invoiceDate": {"type": ["string", "null"]},
+        "documentProfile": {"type": ["string", "null"]},
         "items": {
             "type": "array",
             "items": {
@@ -29,6 +30,7 @@ PRODUCT_SCHEMA: dict[str, Any] = {
                     "ml": {"type": ["integer", "string", "null"]},
                     "packing": {"type": ["integer", "string", "null"]},
                     "quantity": {"type": ["number", "string", "null"]},
+                    "sourceQuantityText": {"type": ["string", "null"]},
                     "box": {"type": ["number", "string", "null"]},
                     "loose": {"type": ["number", "string", "null"]},
                     "freeQnty": {"type": ["number", "string", "null"]},
@@ -71,20 +73,31 @@ PRODUCT_SCHEMA: dict[str, Any] = {
 EXTRACTION_PROMPT = (
     "Extract only the source-document facts needed for liquor purchase review. At document level extract "
     "supplierName when visible, invoiceNumber as the invoice/document/permit/transport-pass identifier, "
-    "and invoiceDate as the source document date. For every product preserve the complete printed liquor "
-    "name in itemName and brand, and extract the ML/measure. Quantity semantics are strict: box means the "
-    "number of CASES/CARTONS explicitly shown for that product; loose means the number of individual "
-    "BOTTLES/LOOSE UNITS explicitly shown for that product. If both case and bottle columns are present, "
-    "extract both exactly as printed. If only cases are present, set box and leave loose zero/null. If only "
-    "bottles/loose units are present, set loose and leave box zero/null. Never multiply cases by packing, "
-    "never divide bottles by packing, never infer bottles-per-case, and never convert one quantity type "
-    "into the other. Do not treat stock balance, Physical Qty inventory, BL/LPL, strength, packing size, "
-    "rate, MRP, amount, or totals as purchase box/loose quantities unless the document explicitly labels "
-    "that field as the delivered/purchased cases or bottles for the row. Keep packing and commercial/tax "
-    "fields null unless needed only as raw audit context. Use quantity only as a legacy audit field; the "
-    "canonical purchase quantities are box and loose. Use null when uncertain. Do not hallucinate. Ignore "
-    "totals, summaries, signatures and repeated page headers as products."
+    "invoiceDate as the source document date, and documentProfile. Set documentProfile to "
+    "'JHARKHAND_STATE_BEVERAGES' when the page/document is issued by JHARKHAND STATE BEVERAGES CORPORATION "
+    "LIMITED or is a continuation of that invoice format; otherwise use null unless another profile is known. "
+    "For every product preserve the complete printed liquor name in itemName and brand, and extract the "
+    "ML/measure. Always copy the exact printed quantity cell text into sourceQuantityText before interpreting "
+    "it. Quantity semantics are strict: box means CASES/CARTONS and loose means individual BOTTLES/LOOSE UNITS. "
+    "Special Jharkhand rule: when the table heading is 'Quantity (Cases)' on a Jharkhand State Beverages "
+    "Corporation invoice, the printed value uses CASES.LOOSE notation, not a decimal fraction. For example "
+    "17.20 means box=17 and loose=20, 15.00 means box=15 and loose=0, and 2.04 means box=2 and loose=4. "
+    "Keep sourceQuantityText exactly as printed, including trailing zeroes. For ordinary documents with both "
+    "case and bottle columns, extract both exactly as printed. If only ordinary cases are present, set box and "
+    "leave loose zero/null; if only bottles are present, set loose and leave box zero/null. Never multiply "
+    "cases by packing, never divide bottles by packing, and never infer bottles-per-case. Do not treat stock "
+    "balance, BL/LPL, strength, packing size, rate, MRP, amount or totals as purchase quantities. Keep packing "
+    "and commercial/tax fields null except raw audit context. Use null when uncertain. Do not hallucinate. "
+    "Ignore totals, summaries, signatures and repeated page headers as products."
 )
+
+
+def _decode_jharkhand_quantity_text(value: Any) -> tuple[int, int] | None:
+    text = str(value or "").strip().replace(",", "")
+    match = __import__("re").search(r"(\d+)\.(\d{1,2})", text)
+    if not match:
+        return None
+    return max(0, int(match.group(1))), max(0, int(match.group(2)))
 
 
 class LlamaCloudError(RuntimeError):
@@ -202,6 +215,7 @@ class LlamaCloudClient:
         supplier_name = None
         invoice_number = None
         invoice_date = None
+        document_profile = None
 
         for page_number, page_document in page_results:
             if document_type == "unknown" and page_document.documentType != "unknown":
@@ -209,25 +223,37 @@ class LlamaCloudClient:
             supplier_name = supplier_name or page_document.supplierName
             invoice_number = invoice_number or page_document.invoiceNumber
             invoice_date = invoice_date or page_document.invoiceDate
+            page_profile = str(getattr(page_document, "documentProfile", "") or "").strip()
+            if page_profile:
+                document_profile = document_profile or page_profile
+            if not document_profile and "jharkhand" in str(page_document.supplierName or "").casefold():
+                document_profile = "JHARKHAND_STATE_BEVERAGES"
 
             for item in page_document.items:
                 payload = item.model_dump()
                 payload["sourcePage"] = page_number
                 merged_items.append(ExtractedProduct.model_validate(payload))
 
-        deduped_items: list[ExtractedProduct] = []
-        seen: set[tuple[str, str, str, str]] = set()
-        for item in merged_items:
-            signature = (
-                str(item.itemName or "").strip().casefold(),
-                str(item.ml or "").strip().casefold(),
-                str(item.box or 0),
-                str(item.loose or 0),
-            )
-            if signature in seen:
-                continue
-            seen.add(signature)
-            deduped_items.append(item)
+        if document_profile == "JHARKHAND_STATE_BEVERAGES":
+            corrected_items: list[ExtractedProduct] = []
+            for item in merged_items:
+                payload = item.model_dump()
+                raw_quantity = payload.get("sourceQuantityText")
+                decoded = _decode_jharkhand_quantity_text(raw_quantity)
+                if decoded is not None:
+                    box, loose = decoded
+                    payload["box"] = box
+                    payload["loose"] = loose
+                    payload["quantity"] = raw_quantity
+                    payload["quantitySemantics"] = "jharkhand_cases_dot_loose"
+                    payload["sourceState"] = "JHARKHAND"
+                corrected_items.append(ExtractedProduct.model_validate(payload))
+            merged_items = corrected_items
+
+        # Page-by-page extraction has no overlapping document window.
+        # Preserve every extracted source row; identical products can be valid
+        # separate invoice lines and must not be silently dropped.
+        deduped_items = merged_items
 
         return ExtractedDocument(
             documentType=document_type,
@@ -235,6 +261,7 @@ class LlamaCloudClient:
             invoiceNumber=invoice_number,
             invoiceDate=invoice_date,
             items=deduped_items,
+            documentProfile=document_profile,
             extractionEngine="llamaparse-page-by-page",
             extractedPageCount=len(page_results),
             pageItemCounts={
