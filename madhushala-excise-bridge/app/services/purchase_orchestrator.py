@@ -276,6 +276,31 @@ class PurchaseOrchestrator:
         for field in ("grossAmount", "taxAmount", "netAmount", "discount", "salesTaxOnMRP", "roundOff"):
             payload[field] = 0
 
+    @staticmethod
+    def _source_owned_item_fields(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Snapshot fields owned by the source/review rather than Calculate."""
+        return [
+            {
+                "itemCode": str(item.get("itemCode") or "").strip(),
+                "batchNo": str(item.get("batchNo") or "").strip(),
+            }
+            for item in items
+        ]
+
+    @staticmethod
+    def _restore_source_owned_item_fields(
+        items: list[dict[str, Any]],
+        snapshots: list[dict[str, Any]],
+    ) -> None:
+        """Restore per-row source values after Calculate before Purchase Save."""
+        for index, item in enumerate(items):
+            source = snapshots[index] if index < len(snapshots) else {}
+            batch_no = str(source.get("batchNo") or "").strip()
+            # Batch belongs to the imported/reviewed source row. Calculate may
+            # omit it or return a blank/default value; never let that erase it.
+            item["batchNo"] = batch_no
+
+
     def merge_calculation(self, payload: dict[str, Any], response: Any) -> None:
         """Merge Madhushala Calculate output and treat it as the financial source of truth."""
         calculated = self._calculated_items(response)
@@ -504,6 +529,7 @@ class PurchaseOrchestrator:
                 doc_no=payload["docNo"],
             )
 
+            source_owned_items = self._source_owned_item_fields(payload.get("items") or [])
             calc_request = self.build_calculation_request(payload, header)
             calc_started = time.perf_counter()
             duplicate_task = None
@@ -523,6 +549,7 @@ class PurchaseOrchestrator:
                 calculation = await calculate_task
                 self._validate_calculation_coverage(payload.get("items") or [], calculation)
                 self.merge_calculation(payload, calculation)
+                self._restore_source_owned_item_fields(payload.get("items") or [], source_owned_items)
                 duration_ms = int((time.perf_counter() - calc_started) * 1000)
                 purchase_transaction_service.record_event(
                     tx_id, job_id, "CALCULATE", "OK", duration_ms=duration_ms,
@@ -578,6 +605,7 @@ class PurchaseOrchestrator:
                 ):
                     item.pop(helper_key, None)
 
+            self._restore_source_owned_item_fields(payload.get("items") or [], source_owned_items)
             self._validate_final_payload(payload)
             payload_hash = purchase_transaction_service.payload_hash(payload)
             purchase_transaction_service.update(job_id, "READY", payload_hash=payload_hash)
