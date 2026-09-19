@@ -99,3 +99,21 @@ docker run --rm \
   -v "$PWD/backups:/backup" \
   alpine tar czf /backup/excise-bridge-data-$(date +%Y%m%d-%H%M%S).tar.gz /data
 ```
+
+
+## Horizontal API topology
+
+Production now keeps the interactive browser/noVNC process as a singleton and
+runs HTTP traffic through two FastAPI replicas:
+
+```text
+host Nginx -> 127.0.0.1:8091 -> api-gateway -> api1:8091
+                                             -> api2:8091
+
+host Nginx /excise-browser/* -> 127.0.0.1:6080 -> web (Playwright/noVNC singleton)
+```
+
+Redis is shared by both API replicas. PostgreSQL is required for shared durable
+state; the deployment workflow performs a one-time SQLite-to-PostgreSQL migration
+before enabling horizontal API traffic. The original Docker data volume is
+backed up before migration.
