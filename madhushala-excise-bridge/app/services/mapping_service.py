@@ -1,6 +1,7 @@
 """Phase 2 mapping workflow service."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -12,7 +13,7 @@ from app.config import settings
 from app.db import conn
 from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient
 from app.modules.document_import.quantity import extract_physical_quantity
-from app.services.matching_service import suggest_matches
+from app.services.matching_service import MatchIndex, suggest_matches
 from app.services.reference_data_service import reference_data_service
 
 logger = logging.getLogger("madhushala-excise-bridge")
@@ -518,6 +519,12 @@ class MappingService:
         client = self._client_for_session(session)
         company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
         madhushala_items = await reference_data_service.catalogue(session)
+        match_index = MatchIndex(madhushala_items)
+        item_by_code = {
+            str(item.get("itemCode") or "").strip(): item
+            for item in madhushala_items
+            if isinstance(item, dict) and str(item.get("itemCode") or "").strip()
+        }
         valid_item_codes = {
             str(item.get("itemCode") or "").strip()
             for item in madhushala_items
@@ -623,14 +630,14 @@ class MappingService:
                             (datetime.now(timezone.utc).isoformat(), job_item["id"]),
                         )
                         mapped_code = ""
-                    mapped_item = next((item for item in madhushala_items if str(item.get("itemCode")) == mapped_code), None)
+                    mapped_item = item_by_code.get(mapped_code)
                     rows.append(
                         {
                             "jobItemId": job_item["id"],
                             "exciseItemCode": excise_code,
                             "itemName": job_item["raw_name"] or job_item["normalized_name"] or excise_code,
                             "capturedItem": captured,
-                            "suggestions": suggest_matches(context, madhushala_items),
+                            "suggestions": suggest_matches(context, madhushala_items, index=match_index),
                             "selectedItemCode": mapped_code or None,
                             "selectedItem": mapped_item,
                             "mappingStatus": "MAPPED" if mapped_code else (job_item["mapping_status"] or "PENDING"),
@@ -724,7 +731,7 @@ class MappingService:
                         "exciseItemCode": unmapped_item.get("exciseItemCode"),
                         "itemName": unmapped_item.get("itemName"),
                         "capturedItem": captured,
-                        "suggestions": suggest_matches(context, madhushala_items),
+                        "suggestions": suggest_matches(context, madhushala_items, index=match_index),
                         "selectedItemCode": mapped["madhushala_item_code"] if mapped else None,
                     }
                 )
@@ -743,8 +750,6 @@ class MappingService:
         shop_code = session["shop_code"]
         company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
         client = self._client_for_session(session)
-        unmapped: list[dict[str, Any]] = []
-        prepared = 0
         now = datetime.now(timezone.utc).isoformat()
 
         with conn() as db:
@@ -755,10 +760,11 @@ class MappingService:
             if not job:
                 from fastapi import HTTPException
                 raise HTTPException(status_code=404, detail="Import job not found")
+            rows = db.execute("SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, id", (job_id,)).fetchall()
 
-            rows = db.execute("SELECT * FROM import_items WHERE job_id=?", (job_id,)).fetchall()
+        semaphore = asyncio.Semaphore(max(1, settings.DOCUMENT_PREPARE_CONCURRENCY))
 
-        for row in rows:
+        async def prepare_row(row: Any) -> dict[str, Any]:
             item = {
                 "rawName": row["raw_name"],
                 "brand": row["brand"],
@@ -769,33 +775,73 @@ class MappingService:
                 "barcode": row["barcode"],
             }
             payload = self.build_excise_payload(item)
-            excise_item_code, prepare_action, unmapped = await self._create_or_reuse_excise_item(
-                client, payload, unmapped
-            )
+
+            # Each row owns its upstream request state. Sharing the mutable
+            # unmapped list across concurrent tasks would create race-prone
+            # coupling between rows. _create_or_reuse_excise_item still keeps
+            # the required Save -> Unmapped fallback ordering per row.
+            async with semaphore:
+                excise_item_code, prepare_action, _ = await self._create_or_reuse_excise_item(
+                    client,
+                    payload,
+                    [],
+                )
+
             existing_mapped = str(row["mapped_item_code"] or "").strip()
             existing_excise_code = str(row["excise_item_code"] or "").strip()
             if excise_item_code is None and existing_excise_code:
                 excise_item_code = existing_excise_code
 
-            mapped_item_code = existing_mapped
-            with conn() as db:
-                if not mapped_item_code and excise_item_code is not None:
+            return {
+                "id": row["id"],
+                "exciseItemCode": str(excise_item_code or ""),
+                "prepareAction": prepare_action,
+                "existingMapped": existing_mapped,
+            }
+
+        prepared_rows = await asyncio.gather(*(prepare_row(row) for row in rows))
+
+        # Resolve local mappings and persist all row updates in one DB
+        # transaction after network I/O completes. This avoids holding a
+        # database connection while waiting on Madhushala.
+        with conn() as db:
+            for prepared_row in prepared_rows:
+                mapped_item_code = prepared_row["existingMapped"]
+                excise_item_code = prepared_row["exciseItemCode"]
+
+                if not mapped_item_code and excise_item_code:
                     mapped = db.execute(
                         "SELECT madhushala_item_code FROM mappings_v2 WHERE shop_code=? AND company_code=? AND excise_item_code=?",
-                        (shop_code, company_code, str(excise_item_code)),
+                        (shop_code, company_code, excise_item_code),
                     ).fetchone()
                     mapped_item_code = str(mapped["madhushala_item_code"] if mapped else "").strip()
-                mapping_status = "MAPPED" if mapped_item_code else ("UNMAPPED" if excise_item_code else ("REVIEW_REQUIRED" if prepare_action == "review_required" else "PENDING"))
+
+                prepare_action = prepared_row["prepareAction"]
+                mapping_status = (
+                    "MAPPED"
+                    if mapped_item_code
+                    else (
+                        "UNMAPPED"
+                        if excise_item_code
+                        else ("REVIEW_REQUIRED" if prepare_action == "review_required" else "PENDING")
+                    )
+                )
                 db.execute(
                     """
                     UPDATE import_items
                     SET excise_item_code=?, mapping_status=?, mapped_item_code=?, updated_at=?
                     WHERE id=?
                     """,
-                    (str(excise_item_code or ""), mapping_status, mapped_item_code, now, row["id"]),
+                    (
+                        excise_item_code,
+                        mapping_status,
+                        mapped_item_code,
+                        now,
+                        prepared_row["id"],
+                    ),
                 )
-            prepared += 1
-        return {"preparedCount": prepared}
+
+        return {"preparedCount": len(prepared_rows)}
 
     async def save_session_mappings(
         self,
