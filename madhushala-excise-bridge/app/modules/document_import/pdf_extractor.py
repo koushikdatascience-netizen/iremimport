@@ -170,6 +170,8 @@ def _detect_profile(text: str) -> str:
         return "WEST_BENGAL_FORM3"
     if "government of jharkhand" in lower or "jharkhand state beverages corporation" in lower:
         return "JHARKHAND_EXCISE"
+    if "madhya pradesh excise department" in lower and "delivery challan" in lower:
+        return "MADHYA_PRADESH_DELIVERY_CHALLAN"
     return "GENERIC"
 
 
@@ -395,6 +397,90 @@ def _extract_west_bengal(
     return _dedupe(products), invoice_number, invoice_date
 
 
+def _extract_madhya_pradesh(
+    full_text: str,
+    pages: list[tuple[int, str, list[list[list[str]]]]],
+) -> tuple[list[ExtractedProduct], str | None, str | None]:
+    """Madhya Pradesh Excise Department Delivery Challan.
+
+    Capacity is the bottle/container capacity (for example
+    '180 (Pet Bottle)') and must become ML, never quantity.
+    'Quantity in Cases' is the case count.
+    """
+    products: list[ExtractedProduct] = []
+
+    for page_no, _page_text, page_tables in pages:
+        for rows in page_tables:
+            mapping: tuple[int, int, int] | None = None
+            for cells in rows:
+                keys = [_key(cell) for cell in cells]
+
+                label_idx = next((i for i, key in enumerate(keys) if key == "labelname"), None)
+                capacity_idx = next((i for i, key in enumerate(keys) if key == "capacity"), None)
+                cases_idx = next(
+                    (
+                        i for i, key in enumerate(keys)
+                        if key in {"quantityincases", "qtyincases", "quantitycases", "cases"}
+                    ),
+                    None,
+                )
+                if label_idx is not None and capacity_idx is not None and cases_idx is not None:
+                    mapping = (label_idx, capacity_idx, cases_idx)
+                    continue
+
+                if mapping is None or not cells:
+                    continue
+
+                label_idx, capacity_idx, cases_idx = mapping
+                if len(cells) <= max(mapping):
+                    continue
+
+                serial = _clean(cells[0])
+                if not re.fullmatch(r"\d+", serial):
+                    continue
+
+                name = _clean(cells[label_idx])
+                capacity = _clean(cells[capacity_idx])
+                cases = _int(cells[cases_idx])
+                measure = _ml(capacity, name)
+                if not name or not measure or cases <= 0:
+                    continue
+
+                package_match = re.search(r"\(([^)]+)\)", capacity)
+                package_type = _clean(package_match.group(1)) if package_match else None
+
+                raw = {f"column{index + 1}": value for index, value in enumerate(cells)}
+                raw.update(
+                    {
+                        "Label Name": name,
+                        "Capacity": capacity,
+                        "Quantity in Cases": cells[cases_idx],
+                        "packageType": package_type,
+                    }
+                )
+
+                item = _product(
+                    name=name,
+                    ml=capacity,
+                    box=cases,
+                    loose=0,
+                    raw=raw,
+                    state="MADHYA_PRADESH",
+                    page=page_no,
+                    semantics="capacity_is_ml_quantity_is_cases",
+                )
+                if item:
+                    payload = item.model_dump()
+                    payload["packageType"] = package_type
+                    products.append(ExtractedProduct.model_validate(payload))
+
+    demand_match = re.search(r"Demand\s*Id\s*[-:]?\s*([^\n\r]+)", full_text, re.IGNORECASE)
+    invoice_number = _clean(demand_match.group(1)) if demand_match else None
+    date_match = re.search(r"\bDate\s*[-:]?\s*(\d{1,2}/\d{1,2}/\d{4})", full_text, re.IGNORECASE)
+    invoice_date = _normalize_date(date_match.group(1)) if date_match else None
+    return _dedupe(products), invoice_number, invoice_date
+
+
 def _extract_generic(
     full_text: str,
     pages: list[tuple[int, str, list[list[list[str]]]]],
@@ -584,6 +670,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             "TELANGANA_ICDC": _extract_telangana,
             "WEST_BENGAL_FORM3": _extract_west_bengal,
             "JHARKHAND_EXCISE": _extract_jharkhand,
+            "MADHYA_PRADESH_DELIVERY_CHALLAN": _extract_madhya_pradesh,
             "GENERIC": _extract_generic,
         }[profile]
         products, invoice_number, invoice_date = extractor(full_text, pages)
