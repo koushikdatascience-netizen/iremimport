@@ -1117,6 +1117,32 @@ def test_llama_schema_keeps_raw_jharkhand_row_unit_and_quantity_columns():
 
 
 
+
+
+def test_telangana_candidate_count_uses_text_rows_not_partial_tables():
+    from app.modules.document_import.pdf_extractor import _candidate_row_count
+
+    page1 = "\n".join(
+        f"{i} {5000+i:04d} SAMPLE BRAND {i} IML G 48 / 180 ml 1 0"
+        for i in range(1, 16)
+    )
+    page2 = "\n".join(
+        f"{i} {5000+i:04d} SAMPLE BRAND {i} IML G 48 / 180 ml 1 0"
+        for i in range(16, 31)
+    )
+
+    # Simulate a server where find_tables() exposed only seven product rows.
+    partial_rows = [
+        [str(i), f"{5000+i:04d}", "SAMPLE BRAND", "IML", "G", "48 / 180 ml", "1", "0"]
+        for i in range(1, 8)
+    ]
+    pages = [
+        (1, page1, [partial_rows]),
+        (2, page2, []),
+    ]
+
+    assert _candidate_row_count("TELANGANA_ICDC", pages) == 30
+
 def test_telangana_icdc_extracts_separate_tp_number():
     from app.modules.document_import.pdf_extractor import _extract_telangana, _transport_pass_number
 
