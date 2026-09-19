@@ -152,6 +152,10 @@ async def resolve_required_purchase_header(
 
     if not _text(resolved.get("tpPassNo")):
         resolved["tpPassNo"] = _transport_pass_from_job(job, job_id)
+    if not _text(resolved.get("tpPassNo")) and _text(resolved.get("docNo")):
+        # Madhushala accepts the same identifier in both fields when the
+        # source document exposes only one invoice/challan/pass number.
+        resolved["tpPassNo"] = _text(resolved.get("docNo"))
 
     needed = ("supplierCode", "storeCode", "purchaseAccCode", "userCode")
     if any(not _text(resolved.get(name)) for name in needed):
