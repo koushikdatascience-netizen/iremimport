@@ -191,7 +191,7 @@ jobs:
           echo "== Health check =="
           HEALTHY=0
           for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8091/health >/tmp/madhushala-health.json 2>/dev/null; then
+            if curl -fsS http://127.0.0.1:8091/health/ready >/tmp/madhushala-health.json 2>/dev/null; then
               HEALTHY=1
               break
             fi
