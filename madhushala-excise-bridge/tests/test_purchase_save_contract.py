@@ -41,7 +41,7 @@ async def test_save_purchase_sends_direct_purchase_request_with_datetime_fields(
         "trnDate": "2026-09-16",
         "docDate": "2026-06-16 13:39:17",
         "docNo": "RETAIL995782-20260616133917326",
-        "items": [{"itemCode": "M001", "qnty": 1}],
+        "items": [{"itemCode": "M001", "batchNo": "220-4& July,2026", "qnty": 1}],
     }
 
     response = await client.save_purchase(payload)
@@ -53,3 +53,4 @@ async def test_save_purchase_sends_direct_purchase_request_with_datetime_fields(
     assert captured["json_body"]["docDate"] == "2026-06-16T13:39:17"
     assert "request" not in captured["json_body"]
     assert captured["json_body"]["items"][0]["itemCode"] == "M001"
+    assert captured["json_body"]["items"][0]["batchNo"] == "220-4& July,2026"
