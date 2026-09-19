@@ -100,12 +100,32 @@ async def load_item_master_details(reference_service: Any, session: dict[str, An
             if isinstance(row, dict)
         }
         invalid_codes = [code for code in codes if code not in available_codes]
+
+        if invalid_codes:
+            # Mapping selection is validated against Madhushala's live purchase
+            # dropdown. A cached catalogue can lag behind that live result and
+            # falsely report a company mismatch. Re-check the exact same live
+            # company-scoped source once before rejecting the mapping.
+            fresh_loader = getattr(reference_service, "fresh_catalogue", None)
+            if callable(fresh_loader):
+                try:
+                    fresh_catalogue = await fresh_loader(session)
+                except Exception:
+                    fresh_catalogue = []
+                fresh_codes = {
+                    str(_dict_value(row, "itemCode", "code", "value", "id") or "").strip()
+                    for row in (fresh_catalogue or [])
+                    if isinstance(row, dict)
+                }
+                invalid_codes = [code for code in codes if code not in fresh_codes]
+
         if invalid_codes:
             raise HTTPException(
                 status_code=409,
                 detail=(
                     f"Mapped Madhushala item(s) {', '.join(invalid_codes)} are not available "
-                    f"in company {company_before or '[blank]'}. Remap those rows for the current company before saving."
+                    f"in company {company_before or '[blank]'} after a fresh Item Master check. "
+                    "Refresh and remap those rows for the current company before saving."
                 ),
             )
 

@@ -419,3 +419,70 @@ async def test_item_master_preflight_rejects_code_missing_from_current_company()
     assert "G0004Z" in str(exc_info.value.detail)
     assert "company 3" in str(exc_info.value.detail)
     assert service.items_called is False
+
+
+@pytest.mark.asyncio
+async def test_item_master_company_validation_rechecks_live_catalogue_when_cache_is_stale():
+    from app.modules.document_import.purchase_contract import load_item_master_details
+
+    class FakeReferenceService:
+        async def catalogue(self, session):
+            # Simulate stale cached company catalogue.
+            return [{"itemCode": "OLD001"}]
+
+        async def fresh_catalogue(self, session):
+            # Same live company dropdown used by mapping contains the selected item.
+            return [{"itemCode": "100010"}]
+
+        async def items(self, session, codes):
+            assert session["company_code"] == "2"
+            assert codes == ["100010"]
+            return {
+                "100010": {
+                    "itemCode": "100010",
+                    "itemName": "100 PIPER 750 N",
+                    "packing": 12,
+                    "purchaseRate": 0,
+                    "purchaseRateCase": 200,
+                    "salesRate": 1880,
+                }
+            }
+
+    session = {
+        "shop_code": "hedu_test2",
+        "company_code": "2",
+        "bill_type": "AI",
+    }
+
+    result = await load_item_master_details(FakeReferenceService(), session, ["100010"])
+
+    assert result["100010"]["itemCode"] == "100010"
+    assert session["company_code"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_item_master_company_validation_still_rejects_after_fresh_check():
+    from fastapi import HTTPException
+    from app.modules.document_import.purchase_contract import load_item_master_details
+
+    class FakeReferenceService:
+        async def catalogue(self, session):
+            return []
+
+        async def fresh_catalogue(self, session):
+            return [{"itemCode": "DIFFERENT"}]
+
+        async def items(self, session, codes):
+            raise AssertionError("Item detail must not load after confirmed company mismatch")
+
+    session = {
+        "shop_code": "hedu_test2",
+        "company_code": "2",
+        "bill_type": "AI",
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await load_item_master_details(FakeReferenceService(), session, ["100010"])
+
+    assert exc_info.value.status_code == 409
+    assert "after a fresh Item Master check" in str(exc_info.value.detail)
