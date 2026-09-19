@@ -8,11 +8,6 @@ on:
       - "madhushala-excise-bridge/loadtest/**"
       - ".github/workflows/load-test-baseline.yml"
   workflow_dispatch:
-    inputs:
-      base_url:
-        description: "Target base URL"
-        required: false
-        default: "https://excise.connect.snapkey.in"
 
 permissions:
   contents: read
@@ -24,11 +19,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run controlled k6 baseline
+      - name: Prepare SSH
         env:
-          BASE_URL: ${{ inputs.base_url || 'https://excise.connect.snapkey.in' }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_KEY_B64: ${{ secrets.SERVER_SSH_KEY_B64 }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
         run: |
-          docker run --rm \
-            -e BASE_URL="$BASE_URL" \
-            -v "$PWD/madhushala-excise-bridge/loadtest:/scripts:ro" \
-            grafana/k6:0.54.0 run --summary-export=/tmp/summary.json /scripts/baseline.js
+          set -euo pipefail
+          test -n "${SERVER_HOST:-}"
+          test -n "${SERVER_USER:-}"
+          test -n "${SERVER_SSH_KEY_B64:-}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s' "$SERVER_SSH_KEY_B64" | base64 --decode > ~/.ssh/madhushala_loadtest_key
+          chmod 600 ~/.ssh/madhushala_loadtest_key
+          ssh-keygen -y -f ~/.ssh/madhushala_loadtest_key >/dev/null
+          echo "SSH_PORT=${SERVER_PORT:-22}" >> "$GITHUB_ENV"
+
+      - name: Copy k6 scenario to production host
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/madhushala_loadtest_key -P "$SSH_PORT" \
+            -o StrictHostKeyChecking=accept-new \
+            -o IdentitiesOnly=yes \
+            madhushala-excise-bridge/loadtest/baseline.js \
+            "$SERVER_USER@$SERVER_HOST:/tmp/madhushala-baseline.js"
+
+      - name: Run controlled k6 baseline on production host
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/madhushala_loadtest_key -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=accept-new \
+            -o IdentitiesOnly=yes \
+            "$SERVER_USER@$SERVER_HOST" \
+            'docker run --rm --network host -e BASE_URL=http://127.0.0.1:8091 -v /tmp/madhushala-baseline.js:/scripts/baseline.js:ro grafana/k6:0.54.0 run /scripts/baseline.js'
