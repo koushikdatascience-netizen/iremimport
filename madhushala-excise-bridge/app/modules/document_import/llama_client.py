@@ -31,6 +31,8 @@ PRODUCT_SCHEMA: dict[str, Any] = {
                     "ml": {"type": ["integer", "string", "null"]},
                     "packing": {"type": ["integer", "string", "null"]},
                     "quantity": {"type": ["number", "string", "null"]},
+                    "sourceRowNumber": {"type": ["integer", "string", "null"]},
+                    "sourceUnitName": {"type": ["string", "null"]},
                     "sourceQuantityText": {"type": ["string", "null"]},
                     "box": {"type": ["number", "string", "null"]},
                     "loose": {"type": ["number", "string", "null"]},
@@ -80,10 +82,16 @@ EXTRACTION_PROMPT = (
     "For every product preserve the complete printed liquor name in itemName and brand, and extract the "
     "ML/measure. Always copy the exact printed quantity cell text into sourceQuantityText before interpreting "
     "it. Quantity semantics are strict: box means CASES/CARTONS and loose means individual BOTTLES/LOOSE UNITS. "
-    "Special Jharkhand rule: when the table heading is 'Quantity (Cases)' on a Jharkhand State Beverages "
-    "Corporation invoice, the printed value uses CASES.LOOSE notation, not a decimal fraction. For example "
-    "17.20 means box=17 and loose=20, 15.00 means box=15 and loose=0, and 2.04 means box=2 and loose=4. "
-    "Keep sourceQuantityText exactly as printed, including trailing zeroes. Special West Bengal rule: "
+    "Special Jharkhand rule: for JHARKHAND STATE BEVERAGES CORPORATION LIMITED invoices, preserve every visible "
+    "product row including continuation-page rows. The table columns are Sr No, Brand Name, Label Name, Unit Name, "
+    "Quantity (Cases), then financial columns. Always copy Sr No to sourceRowNumber, copy Unit Name exactly to "
+    "sourceUnitName, and copy Quantity (Cases) exactly to sourceQuantityText before interpreting anything. "
+    "Unit Name values such as '180 ML', '375 ML', '500 ML', '600 ML (CL)', '200 ML (CL)' and '750 ML (FML)' "
+    "must populate ml from their numeric ML value. Quantity (Cases) uses CASES.LOOSE notation, not a decimal "
+    "fraction: 17.20 means box=17 and loose=20, 15.00 means box=15 and loose=0, 4.00 means box=4 and loose=0, "
+    "and 2.04 means box=2 and loose=4. Never leave sourceRowNumber, sourceUnitName, or sourceQuantityText blank "
+    "when those cells are visibly present. Keep sourceQuantityText exactly as printed, including trailing zeroes. "
+    "Special West Bengal rule: "
     "for West Bengal Excise Foreign Liquor Form No. 3 transport passes, extract product rows only from the "
     "top-level copy marked ORIGINAL. Ignore DUPLICATE, TRIPLICATE and QUADRUPLICATE copies of the same pass. "
     "For that WB form, use the compound 'In Cases' value as the purchase quantity: for example '3 - 0' means "
@@ -100,6 +108,15 @@ EXTRACTION_PROMPT = (
     "and commercial/tax fields null except raw audit context. Use null when uncertain. Do not hallucinate. "
     "Ignore totals, summaries, signatures and repeated page headers as products."
 )
+
+
+def _decode_jharkhand_unit_ml(value: Any) -> int | None:
+    text = str(value or "").strip()
+    match = re.search(r"(?<!\d)(\d{2,5})\s*M\.?L\.?", text, re.IGNORECASE)
+    if not match:
+        return None
+    number = int(match.group(1))
+    return number if 30 <= number <= 5000 else None
 
 
 def _decode_jharkhand_quantity_text(value: Any) -> tuple[int, int] | None:
@@ -285,13 +302,29 @@ class LlamaCloudClient:
             corrected_items: list[ExtractedProduct] = []
             for item in merged_items:
                 payload = item.model_dump()
-                raw_quantity = payload.get("sourceQuantityText")
+
+                # Recover ML from the raw Unit Name column if the model omitted
+                # the canonical ml field on a continuation-page row.
+                canonical_ml = _decode_jharkhand_unit_ml(payload.get("ml"))
+                if canonical_ml is None:
+                    canonical_ml = _decode_jharkhand_unit_ml(payload.get("sourceUnitName"))
+                if canonical_ml is not None:
+                    payload["ml"] = canonical_ml
+
+                # Prefer the exact printed Quantity(Cases) text. Fall back to
+                # quantity/box only for older extraction responses that predate
+                # sourceQuantityText.
+                raw_quantity = (
+                    payload.get("sourceQuantityText")
+                    or payload.get("quantity")
+                    or payload.get("box")
+                )
                 decoded = _decode_jharkhand_quantity_text(raw_quantity)
                 if decoded is not None:
                     box, loose = decoded
                     payload["box"] = box
                     payload["loose"] = loose
-                    payload["quantity"] = raw_quantity
+                    payload["quantity"] = str(raw_quantity)
                     payload["quantitySemantics"] = "jharkhand_cases_dot_loose"
                     payload["sourceState"] = "JHARKHAND"
                 corrected_items.append(ExtractedProduct.model_validate(payload))
