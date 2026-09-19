@@ -350,13 +350,19 @@ def _extract_west_bengal(
 ) -> tuple[list[ExtractedProduct], str | None, str | None]:
     products: list[ExtractedProduct] = []
 
-    original_pages = [
-        entry
-        for entry in pages
-        if re.search(r"\bORIGINAL\b", entry[1], re.IGNORECASE)
-        and not re.search(r"\b(?:DUPLICATE|TRIPLICATE|QUADRUPLICATE)\b", entry[1], re.IGNORECASE)
-    ]
-    scan_pages = original_pages[:1] if original_pages else pages[:1]
+    def wb_copy_label(page_text: str) -> str:
+        # The footer/instructions of an ORIGINAL page mention words such as
+        # "Duplicate copy", so classify only from the top-of-page copy label.
+        top_lines = [line.strip().upper() for line in (page_text or "").splitlines()[:25] if line.strip()]
+        for label in ("QUADRUPLICATE", "TRIPLICATE", "DUPLICATE", "ORIGINAL"):
+            if any(line == label for line in top_lines):
+                return label
+        return ""
+
+    original_pages = [entry for entry in pages if wb_copy_label(entry[1]) == "ORIGINAL"]
+    # A WB Form No. 3 ORIGINAL can span multiple pages. Keep every ORIGINAL
+    # page, then ignore the repeated DUPLICATE/TRIPLICATE/QUADRUPLICATE copies.
+    scan_pages = original_pages or pages[:1]
 
     for page_no, _page_text, page_tables in scan_pages:
         for rows in page_tables:
