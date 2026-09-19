@@ -1391,6 +1391,7 @@ async function confirmReviewAndContinue() {
                     name: String(item.name || "").trim(),
                     brand: String(item.brand || "").trim(),
                     ml: Number(item.ml),
+                    batchNo: String(item.batchNo || "").trim(),
                     box: Number(item.box),
                     loose: Number(item.loose),
                 })),
