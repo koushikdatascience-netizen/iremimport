@@ -340,8 +340,13 @@ def _extract_west_bengal(
 ) -> tuple[list[ExtractedProduct], str | None, str | None]:
     products: list[ExtractedProduct] = []
 
-    original_pages = [entry for entry in pages if re.search(r"\bORIGINAL\b", entry[1], re.IGNORECASE)]
-    scan_pages = original_pages or pages[:2]
+    original_pages = [
+        entry
+        for entry in pages
+        if re.search(r"\bORIGINAL\b", entry[1], re.IGNORECASE)
+        and not re.search(r"\b(?:DUPLICATE|TRIPLICATE|QUADRUPLICATE)\b", entry[1], re.IGNORECASE)
+    ]
+    scan_pages = original_pages[:1] if original_pages else pages[:1]
 
     for page_no, _page_text, page_tables in scan_pages:
         for rows in page_tables:
@@ -379,7 +384,7 @@ def _extract_west_bengal(
                     continue
 
                 name = cells[name_idx]
-                cases, bottles = resolve_case_loose(cells[case_idx], cells[bottle_idx])
+                cases, bottles = resolve_case_loose(cells[case_idx], None)
                 if not name or (cases <= 0 and bottles <= 0):
                     continue
 
@@ -400,7 +405,7 @@ def _extract_west_bengal(
                     raw=raw,
                     state="WEST_BENGAL",
                     page=page_no,
-                    semantics="document_cases_and_bottles",
+                    semantics="west_bengal_case_field_only",
                 )
                 if item:
                     products.append(item)
