@@ -127,6 +127,32 @@ def _decode_jharkhand_quantity_text(value: Any) -> tuple[int, int] | None:
     return max(0, int(match.group(1))), max(0, int(match.group(2)))
 
 
+def _canonicalize_jharkhand_product_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    fixed = dict(payload)
+
+    canonical_ml = _decode_jharkhand_unit_ml(fixed.get("ml"))
+    if canonical_ml is None:
+        canonical_ml = _decode_jharkhand_unit_ml(fixed.get("sourceUnitName"))
+    if canonical_ml is not None:
+        fixed["ml"] = canonical_ml
+
+    raw_quantity = (
+        fixed.get("sourceQuantityText")
+        or fixed.get("quantity")
+        or fixed.get("box")
+    )
+    decoded = _decode_jharkhand_quantity_text(raw_quantity)
+    if decoded is not None:
+        box, loose = decoded
+        fixed["box"] = box
+        fixed["loose"] = loose
+        fixed["quantity"] = str(raw_quantity)
+        fixed["quantitySemantics"] = "jharkhand_cases_dot_loose"
+        fixed["sourceState"] = "JHARKHAND"
+
+    return fixed
+
+
 class LlamaCloudError(RuntimeError):
     pass
 
@@ -301,32 +327,7 @@ class LlamaCloudClient:
         if document_profile == "JHARKHAND_STATE_BEVERAGES":
             corrected_items: list[ExtractedProduct] = []
             for item in merged_items:
-                payload = item.model_dump()
-
-                # Recover ML from the raw Unit Name column if the model omitted
-                # the canonical ml field on a continuation-page row.
-                canonical_ml = _decode_jharkhand_unit_ml(payload.get("ml"))
-                if canonical_ml is None:
-                    canonical_ml = _decode_jharkhand_unit_ml(payload.get("sourceUnitName"))
-                if canonical_ml is not None:
-                    payload["ml"] = canonical_ml
-
-                # Prefer the exact printed Quantity(Cases) text. Fall back to
-                # quantity/box only for older extraction responses that predate
-                # sourceQuantityText.
-                raw_quantity = (
-                    payload.get("sourceQuantityText")
-                    or payload.get("quantity")
-                    or payload.get("box")
-                )
-                decoded = _decode_jharkhand_quantity_text(raw_quantity)
-                if decoded is not None:
-                    box, loose = decoded
-                    payload["box"] = box
-                    payload["loose"] = loose
-                    payload["quantity"] = str(raw_quantity)
-                    payload["quantitySemantics"] = "jharkhand_cases_dot_loose"
-                    payload["sourceState"] = "JHARKHAND"
+                payload = _canonicalize_jharkhand_product_payload(item.model_dump())
                 corrected_items.append(ExtractedProduct.model_validate(payload))
             merged_items = corrected_items
 
