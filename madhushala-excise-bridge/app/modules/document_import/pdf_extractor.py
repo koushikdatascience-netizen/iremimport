@@ -105,11 +105,19 @@ def _dedupe(products: list[ExtractedProduct]) -> list[ExtractedProduct]:
         source_row = raw.get("column1") or raw.get("S.No") or raw.get("Sr No") or raw.get("Sl No")
         # Include physical row identity so two legitimate repeated invoice
         # lines are never collapsed merely because product/ML/quantity match.
+        # product.ml has already been normalized by _product(). Do not pass
+        # the numeric value back through _ml(), because _ml() expects text with
+        # an explicit "ML" suffix. Doing so turned 180/375/750 into None and
+        # collapsed same-name, same-quantity size variants as duplicates.
+        product_ml = _int(product.ml)
+        if product_ml <= 0:
+            product_ml = _ml(product.itemName) or 0
+
         signature = (
             source_page,
             str(source_row or "").strip(),
             _key(product.itemName),
-            _ml(product.ml, product.itemName),
+            product_ml,
             _int(product.box),
             _int(product.loose),
         )
