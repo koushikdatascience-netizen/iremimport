@@ -626,6 +626,21 @@ def _candidate_row_count(
         selected_pages = originals or pages[:2]
 
     signatures: set[str] = set()
+
+    # Telangana ICDC has stable serial + four-digit Brand Number rows in the
+    # text layer, even when PyMuPDF table detection returns only part of a page.
+    # Count those independently so partial find_tables() output cannot be
+    # mistaken for a complete extraction.
+    if profile == "TELANGANA_ICDC":
+        text_serials: set[tuple[int, int]] = set()
+        for page_no, page_text, _page_tables in selected_pages:
+            for match in re.finditer(r"(?m)^\s*(\d{1,3})\s+\d{4}\b", page_text or ""):
+                serial = int(match.group(1))
+                if 1 <= serial <= 999:
+                    text_serials.add((page_no, serial))
+        if text_serials:
+            return len(text_serials)
+
     for _page_no, _text, page_tables in selected_pages:
         for rows in page_tables:
             for cells in rows:
