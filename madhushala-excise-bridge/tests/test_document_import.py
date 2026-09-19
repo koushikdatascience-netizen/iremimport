@@ -978,6 +978,41 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
 
 
 
+
+
+def test_west_bengal_form3_keeps_all_six_original_rows_with_distinct_ml():
+    from app.modules.document_import.pdf_extractor import _extract_west_bengal
+
+    rows = [
+        [
+            "Kind of Foreign Liquor(IMFL/OSBI/OS)", "Category", "Brand Name", "Measure",
+            "Strength", "Batch No. & Date", "Quantity", "", "", "", "Amount",
+        ],
+        ["", "", "", "", "", "", "In Cases", "In Bottles", "In B.L", "In LPL", ""],
+        ["IMFL", "Beer", "Kingfisher Strong Premium Beer [Can]", "500 Ml.", "8 %v/v", "45& 22/07/2026", "12 - 0", "288", "144.00", "N.A.", "19584.00"],
+        ["IMFL", "Whisky", "McDowell's No. 1 Superior Whisky", "180 Ml.", "25 Under Proof", "262-2& July,2026", "1 - 0", "48", "8.64", "6.48", "5443.20"],
+        ["IMFL", "Whisky", "McDowell's No. 1 Superior Whisky", "750 Ml.", "25 Under Proof", "289-3& August,2026", "1 - 0", "12", "9.00", "6.75", "5670.00"],
+        ["IMFL", "Whisky", "McDowells No.1 Luxury Blended Whisky", "180 Ml.", "25 Under Proof", "265-1& July,2026", "3 - 0", "144", "25.92", "19.44", "16848.00"],
+        ["IMFL", "Whisky", "McDowells No.1 Luxury Blended Whisky", "375 Ml.", "25 Under Proof", "047-2& July,2026", "3 - 0", "72", "27.00", "20.25", "17550.00"],
+        ["IMFL", "Whisky", "McDowells No.1 Luxury Blended Whisky", "750 Ml.", "25 Under Proof", "256-2& July,2026", "3 - 0", "36", "27.00", "20.25", "17550.00"],
+        ["Total", "", "", "", "", "", "23 - 0", "600", "241.56", "73.17", "82645.20"],
+    ]
+
+    products, _, _ = _extract_west_bengal(
+        "ORIGINAL\nWest Bengal Excise Foreign Liquor Form No 3\nTransport Pass No. : tFLDR/2026-2027/07015578/P\nDate : 17/08/2026",
+        [(1, "ORIGINAL\nWest Bengal Excise Foreign Liquor Form No 3", [rows])],
+    )
+
+    assert len(products) == 6
+    assert [(p.ml, p.box, p.loose) for p in products] == [
+        (500, 12, 0),
+        (180, 1, 0),
+        (750, 1, 0),
+        (180, 3, 0),
+        (375, 3, 0),
+        (750, 3, 0),
+    ]
+
 def test_west_bengal_ignores_duplicate_triplicate_and_quadruplicate_copies():
     from app.modules.document_import.pdf_extractor import _extract_west_bengal
 
