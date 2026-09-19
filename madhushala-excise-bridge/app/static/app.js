@@ -734,7 +734,16 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
         renderWorkspace();
         if (previousSearch) runSearch();
     } catch (error) {
-        if (!options.quiet) showToast(error.message || "Could not load mapping", "error");
+        if (!options.quiet) {
+            const authExpired = error?.code === "MADHUSHALA_AUTH_EXPIRED"
+                || String(error?.message || "").includes("Madhushala login/JWT is expired");
+            showToast(
+                authExpired
+                    ? "Madhushala login expired. Please reopen Excise Import from Madhushala CRM, then continue this import."
+                    : (error.message || "Could not load mapping"),
+                "error",
+            );
+        }
     }
 }
 
