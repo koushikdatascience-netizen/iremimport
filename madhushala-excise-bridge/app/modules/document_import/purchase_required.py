@@ -128,16 +128,13 @@ async def resolve_required_purchase_header(
     source_doc_date = _date_only(job.get("invoice_date"))
     source_is_document = source_type in {"QR_HTML", "DOCUMENT_PDF", "DOCUMENT_IMAGE"}
 
-    if source_is_document:
-        if source_doc_no:
-            resolved["docNo"] = source_doc_no
-        if source_doc_date:
-            resolved["docDate"] = source_doc_date
-    else:
-        if not _text(resolved.get("docNo")) and source_doc_no:
-            resolved["docNo"] = source_doc_no
-        if not _text(resolved.get("docDate")) and source_doc_date:
-            resolved["docDate"] = source_doc_date
+    # Extracted document values are defaults only. Once the user edits
+    # docNo/docDate in the review screen, those reviewed values are authoritative.
+    # This applies to QR/PDF/image imports as well as legacy/manual flows.
+    if not _text(resolved.get("docNo")) and source_doc_no:
+        resolved["docNo"] = source_doc_no
+    if not _text(resolved.get("docDate")) and source_doc_date:
+        resolved["docDate"] = source_doc_date
 
     if not _text(resolved.get("tpPassNo")):
         resolved["tpPassNo"] = _transport_pass_from_job(job, job_id)
