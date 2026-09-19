@@ -126,8 +126,11 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
                 mrp=_float(item.mrp),
                 amount=amount,
                 batchNo=_clean_text(item.batchNo),
-                box=parse_int(item.box) or None,
-                loose=parse_int(item.loose) or None,
+                # Preserve an explicit zero box/loose value for non-document
+                # sources such as QR_HTML. QR quantity semantics intentionally
+                # use box=0 and loose=bottle_count.
+                box=parse_int(item.box) if item.box is not None else None,
+                loose=parse_int(item.loose) if item.loose is not None else None,
                 freeQnty=parse_int(item.freeQnty) or None,
                 discount=_float(item.discount),
                 cgst=_float(item.cgst),
