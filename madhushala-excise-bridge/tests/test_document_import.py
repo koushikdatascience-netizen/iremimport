@@ -1128,6 +1128,19 @@ def test_west_bengal_form3_keeps_all_six_original_rows_with_distinct_ml():
 
 
 
+
+
+def test_west_bengal_brand_cleanup_removes_only_standalone_watermark_w():
+    from app.modules.document_import.pdf_extractor import _clean_west_bengal_brand
+
+    assert _clean_west_bengal_brand(
+        "w\nALL SEASONS\nVINTAGE\nCOLLECTION\nRESERVE WHISKY -\nGIFT PACK"
+    ) == "ALL SEASONS VINTAGE COLLECTION RESERVE WHISKY - GIFT PACK"
+
+    # Legitimate names beginning with W must remain untouched.
+    assert _clean_west_bengal_brand("White Mischief Vodka") == "White Mischief Vodka"
+    assert _clean_west_bengal_brand("W Reserve Whisky") == "W Reserve Whisky"
+
 def test_west_bengal_keeps_second_original_page_even_if_instructions_mention_duplicate():
     from app.modules.document_import.pdf_extractor import _extract_west_bengal
 

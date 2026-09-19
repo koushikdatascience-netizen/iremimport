@@ -344,6 +344,18 @@ def _extract_jharkhand(
     return _dedupe(products), invoice_number, invoice_date
 
 
+def _clean_west_bengal_brand(value: Any) -> str:
+    """Remove isolated WB portal watermark glyphs without altering real brand text."""
+    raw = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.strip() for line in raw.split("\n") if line.strip()]
+    if len(lines) > 1:
+        while len(lines) > 1 and lines[0].casefold() in {"w", "."}:
+            lines.pop(0)
+        while len(lines) > 1 and lines[-1].casefold() in {"w", "."}:
+            lines.pop()
+    return _clean(" ".join(lines))
+
+
 def _extract_west_bengal(
     full_text: str,
     pages: list[tuple[int, str, list[list[list[str]]]]],
@@ -400,7 +412,7 @@ def _extract_west_bengal(
                 if category not in {"IMFL", "OSBI", "OS"}:
                     continue
 
-                name = cells[name_idx]
+                name = _clean_west_bengal_brand(cells[name_idx])
                 cases, bottles = resolve_case_loose(cells[case_idx], None)
                 if not name or (cases <= 0 and bottles <= 0):
                     continue
