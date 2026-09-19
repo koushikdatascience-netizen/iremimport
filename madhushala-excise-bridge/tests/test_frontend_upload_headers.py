@@ -37,3 +37,12 @@ def test_purchase_header_prefers_extracted_document_date():
         assert '"purchase-trn-date": header.trnDate || today' in source
         assert 'currentDocumentResult?.extractedDocument?.invoiceDate' in source
         assert 'currentDocumentResult?.job?.invoice_date' in source
+
+
+def test_document_review_shows_and_submits_batch_column():
+    app = APP_JS.read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'data-field="batchNo"' in app
+    assert 'batchNo: row.querySelector(\'[data-field="batchNo"]\')?.value || ""' in app
+    assert 'Batch No. &amp; Date' in html
