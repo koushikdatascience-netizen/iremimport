@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from types import SimpleNamespace
 from contextlib import contextmanager
 
 from app.errors import error_payload, normalize_http_detail
@@ -86,7 +87,7 @@ def test_readiness_requires_database_and_configured_redis(monkeypatch):
         return True
 
     monkeypatch.setattr(main_module, "conn", fake_conn)
-    monkeypatch.setattr(main_module.settings, "REDIS_URL", "redis://redis:6379/0")
+    monkeypatch.setattr(main_module, "settings", SimpleNamespace(REDIS_URL="redis://redis:6379/0"))
     monkeypatch.setattr(main_module.cache_service, "ping", redis_ok)
 
     ready, dependencies = asyncio.run(main_module._readiness_state())
@@ -113,7 +114,7 @@ def test_readiness_fails_when_redis_is_unavailable(monkeypatch):
         return False
 
     monkeypatch.setattr(main_module, "conn", fake_conn)
-    monkeypatch.setattr(main_module.settings, "REDIS_URL", "redis://redis:6379/0")
+    monkeypatch.setattr(main_module, "settings", SimpleNamespace(REDIS_URL="redis://redis:6379/0"))
     monkeypatch.setattr(main_module.cache_service, "ping", redis_failed)
 
     ready, dependencies = asyncio.run(main_module._readiness_state())
