@@ -397,15 +397,24 @@ class PurchaseOrchestrator:
     def merge_calculation(self, payload: dict[str, Any], response: Any) -> None:
         """Merge Madhushala Calculate output and treat it as the financial source of truth."""
         calculated = self._calculated_items(response)
-        by_code = {
-            str(_dict_value(item, "itemCode", "code") or "").strip(): item
-            for item in calculated
-        }
 
+        # itemCode is not a unique purchase-line identifier. Multiple source
+        # rows can legitimately map to the same Madhushala item, so preserve
+        # occurrences instead of collapsing them into a dict keyed by itemCode.
+        by_code: dict[str, list[dict[str, Any]]] = {}
+        for calc_item in calculated:
+            code = str(_dict_value(calc_item, "itemCode", "code") or "").strip()
+            by_code.setdefault(code, []).append(calc_item)
+
+        used_by_code: dict[str, int] = {}
         for index, item in enumerate(payload.get("items") or []):
-            calc = by_code.get(str(item.get("itemCode") or "").strip()) or (
+            code = str(item.get("itemCode") or "").strip()
+            occurrence = used_by_code.get(code, 0)
+            matching = by_code.get(code) or []
+            calc = matching[occurrence] if occurrence < len(matching) else (
                 calculated[index] if index < len(calculated) else None
             )
+            used_by_code[code] = occurrence + 1
             if not calc:
                 continue
 
