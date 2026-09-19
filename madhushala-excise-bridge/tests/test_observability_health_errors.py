@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from contextlib import contextmanager
 
 from app.errors import error_payload, normalize_http_detail
-from app.observability import JsonFormatter, reset_correlation_id, set_correlation_id
+from app.observability import JsonFormatter, PURCHASE_SAVE_DURATION_SECONDS, observe_purchase_save, reset_correlation_id, set_correlation_id
 
 
 def test_standard_error_envelope_contains_correlation_id():
@@ -122,3 +122,11 @@ def test_readiness_fails_when_redis_is_unavailable(monkeypatch):
     assert ready is False
     assert dependencies["database"] == "ok"
     assert dependencies["redis"] == "error"
+
+
+def test_purchase_save_latency_metric_records_status():
+    before = PURCHASE_SAVE_DURATION_SECONDS.labels(status="ok")._sum.get()
+    observe_purchase_save("OK", 0.25)
+    after = PURCHASE_SAVE_DURATION_SECONDS.labels(status="ok")._sum.get()
+
+    assert after >= before + 0.25
