@@ -3108,12 +3108,20 @@ function setInputValue(id, value) {
     if (input && !input.value && value) input.value = value;
 }
 
+["purchase-doc-no", "purchase-doc-date"].forEach((id) => {
+    document.getElementById(id)?.addEventListener("input", (event) => {
+        event.currentTarget.dataset.userEdited = "true";
+    });
+});
+
 function collectPurchaseHeader() {
     return {
         yearCode: document.getElementById("purchase-year-code")?.value.trim() || "",
         trnDate: document.getElementById("purchase-trn-date")?.value || "",
         docDate: document.getElementById("purchase-doc-date")?.value || "",
         docNo: document.getElementById("purchase-doc-no")?.value.trim() || "",
+        _docDateEdited: document.getElementById("purchase-doc-date")?.dataset.userEdited === "true",
+        _docNoEdited: document.getElementById("purchase-doc-no")?.dataset.userEdited === "true",
         tpPassNo: document.getElementById("purchase-tp-pass-no")?.value.trim() || "",
         supplierCode: document.getElementById("purchase-supplier-code")?.value.trim() || "",
         storeCode: document.getElementById("purchase-store-code")?.value.trim() || "",
