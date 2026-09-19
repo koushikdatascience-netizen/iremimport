@@ -1074,6 +1074,51 @@ def test_west_bengal_form3_keeps_all_six_original_rows_with_distinct_ml():
         (750, 3, 0),
     ]
 
+
+
+def test_west_bengal_keeps_second_original_page_even_if_instructions_mention_duplicate():
+    from app.modules.document_import.pdf_extractor import _extract_west_bengal
+
+    header = [
+        "Kind of Foreign Liquor(IMFL/OSBI/OS)", "Category", "Brand Name", "Measure",
+        "Strength", "Batch No. & Date", "Quantity", "", "", "", "Amount",
+    ]
+    subheader = ["", "", "", "", "", "", "In Cases", "In Bottles", "In B.L", "In LPL", ""]
+
+    page1_rows = [
+        header,
+        subheader,
+        ["IMFL", "Whisky", "ITEM A", "750 Ml.", "25 Under Proof", "016-3& June,2026", "1 - 0", "12", "9", "6", "100"],
+        ["IMFL", "Whisky", "ITEM B", "180 Ml.", "25 Under Proof", "074-3& May,2026", "3 - 0", "144", "25", "19", "200"],
+    ]
+    page2_rows = [
+        header,
+        subheader,
+        ["IMFL", "Rum", "ITEM C", "750 Ml.", "25 Under Proof", "035-4& July,2026", "1 - 0", "12", "9", "6", "300"],
+        ["IMFL", "Vodka", "ITEM D", "375 Ml.", "25 Under Proof", "025-1& July,2026", "1 - 0", "24", "9", "6", "400"],
+    ]
+
+    pages = [
+        (1, "ORIGINAL\nWest Bengal Excise Foreign Liquor Form No 3", [page1_rows]),
+        (
+            2,
+            "ORIGINAL\nWest Bengal Excise Foreign Liquor Form No 3\n"
+            "Copies: The Duplicate copy shall be handed over to the Consignor.",
+            [page2_rows],
+        ),
+        (3, "DUPLICATE\nWest Bengal Excise Foreign Liquor Form No 3", [page1_rows]),
+    ]
+
+    products, _, _ = _extract_west_bengal(
+        "Transport Pass No. : tFLDR/2026-2027/06975939/P\nDate : 10/08/2026",
+        pages,
+    )
+
+    assert len(products) == 4
+    assert [p.itemName for p in products] == ["ITEM A", "ITEM B", "ITEM C", "ITEM D"]
+    assert products[0].batchNo == "016-3& June,2026"
+    assert products[2].batchNo == "035-4& July,2026"
+
 def test_west_bengal_ignores_duplicate_triplicate_and_quadruplicate_copies():
     from app.modules.document_import.pdf_extractor import _extract_west_bengal
 
