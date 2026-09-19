@@ -1010,3 +1010,53 @@ async def test_document_purchase_uses_reviewed_cases_and_loose_with_item_master_
     assert item["itemName"] == "SEAGRAMS IMPERIAL BLUE CLASSIC GRAIN WHISKY"
     assert item["discount"] == 0.0
     db.close()
+
+
+def test_calculate_coverage_blocks_partial_item_list():
+    from fastapi import HTTPException
+    from app.services.purchase_orchestrator import PurchaseOrchestrator
+
+    expected = [
+        {"itemCode": "100001"},
+        {"itemCode": "100002"},
+        {"itemCode": "100003"},
+        {"itemCode": "100004"},
+        {"itemCode": "100005"},
+    ]
+    response = {
+        "items": [
+            {"itemCode": "100001"},
+            {"itemCode": "100002"},
+            {"itemCode": "100003"},
+            {"itemCode": "100004"},
+        ]
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        PurchaseOrchestrator._validate_calculation_coverage(expected, response)
+
+    assert exc_info.value.status_code == 502
+    assert "Expected 5 item(s) but received 4" in str(exc_info.value.detail)
+    assert "Purchase was not saved" in str(exc_info.value.detail)
+
+
+def test_calculate_coverage_blocks_item_code_mismatch_even_when_count_matches():
+    from fastapi import HTTPException
+    from app.services.purchase_orchestrator import PurchaseOrchestrator
+
+    expected = [
+        {"itemCode": "100001"},
+        {"itemCode": "100002"},
+    ]
+    response = {
+        "items": [
+            {"itemCode": "100001"},
+            {"itemCode": "999999"},
+        ]
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        PurchaseOrchestrator._validate_calculation_coverage(expected, response)
+
+    assert exc_info.value.status_code == 502
+    assert "different item codes" in str(exc_info.value.detail)
