@@ -347,17 +347,20 @@ async function api(path, options = {}) {
         }
     }
     if (!response.ok) {
+        const apiError = data?.error && typeof data.error === "object" ? data.error : null;
         const detail = data?.detail;
-        const message = (
+        const message = apiError?.message || (
             detail && typeof detail === "object"
                 ? (detail.message || detail.error || JSON.stringify(detail))
-                : (detail || data?.error || `HTTP ${response.status}`)
+                : (detail || (typeof data?.error === "string" ? data.error : "") || `HTTP ${response.status}`)
         );
         const error = new Error(message);
         error.status = response.status;
-        if (detail && typeof detail === "object" && detail.code) {
-            error.code = detail.code;
-        }
+        error.code = apiError?.code || (
+            detail && typeof detail === "object" ? detail.code : undefined
+        );
+        error.correlationId = apiError?.correlationId || response.headers.get("X-Correlation-ID") || "";
+        error.retryable = Boolean(apiError?.retryable);
         throw error;
     }
     return data;
