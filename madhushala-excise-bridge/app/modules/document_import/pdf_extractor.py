@@ -58,6 +58,21 @@ def _ml(*values: Any) -> int | None:
     return None
 
 
+def _capacity_ml(value: Any) -> int | None:
+    """Extract bottle capacity when the column itself defines the unit.
+
+    MP Delivery Challans commonly print values like "180 (Pet Bottle)" without
+    the literal letters "ML". In a Capacity column, the leading numeric value
+    is the container capacity in millilitres.
+    """
+    text = _clean(value).replace(",", "")
+    match = re.search(r"(?<!\d)(\d{2,5})(?!\d)", text)
+    if not match:
+        return None
+    number = int(match.group(1))
+    return number if 30 <= number <= 5000 else None
+
+
 def _normalize_date(value: Any) -> str | None:
     text = _clean(value)
     if not text:
@@ -442,7 +457,7 @@ def _extract_madhya_pradesh(
                 name = _clean(cells[label_idx])
                 capacity = _clean(cells[capacity_idx])
                 cases = _int(cells[cases_idx])
-                measure = _ml(capacity, name)
+                measure = _capacity_ml(capacity) or _ml(capacity, name)
                 if not name or not measure or cases <= 0:
                     continue
 
@@ -461,7 +476,7 @@ def _extract_madhya_pradesh(
 
                 item = _product(
                     name=name,
-                    ml=capacity,
+                    ml=f"{measure} ML",
                     box=cases,
                     loose=0,
                     raw=raw,
