@@ -19,6 +19,7 @@ PRODUCT_SCHEMA: dict[str, Any] = {
         "documentType": {"type": "string", "enum": ["invoice", "price_list", "stock_list", "unknown"]},
         "supplierName": {"type": ["string", "null"]},
         "invoiceNumber": {"type": ["string", "null"]},
+        "transportPassNo": {"type": ["string", "null"]},
         "invoiceDate": {"type": ["string", "null"]},
         "documentProfile": {"type": ["string", "null"]},
         "items": {
@@ -75,15 +76,20 @@ PRODUCT_SCHEMA: dict[str, Any] = {
 
 EXTRACTION_PROMPT = (
     "Extract only the source-document facts needed for liquor purchase review. At document level extract "
-    "supplierName when visible, invoiceNumber as the invoice/document/permit/transport-pass identifier, "
-    "invoiceDate as the source document date, and documentProfile. Set documentProfile to "
+    "supplierName when visible. Extract invoiceNumber as the business document number (invoice number, delivery "
+    "challan/DC number, demand/document number). Extract transportPassNo separately when the document also shows a "
+    "transport pass, excise permit, registered permit, TP pass, or permit number. If the document has only one such "
+    "identifier, invoiceNumber may use that identifier and transportPassNo may be null; the application will apply "
+    "the fallback. Extract invoiceDate as the source document date, and documentProfile. Set documentProfile to "
     "'JHARKHAND_STATE_BEVERAGES' when the page/document is issued by JHARKHAND STATE BEVERAGES CORPORATION "
     "LIMITED or is a continuation of that invoice format; otherwise use null unless another profile is known. "
     "For every product preserve the complete printed liquor name in itemName and brand. Always copy the exact "
     "printed Unit Name/Measure cell into sourceUnitText, and extract its ML value into ml. For example, Unit Name "
     "'180 ML' means sourceUnitText='180 ML' and ml=180. Always copy the exact printed quantity cell text into "
-    "sourceQuantityText before interpreting "
-    "it. Quantity semantics are strict: box means CASES/CARTONS and loose means individual BOTTLES/LOOSE UNITS. "
+    "sourceQuantityText before interpreting it. If a product table contains a Batch, Batch No., Batch No. & Date, "
+    "Lot/Batch or equivalent per-item column, copy that exact populated cell into batchNo for that product. If the "
+    "batch cell is blank or the document has no batch column, use null. Never derive batchNo from invoice numbers, "
+    "permit numbers, dates or other headers. Quantity semantics are strict: box means CASES/CARTONS and loose means individual BOTTLES/LOOSE UNITS. "
     "Special Jharkhand rule: for JHARKHAND STATE BEVERAGES CORPORATION LIMITED invoices, preserve EVERY visible "
     "product row, including continuation pages that may start directly with row 21, 22, 23, etc. The table columns are "
     "Sr No, Brand Name, Label Name, Unit Name, Quantity (Cases), followed by financial columns. Copy the visible Sr No "
@@ -258,6 +264,7 @@ class LlamaCloudClient:
         document_type = "unknown"
         supplier_name = None
         invoice_number = None
+        transport_pass_no = None
         invoice_date = None
         document_profile = None
 
@@ -288,6 +295,7 @@ class LlamaCloudClient:
                 document_type = page_document.documentType
             supplier_name = supplier_name or page_document.supplierName
             invoice_number = invoice_number or page_document.invoiceNumber
+            transport_pass_no = transport_pass_no or getattr(page_document, "transportPassNo", None)
             invoice_date = invoice_date or page_document.invoiceDate
             page_profile = str(getattr(page_document, "documentProfile", "") or "").strip()
             if page_profile:
@@ -358,6 +366,7 @@ class LlamaCloudClient:
             documentType=document_type,
             supplierName=supplier_name,
             invoiceNumber=invoice_number,
+            transportPassNo=transport_pass_no,
             invoiceDate=invoice_date,
             items=deduped_items,
             documentProfile=document_profile,
