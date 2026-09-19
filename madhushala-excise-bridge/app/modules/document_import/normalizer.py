@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.services.normalizer import normalize_brand, parse_decimal, parse_int, parse_ml
-from app.modules.document_import.quantity import resolve_document_quantity
+from app.modules.document_import.quantity import case_embeds_loose, resolve_case_loose, resolve_document_quantity
 from app.modules.document_import.schemas import ExtractedDocument, NormalizedImportItem
 
 
@@ -52,13 +52,17 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
             #   box   = explicitly printed cases/cartons
             #   loose = explicitly printed single bottles/units
             # Never convert between the two here. Packing belongs to Item Master.
-            box = parse_int(item.box) or 0
-            loose = parse_int(item.loose) or 0
+            # Case/Box has priority. A clean integer case keeps a separate
+            # Bottles/Loose value, while compound source forms such as 15.78
+            # or 15-20 encode both values inside Case and therefore ignore
+            # the separate Bottles field.
+            box, loose = resolve_case_loose(item.box, item.loose)
+            embedded_case_loose = case_embeds_loose(item.box)
 
             # Backward-compatible recovery only for older extraction payloads
-            # that pre-date canonical box/loose. New extractors must provide
-            # semantic box/loose directly.
-            if box <= 0 and loose <= 0:
+            # that pre-date canonical box/loose. Do not recover a separate
+            # bottle quantity when Case itself explicitly encoded loose units.
+            if box <= 0 and loose <= 0 and not embedded_case_loose:
                 legacy_quantity = (
                     parse_int(item.quantity)
                     or resolve_document_quantity(raw)
