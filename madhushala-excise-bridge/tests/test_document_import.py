@@ -1014,6 +1014,60 @@ def test_jharkhand_llama_quantity_decoder_preserves_two_digit_loose_suffix():
     assert _decode_jharkhand_quantity_text("20") is None
 
 
+
+
+@pytest.mark.asyncio
+async def test_west_bengal_native_extraction_never_merges_llama_copy_rows(monkeypatch):
+    from app.modules.document_import.service import DocumentImportService
+    from app.modules.document_import import service as service_module
+
+    primary = ExtractedDocument(
+        documentType="invoice",
+        invoiceNumber="tFLDR/2026-2027/07015578/P",
+        invoiceDate="17/08/2026",
+        items=[
+            ExtractedProduct(itemName=f"ITEM {i} 750 ML", brand=f"ITEM {i}", ml=750, box=i, loose=0)
+            for i in range(1, 7)
+        ],
+        extractionEngine="pymupdf-state-adapter",
+        extractionProfile="WEST_BENGAL_FORM3",
+        sourceState="WEST_BENGAL",
+    )
+
+    def fake_local(_path):
+        return primary, {
+            "engine": "pymupdf-state-adapter",
+            "usable": True,
+            "profile": "WEST_BENGAL_FORM3",
+            "productCount": 6,
+            "candidateRowCount": 22,
+            "completeness": 6 / 22,
+            "needsFallback": True,
+        }
+
+    async def should_not_run_llama(self, file_path, filename):
+        raise AssertionError("Llama fallback must not run for a successful WB ORIGINAL table")
+
+    monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local)
+    monkeypatch.setattr(
+        service_module.LlamaCloudClient,
+        "extract_scanned_pdf_pages",
+        should_not_run_llama,
+    )
+
+    service = DocumentImportService()
+    extracted, meta = await service._extract_upload_part(
+        b"%PDF-1.4 wb-test",
+        "pdf",
+        "wb-form3.pdf",
+        1,
+    )
+
+    assert len(extracted.items) == 6
+    assert meta["engine"] == "pymupdf-state-adapter"
+    assert meta["needsFallback"] is False
+    assert meta["fallbackSuppressed"] == "west_bengal_original_is_authoritative"
+
 def test_multi_pdf_batch_merges_same_purchase_into_one_review(client, monkeypatch):
     from app.modules.document_import.service import DocumentImportService
 
