@@ -52,8 +52,9 @@ class DocumentPurchaseAdapter:
 
     Document/QR data owns physical document facts and quantities. Madhushala
     Item Master owns commercial/tax metadata. The full Item Master detail is
-    loaded before Calculate; imported bottle quantity is the only quantity input
-    that overrides Item Master-derived commercial values.
+    loaded before Calculate; reviewed document box/case and loose/bottle
+    quantities are the only quantity inputs that override Item Master-derived
+    commercial values.
     """
 
     def __init__(self, document_service: Any):

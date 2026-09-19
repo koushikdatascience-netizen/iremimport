@@ -6,6 +6,7 @@ from typing import Any
 
 import fitz
 
+from app.modules.document_import.quantity import resolve_case_loose
 from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct
 
 
@@ -232,7 +233,7 @@ def _extract_telangana(
                 if not name_candidates:
                     continue
                 name = max(name_candidates, key=len)
-                cases, loose = integer_cells[0], integer_cells[1]
+                cases, loose = resolve_case_loose(integer_cells[0], integer_cells[1])
                 raw = {f"column{index + 1}": value for index, value in enumerate(cells)}
                 raw.update(
                     {
@@ -378,8 +379,7 @@ def _extract_west_bengal(
                     continue
 
                 name = cells[name_idx]
-                cases = _int(cells[case_idx])
-                bottles = _int(cells[bottle_idx])
+                cases, bottles = resolve_case_loose(cells[case_idx], cells[bottle_idx])
                 if not name or (cases <= 0 and bottles <= 0):
                     continue
 
@@ -456,9 +456,9 @@ def _extract_madhya_pradesh(
 
                 name = _clean(cells[label_idx])
                 capacity = _clean(cells[capacity_idx])
-                cases = _int(cells[cases_idx])
+                cases, loose = resolve_case_loose(cells[cases_idx], None)
                 measure = _capacity_ml(capacity) or _ml(capacity, name)
-                if not name or not measure or cases <= 0:
+                if not name or not measure or (cases <= 0 and loose <= 0):
                     continue
 
                 package_match = re.search(r"\(([^)]+)\)", capacity)
@@ -478,7 +478,7 @@ def _extract_madhya_pradesh(
                     name=name,
                     ml=f"{measure} ML",
                     box=cases,
-                    loose=0,
+                    loose=loose,
                     raw=raw,
                     state="MADHYA_PRADESH",
                     page=page_no,
@@ -553,8 +553,9 @@ def _extract_generic(
                 if not required or len(cells) <= max(required):
                     continue
                 name = cells[name_idx]
-                cases = _int(cells[case_idx]) if case_idx is not None else 0
-                bottles = _int(cells[bottle_idx]) if bottle_idx is not None else 0
+                case_value = cells[case_idx] if case_idx is not None else None
+                bottle_value = cells[bottle_idx] if bottle_idx is not None else None
+                cases, bottles = resolve_case_loose(case_value, bottle_value)
                 raw = {f"column{index + 1}": value for index, value in enumerate(cells)}
                 item = _product(
                     name=name,

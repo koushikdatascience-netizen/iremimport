@@ -73,6 +73,61 @@ def _positive_int(value: Any) -> int:
         return 0
 
 
+
+def case_embeds_loose(value: Any) -> bool:
+    """Return True when Case/Box itself encodes case + loose quantities.
+
+    Supported source forms are "<cases>.<loose>" and "<cases>-<loose>",
+    with optional surrounding whitespace. In these forms the suffix is the
+    authoritative loose/bottle quantity and any separate Bottles field must
+    be ignored.
+    """
+    if value in (None, "", False):
+        return False
+    text = unicodedata.normalize("NFKC", str(value)).strip()
+    text = text.replace("–", "-").replace("—", "-")
+    return bool(re.fullmatch(r"\d+\s*[.-]\s*\d+", text))
+
+
+def resolve_case_loose(case_value: Any, bottle_value: Any = None) -> tuple[int, int]:
+    """Resolve document Case/Box + Bottles/Loose using source semantics.
+
+    Rules:
+      * no case / case=0 -> box=0, loose=separate bottles
+      * clean positive integer case -> box=case, loose=separate bottles
+      * case like 15.78 or 15-20 -> box=15, loose=78/20 and ignore bottles
+      * malformed non-empty case text -> return 0/0 so review can catch it
+    """
+    if case_embeds_loose(case_value):
+        text = unicodedata.normalize("NFKC", str(case_value)).strip()
+        text = text.replace("–", "-").replace("—", "-")
+        match = re.fullmatch(r"(\d+)\s*[.-]\s*(\d+)", text)
+        if match:
+            return max(0, int(match.group(1))), max(0, int(match.group(2)))
+
+    if case_value in (None, "", False):
+        return 0, _positive_int(bottle_value)
+
+    # Numeric values produced by an extractor are already semantic numbers.
+    # An integral float such as 15.0 is treated like integer 15; a source
+    # string "15.0" is intentionally handled above as embedded case+loose.
+    if isinstance(case_value, int) and not isinstance(case_value, bool):
+        case = max(0, case_value)
+        return (case, _positive_int(bottle_value)) if case > 0 else (0, _positive_int(bottle_value))
+    if isinstance(case_value, float) and case_value.is_integer():
+        case = max(0, int(case_value))
+        return (case, _positive_int(bottle_value)) if case > 0 else (0, _positive_int(bottle_value))
+
+    text = unicodedata.normalize("NFKC", str(case_value)).strip().replace(",", "")
+    if re.fullmatch(r"\d+", text):
+        case = int(text)
+        return (case, _positive_int(bottle_value)) if case > 0 else (0, _positive_int(bottle_value))
+
+    # Do not guess malformed case shapes. Returning zeroes surfaces the row
+    # in review instead of silently posting the wrong purchase quantity.
+    return 0, 0
+
+
 def _looks_like_quantity_key(name: Any) -> bool:
     key = _key(name)
     if not key:

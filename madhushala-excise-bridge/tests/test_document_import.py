@@ -966,7 +966,9 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
     )
     assert len(products) == 1
     assert products[0].box == 3
-    assert products[0].loose == 144
+    # "3 - 0" is a compound Case value, so its suffix is the loose
+    # quantity and the separate "In Bottles" value must be ignored.
+    assert products[0].loose == 0
 
 
 
