@@ -150,6 +150,37 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260920-purchase-bill-v5"' in main
+    assert 'STATIC_ASSET_VERSION = "20260920-portal-mapping-v6"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
+
+
+def test_portal_capture_auto_hands_launch_page_to_mapping():
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+
+    assert "function startPortalMappingWatch()" in runtime
+    assert "function checkPortalMappingHandoff" in runtime
+    assert 'session?.state === "mapping_required"' in runtime
+    assert "window.location.replace(portalMappingUrl())" in runtime
+    assert "Mapping will open here automatically after capture." in runtime
+
+
+def test_portal_mapping_is_mapping_only_without_purchase_controls():
+    mapping_script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    context_script = Path("app/static/purchase-context.js").read_text(encoding="utf-8")
+
+    assert 'if (!mappingMode || !sanitizeJobId(currentDocumentJobId || activeJobId || "")) return;' in mapping_script
+    assert 'if (!mappingMode || !sanitizeJobId(currentDocumentJobId)) return;' in mapping_script
+    assert 'next.textContent = "Next: Preview Purchase"' in mapping_script
+    assert 'const isDocumentMappingView = isMappingView && Boolean(clean(pageParams.get("jobId")));' in context_script
+    assert 'if (!isDocumentImport && !isDocumentMappingView) return;' in context_script
+
+
+def test_extension_focuses_mapping_workspace_after_portal_capture():
+    background = Path("extension/background.js").read_text(encoding="utf-8")
+    manifest = Path("extension/manifest.json").read_text(encoding="utf-8")
+
+    assert "async function focusMappingWorkspace(settings)" in background
+    assert "result?.mappingStatus?.mappingRequired" in background
+    assert "result.mappingNavigation = await focusMappingWorkspace(settings)" in background
+    assert "https://integrations.madhushalasoftware.com/*" in manifest

@@ -197,10 +197,44 @@ async function openPortal() {
   return {status: "opened", tabId: tab?.id, message: "Excise portal opened. Autofill will run when the login page is ready."};
 }
 
+async function focusMappingWorkspace(settings) {
+  const mappingUrl = String(settings?.mappingUrl || "").trim();
+  if (!mappingUrl) return {opened: false, reason: "missing_mapping_url"};
+
+  const tabs = await chrome.tabs.query({});
+  const bridgeBase = normalizeBaseUrl(settings.bridgeUrl);
+  const existing = tabs.find((tab) => {
+    const url = String(tab.url || "");
+    return url.startsWith(bridgeBase) && !url.includes("excise.wb.gov.in");
+  });
+
+  if (existing?.id) {
+    await chrome.tabs.update(existing.id, {url: mappingUrl, active: true});
+    if (existing.windowId != null) {
+      await chrome.windows.update(existing.windowId, {focused: true});
+    }
+    return {opened: true, tabId: existing.id, reused: true};
+  }
+
+  const tab = await chrome.tabs.create({url: mappingUrl, active: true});
+  return {opened: true, tabId: tab?.id, reused: false};
+}
+
 async function handleAutoCapture(payload = {}) {
   const items = Array.isArray(payload.items) ? payload.items : [];
   if (!items.length) return {status: "ignored", reason: "empty"};
-  return postCapture(items, payload.pageUrl || "", payload.capturedAt || new Date().toISOString());
+
+  const result = await postCapture(items, payload.pageUrl || "", payload.capturedAt || new Date().toISOString());
+  if (result?.mappingStatus?.mappingRequired) {
+    try {
+      const settings = await getSettings();
+      result.mappingNavigation = await focusMappingWorkspace(settings);
+    } catch (error) {
+      console.warn("Could not focus Mapping workspace", error);
+      result.mappingNavigation = {opened: false, error: error?.message || "Mapping navigation failed"};
+    }
+  }
+  return result;
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

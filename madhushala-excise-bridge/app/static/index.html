@@ -3062,6 +3062,8 @@ let currentReviewItems = [];
 let currentSourceUrl = "";
 let mappingRefreshTimer = null;
 let mappingRefreshInFlight = false;
+let portalMappingWatchTimer = null;
+let portalMappingNavigating = false;
 const DEFAULT_EXCISE_LOGIN_URL = "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx";
 
 function portalSettingsFromForm() {
@@ -3438,6 +3440,50 @@ function showToast(message, type = "info") {
     setTimeout(() => toast.remove(), 3500);
 }
 
+function portalMappingUrl() {
+    return `${window.location.origin}${basePath}/?view=mapping&sessionId=${encodeURIComponent(sessionId)}#session=${encodeURIComponent(sessionToken)}`;
+}
+
+function stopPortalMappingWatch() {
+    if (portalMappingWatchTimer) window.clearInterval(portalMappingWatchTimer);
+    portalMappingWatchTimer = null;
+}
+
+function openPortalMapping() {
+    if (portalMappingNavigating || mappingMode || documentMode) return;
+    portalMappingNavigating = true;
+    stopPortalMappingWatch();
+    setStatus("Excise items captured. Opening product mapping…");
+    window.location.replace(portalMappingUrl());
+}
+
+async function checkPortalMappingHandoff({quiet = true} = {}) {
+    if (portalMappingNavigating || mappingMode || documentMode || !sessionToken || !sessionId) return false;
+    try {
+        const session = await api("/session/status");
+        if (session?.state === "mapping_required") {
+            openPortalMapping();
+            return true;
+        }
+        if (session?.state === "complete" && session?.hasCapture) {
+            stopPortalMappingWatch();
+            setStatus("Excise items captured. All products are already mapped.");
+        }
+        return false;
+    } catch (error) {
+        if (!quiet) setStatus(error.message || "Could not check Excise capture status.", true);
+        return false;
+    }
+}
+
+function startPortalMappingWatch() {
+    if (portalMappingWatchTimer || mappingMode || documentMode || !sessionToken || !sessionId) return;
+    void checkPortalMappingHandoff();
+    portalMappingWatchTimer = window.setInterval(() => {
+        void checkPortalMappingHandoff();
+    }, 1500);
+}
+
 async function initLaunch() {
     if (!sessionToken || !sessionId) {
         setStatus("Open this page from the Madhushala CRM Import button.", true);
@@ -3452,7 +3498,7 @@ async function initLaunch() {
         }
 
         await new Promise((resolve) => setTimeout(resolve, 350));
-        const mappingUrl = `${window.location.origin}${basePath}/?view=mapping&sessionId=${encodeURIComponent(sessionId)}#session=${encodeURIComponent(sessionToken)}`;
+        const mappingUrl = portalMappingUrl();
         await extensionRequest("SET_SESSION", {
             bridgeUrl: `${window.location.origin}${basePath}`,
             sessionId,
@@ -3467,6 +3513,7 @@ async function initLaunch() {
         } else {
             setStatus("Ready. Open Excise Portal and enter CAPTCHA manually.");
         }
+        startPortalMappingWatch();
     } catch (error) {
         setStatus(error.message || "CRM session could not be opened.", true);
     }
@@ -3486,7 +3533,8 @@ async function openPortal() {
             setStatus("Fill and save Excise portal details, then click Open Excise Portal again.", true);
             return;
         }
-        setStatus("WB Excise opened with saved details. Enter CAPTCHA, login, then prepare indent.");
+        setStatus("WB Excise opened with saved details. Enter CAPTCHA, login, then prepare indent. Mapping will open here automatically after capture.");
+        startPortalMappingWatch();
     } catch (error) {
         setStatus(error.message || "Could not open Excise portal.", true);
     }
