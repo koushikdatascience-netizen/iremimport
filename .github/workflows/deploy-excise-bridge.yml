@@ -300,9 +300,46 @@ jobs:
           fi
 
           echo "== Deploy singleton browser plus two API replicas =="
-          # Every release reuses the :latest image tag. Force recreation so API
-          # replicas cannot keep serving the previous image behind the gateway.
+          # Legacy deployments published 8091 directly from madhushala_automation_web.
+          # Remove that singleton explicitly before recreating the current topology,
+          # otherwise the stale container can keep ownership of host port 8091 and
+          # bypass api-gateway even though the new API replicas are healthy.
+          if docker inspect madhushala_automation_web >/dev/null 2>&1; then
+            docker rm -f madhushala_automation_web >/dev/null
+          fi
+          dc rm -sf api1 api2 api-gateway >/dev/null 2>&1 || true
           dc up -d --force-recreate web api1 api2 api-gateway
+
+          echo "== Verify host port ownership =="
+          WEB_CID="$(dc ps -q web)"
+          GATEWAY_CID="$(dc ps -q api-gateway)"
+          if [ -z "$WEB_CID" ] || [ -z "$GATEWAY_CID" ]; then
+            echo "ERROR: web or api-gateway container is missing after recreation"
+            dc ps -a
+            exit 1
+          fi
+
+          WEB_BINDINGS="$(docker inspect "$WEB_CID" --format '{{json .HostConfig.PortBindings}}')"
+          GATEWAY_BINDINGS="$(docker inspect "$GATEWAY_CID" --format '{{json .HostConfig.PortBindings}}')"
+          echo "web bindings: $WEB_BINDINGS"
+          echo "api-gateway bindings: $GATEWAY_BINDINGS"
+
+          if printf '%s' "$WEB_BINDINGS" | grep -q '"8091/tcp"'; then
+            echo "ERROR: legacy web container still publishes host port 8091"
+            exit 1
+          fi
+          if ! printf '%s' "$GATEWAY_BINDINGS" | grep -q '"8091/tcp"'; then
+            echo "ERROR: api-gateway does not own host port 8091"
+            exit 1
+          fi
+
+          OWNER_8091="$(docker ps --format '{{.Names}} {{.Ports}}' | grep '127.0.0.1:8091->8091/tcp' || true)"
+          echo "host 8091 owner: $OWNER_8091"
+          if ! printf '%s' "$OWNER_8091" | grep -q 'api-gateway'; then
+            echo "ERROR: host port 8091 is not owned by api-gateway"
+            docker ps --format '{{.ID}} {{.Image}} {{.Names}} {{.Ports}}'
+            exit 1
+          fi
 
           echo "== Verify every API replica serves this release =="
           for svc in api1 api2; do
