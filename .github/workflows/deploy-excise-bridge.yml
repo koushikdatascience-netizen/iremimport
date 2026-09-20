@@ -286,7 +286,7 @@ jobs:
               # of sync. Local socket access as the postgres OS user lets us reset
               # the application role deterministically before migration.
               docker exec -u postgres madhushala_postgres \
-                psql -d postgres -v ON_ERROR_STOP=1 \
+                psql -U madhushala_bridge -d madhushala_bridge -v ON_ERROR_STOP=1 \
                 -c "ALTER ROLE madhushala_bridge WITH PASSWORD '$POSTGRES_PASSWORD';" \
                 >/dev/null
               set_env_value "POSTGRES_PASSWORD" "$POSTGRES_PASSWORD" "$CONFIG_ENV"
