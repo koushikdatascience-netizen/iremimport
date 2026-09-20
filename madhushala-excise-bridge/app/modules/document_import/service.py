@@ -306,10 +306,24 @@ class DocumentImportService:
             raise HTTPException(status_code=404, detail="Import job not found")
         return dict(row)
 
+    @staticmethod
+    def _import_item_order_key(row: Any) -> tuple[Any, ...]:
+        keys = set(row.keys()) if hasattr(row, "keys") else set()
+        source_item_id = str(row["source_item_id"] or "") if "source_item_id" in keys else ""
+        row_id = str(row["id"] or "") if "id" in keys else ""
+        match = re.search(r"-(\d+)$", source_item_id)
+        if match:
+            prefix = source_item_id[:match.start()]
+            return (0, prefix, int(match.group(1)), row_id)
+        if source_item_id:
+            return (1, source_item_id, row_id)
+        return (2, row_id)
+
     def get_items(self, session: dict[str, Any], job_id: str) -> list[dict[str, Any]]:
         self.get_job(session, job_id)
         with conn() as db:
-            rows = db.execute("SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, source_item_id, id", (job_id,)).fetchall()
+            rows = db.execute("SELECT * FROM import_items WHERE job_id=?", (job_id,)).fetchall()
+        rows = sorted(rows, key=self._import_item_order_key)
         return [dict(row) for row in rows]
 
     @staticmethod
@@ -365,9 +379,10 @@ class DocumentImportService:
         self.get_job(session, job_id)
         with conn() as db:
             rows = db.execute(
-                "SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, source_item_id, id",
+                "SELECT * FROM import_items WHERE job_id=?",
                 (job_id,),
             ).fetchall()
+        rows = sorted(rows, key=self._import_item_order_key)
         return [self._review_row(row) for row in rows]
 
     async def confirm_review(
@@ -382,9 +397,10 @@ class DocumentImportService:
 
         with conn() as db:
             rows = db.execute(
-                "SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, source_item_id, id",
+                "SELECT * FROM import_items WHERE job_id=?",
                 (job_id,),
             ).fetchall()
+            rows = sorted(rows, key=self._import_item_order_key)
             existing = {str(row["id"]): row for row in rows}
 
         if not rows:
@@ -1117,7 +1133,8 @@ class DocumentImportService:
         bill_type = str(session.get("bill_type") or "AI").strip() or "AI"
         catalogue = await self._client_for_session(session).get_dropdown_items(company_code, bill_type)
         with conn() as db:
-            rows = db.execute("SELECT * FROM import_items WHERE job_id=? ORDER BY created_at, source_item_id, id", (job_id,)).fetchall()
+            rows = db.execute("SELECT * FROM import_items WHERE job_id=?", (job_id,)).fetchall()
+            rows = sorted(rows, key=self._import_item_order_key)
             items = []
             missing = []
             for row in rows:
