@@ -88,7 +88,7 @@ def test_purchase_review_renders_server_validated_purchase_payload():
     context_script = Path("app/static/purchase-context.js").read_text(encoding="utf-8")
 
     assert 'const purchaseReviewMode = pageParams.get("view") === "purchase"' in mapping_script
-    assert 'id="purchase-final-preview"' in mapping_script
+    assert 'preview.id = "purchase-final-preview"' in mapping_script
     assert "renderFinalPurchasePayload" in mapping_script
     assert '"purchase-preview-ready"' in mapping_script
 
