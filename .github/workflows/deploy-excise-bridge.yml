@@ -467,6 +467,85 @@ jobs:
           echo "Deployment complete: $DEPLOY_SHA"
           REMOTE
 
+      - name: Diagnose public origin listener
+        env:
+          SERVER_HOST: integrations.madhushalasoftware.com
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_KEY_B64: ${{ secrets.SERVER_SSH_KEY_B64 }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SERVER_PORT:-22}"
+          if [ ! -f ~/.ssh/madhushala_deploy_key ]; then
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            printf '%s' "$SERVER_SSH_KEY_B64" | base64 --decode > ~/.ssh/madhushala_deploy_key
+            chmod 600 ~/.ssh/madhushala_deploy_key
+          fi
+          ssh \
+            -i ~/.ssh/madhushala_deploy_key \
+            -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=accept-new \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE_DIAG'
+          set -euo pipefail
+          HOSTNAME_FQDN="integrations.madhushalasoftware.com"
+          PRIVATE_IPV4="$(hostname -I | awk '{print $1}')"
+          echo "HOSTNAME=$(hostname)"
+          echo "PRIVATE_IPV4=$PRIVATE_IPV4"
+
+          IMDS_TOKEN="$(curl -fsS -m 2 -X PUT \
+            -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
+            http://169.254.169.254/latest/api/token 2>/dev/null || true)"
+          if [ -n "$IMDS_TOKEN" ]; then
+            PUBLIC_IPV4="$(curl -fsS -m 2 \
+              -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+              http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)"
+            INSTANCE_ID="$(curl -fsS -m 2 \
+              -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+              http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || true)"
+            echo "INSTANCE_ID=$INSTANCE_ID"
+            echo "PUBLIC_IPV4=$PUBLIC_IPV4"
+          else
+            echo "PUBLIC_IPV4=metadata-unavailable"
+          fi
+
+          echo "LISTENERS_443:"
+          sudo -n ss -ltnp | grep ':443' || true
+
+          show_scripts() {
+            label="$1"
+            shift
+            echo "$label"
+            HTML="$("$@" 2>/dev/null || true)"
+            printf '%s' "$HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
+            if printf '%s' "$HTML" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
+              && printf '%s' "$HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+              echo "$label => CURRENT"
+            else
+              echo "$label => OLD_OR_OTHER"
+            fi
+          }
+
+          show_scripts "LOOPBACK_HTTPS" \
+            curl -kfsSL --resolve "$HOSTNAME_FQDN:443:127.0.0.1" \
+            "https://$HOSTNAME_FQDN/excise-import/document-import?diag=loopback"
+
+          show_scripts "PRIVATE_INTERFACE_HTTPS" \
+            curl -kfsSL --resolve "$HOSTNAME_FQDN:443:$PRIVATE_IPV4" \
+            "https://$HOSTNAME_FQDN/excise-import/document-import?diag=private"
+
+          show_scripts "PUBLIC_DNS_FROM_ORIGIN" \
+            curl -kfsSL \
+            "https://$HOSTNAME_FQDN/excise-import/document-import?diag=public"
+
+          echo "NGINX_INTEGRATIONS_REFERENCES:"
+          sudo -n nginx -T 2>/dev/null \
+            | grep -n -B 8 -A 90 'server_name.*integrations\.madhushalasoftware\.com' \
+            || true
+          REMOTE_DIAG
+
       - name: Verify externally served frontend
         env:
           TARGET_COMMIT: ${{ github.sha }}
