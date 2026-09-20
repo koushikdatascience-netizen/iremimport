@@ -300,7 +300,9 @@ jobs:
           fi
 
           echo "== Deploy singleton browser plus two API replicas =="
-          dc up -d web api1 api2 api-gateway
+          # Every release reuses the :latest image tag. Force recreation so API
+          # replicas cannot keep serving the previous image behind the gateway.
+          dc up -d --force-recreate web api1 api2 api-gateway
 
           echo "== Health check =="
           HEALTHY=0
@@ -321,6 +323,30 @@ jobs:
 
           cat /tmp/madhushala-health.json
           echo
+
+          echo "== Verify public Excise route serves this release =="
+          PUBLIC_IMPORT_URL="https://integrations.madhushalasoftware.com/excise-import"
+          PUBLIC_READY=0
+          for attempt in $(seq 1 20); do
+            if curl -fsS -H 'Cache-Control: no-cache' \
+              "$PUBLIC_IMPORT_URL/document-import?deploy=$SHORT_SHA-$attempt" \
+              | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4'; then
+              PUBLIC_READY=1
+              break
+            fi
+            sleep 3
+          done
+          if [ "$PUBLIC_READY" -ne 1 ]; then
+            echo "ERROR: public Excise route is not serving deployment $DEPLOY_SHA"
+            echo "Internal gateway scripts:"
+            curl -fsS http://127.0.0.1:8091/document-import \
+              | grep -oE '<script[^>]+src="[^"]+"' || true
+            echo "Public route scripts:"
+            curl -fsS -H 'Cache-Control: no-cache' \
+              "$PUBLIC_IMPORT_URL/document-import?deploy=$SHORT_SHA-final" \
+              | grep -oE '<script[^>]+src="[^"]+"' || true
+            exit 1
+          fi
 
           echo "== Start Prometheus and Grafana =="
           dc up -d prometheus grafana

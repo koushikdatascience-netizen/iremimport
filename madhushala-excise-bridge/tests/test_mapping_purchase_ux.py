@@ -22,13 +22,11 @@ def test_saved_document_mapping_is_presented_as_mapped_and_remappable():
 
 
 def test_fully_mapped_qr_still_exposes_mapping_review():
-    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    script = Path("app/static/index.html").read_text(encoding="utf-8")
 
-    assert 'Review QR Item Mappings' in script
-    assert 'button.hidden = false' in script
-    assert 'Review/change mappings if needed' in script
-    assert 'originalRenderQrReview' in script
-    assert 'keepDocumentMappingReviewAvailable(payload, {qr: true})' in script
+    assert 'await continueExtractedDocumentToMapping(payload, {qr: true});' in script
+    assert 'window.location.href = basePath' in script
+    assert '"/?view=mapping&jobId="' in script
 
 
 def test_document_mapping_search_is_not_overwritten_by_background_refresh():
@@ -57,20 +55,32 @@ def test_mapping_frontend_preserves_structured_auth_error_code():
 
 
 def test_review_confirmation_sends_batch_number():
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = Path("app/static/index.html").read_text(encoding="utf-8")
 
     assert 'batchNo: String(item.batchNo || "").trim(),' in script
 
 
 def test_valid_document_import_skips_review_and_auto_confirms_to_mapping():
-    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    script = Path("app/static/index.html").read_text(encoding="utf-8")
 
-    assert "autoConfirmExtractedReview" in script
+    assert "continueExtractedDocumentToMapping" in script
     assert "/review/confirm" in script
     assert 'setDocumentImportState("checking")' in script
-    assert 'setDocumentImportState("review")' in script
     assert "Preparing item mapping" in script
-    assert "?view=mapping&jobId=" in script
+    assert '"/?view=mapping&jobId="' in script
+
+    upload = script.split("async function uploadDocuments", 1)[1].split(
+        "async function uploadDocument", 1
+    )[0]
+    assert "await continueExtractedDocumentToMapping(payload);" in upload
+    assert 'setDocumentImportState("review")' not in upload
+    assert "renderDocumentReview(payload)" not in upload
+
+    qr = script.split("async function extractQrUrl", 1)[1].split(
+        "function renderQrReview", 1
+    )[0]
+    assert "await continueExtractedDocumentToMapping(payload, {qr: true});" in qr
+    assert "renderQrReview(payload)" not in qr
 
 
 def test_mapping_normal_flow_uses_next_purchase_and_keeps_legacy_save_hidden():
@@ -97,18 +107,19 @@ def test_purchase_review_renders_server_validated_purchase_payload():
 
 
 def test_successful_import_never_renders_legacy_preview_before_mapping():
-    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+    enhancer = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
 
-    assert "suppressSuccessfulReview" in script
-    assert "setDocumentImportStateWithoutSuccessfulPreview" in script
-    assert "renderDocumentReviewWithDirectMapping" in script
-    assert "primeSuccessfulImport(payload)" in script
-    assert "Successful extraction must never render the old source/extracted-products" in script
+    assert "showDocumentReviewFallback" in runtime
+    assert "if (!items.length || invalid.length)" in runtime
+    assert "renderDocumentReviewWithDirectMapping" not in enhancer
+    assert "setDocumentImportStateWithoutSuccessfulPreview" not in enhancer
+    assert "autoConfirmExtractedReview" not in enhancer
 
 
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260920-direct-flow-v3"' in main
+    assert 'STATIC_ASSET_VERSION = "20260920-direct-flow-v4"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main

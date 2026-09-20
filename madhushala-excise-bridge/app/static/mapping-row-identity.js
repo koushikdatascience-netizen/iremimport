@@ -1,15 +1,5 @@
 (() => {
     const purchaseReviewMode = pageParams.get("view") === "purchase";
-    const autoConfirmingJobs = new Set();
-    let suppressSuccessfulReview = false;
-
-    const originalSetDocumentImportState = setDocumentImportState;
-    setDocumentImportState = function setDocumentImportStateWithoutSuccessfulPreview(state, message = "") {
-        if (state === "review" && suppressSuccessfulReview) {
-            return originalSetDocumentImportState("checking", message || "Preparing item mapping");
-        }
-        return originalSetDocumentImportState(state, message);
-    };
 
     function isDocumentWorkspace() {
         return Boolean(workspace?.documentMapping || currentDocumentJobId);
@@ -56,102 +46,6 @@
             return JSON.parse(sessionStorage.getItem(purchaseSourceHintKey(jobId)) || "{}");
         } catch {
             return {};
-        }
-    }
-
-    function reviewConfirmItems(payload) {
-        const items = typeof reviewItemsFromPayload === "function" ? reviewItemsFromPayload(payload) : [];
-        const invalid = items.filter((item) => (
-            typeof validateReviewItem === "function" ? validateReviewItem(item).length > 0 : false
-        ));
-        return {items, invalid};
-    }
-
-    function primeSuccessfulImport(payload) {
-        const jobId = sanitizeJobId(payload?.job?.id || currentDocumentJobId || "");
-        currentDocumentResult = payload;
-        currentDocumentJobId = jobId || currentDocumentJobId;
-        if (jobId) storePurchaseSourceHint(payload, jobId);
-
-        try {
-            applyPurchaseHeader(loadPurchaseHeader(jobId));
-        } catch {
-            // The Purchase screen will still resolve authoritative defaults later.
-        }
-        setInputValue("purchase-doc-no", payload?.extractedDocument?.invoiceNumber || "");
-        setInputValue("purchase-doc-date", payload?.extractedDocument?.invoiceDate || "");
-        if (currentUploadKind === "qr") setInputValue("purchase-narration", "QR HTML import");
-
-        suppressSuccessfulReview = true;
-        setDocumentImportState("checking");
-        setText(document.getElementById("document-progress-title"), "Preparing item mapping");
-        setText(
-            document.getElementById("document-progress-detail"),
-            "Extraction is complete. Opening Madhushala mapping automatically.",
-        );
-    }
-
-    async function autoConfirmExtractedReview(payload) {
-        const jobId = sanitizeJobId(payload?.job?.id || currentDocumentJobId || "");
-        if (!jobId || autoConfirmingJobs.has(jobId)) return;
-
-        const {items, invalid} = reviewConfirmItems(payload);
-        if (!items.length || invalid.length) {
-            suppressSuccessfulReview = false;
-            originalRenderDocumentReview(payload);
-            keepDocumentMappingReviewAvailable(payload, {qr: currentUploadKind === "qr"});
-            setDocumentImportState("review");
-            if (invalid.length) {
-                showToast(
-                    `${invalid.length} extracted row${invalid.length === 1 ? "" : "s"} need correction before mapping.`,
-                    "error",
-                );
-            }
-            return;
-        }
-
-        autoConfirmingJobs.add(jobId);
-        currentDocumentJobId = jobId;
-        storePurchaseSourceHint(payload, jobId);
-        persistPurchaseHeader();
-        setDocumentImportState("checking");
-        setText(document.getElementById("document-progress-title"), "Preparing item mapping");
-        setText(
-            document.getElementById("document-progress-detail"),
-            "Extraction is complete. Confirming the extracted rows and opening Madhushala mapping automatically.",
-        );
-
-        try {
-            const confirmed = await api(
-                "/api/v1/document-import/jobs/" + encodeURIComponent(jobId) + "/review/confirm",
-                {
-                    method: "POST",
-                    body: JSON.stringify({
-                        items: items.map((item) => ({
-                            id: item.id,
-                            name: String(item.name || "").trim(),
-                            brand: String(item.brand || "").trim(),
-                            ml: Number(item.ml),
-                            batchNo: String(item.batchNo || "").trim(),
-                            box: Number(item.box),
-                            loose: Number(item.loose),
-                        })),
-                    }),
-                },
-            );
-            currentDocumentResult = Object.assign({}, currentDocumentResult || {}, confirmed || {});
-            window.location.href = basePath
-                + "/?view=mapping&jobId=" + encodeURIComponent(jobId)
-                + "&sessionId=" + encodeURIComponent(sessionId)
-                + "#session=" + encodeURIComponent(sessionToken);
-        } catch (error) {
-            autoConfirmingJobs.delete(jobId);
-            // Keep the old review UI only as an error/correction fallback.
-            suppressSuccessfulReview = false;
-            originalRenderDocumentReview(payload);
-            keepDocumentMappingReviewAvailable(payload, {qr: currentUploadKind === "qr"});
-            setDocumentImportState("review");
-            showToast(error.message || "Could not prepare mapping automatically", "error");
         }
     }
 
@@ -269,70 +163,11 @@
         }
         if (document.querySelector('script[data-mapping-purchase-context="true"]')) return;
         const script = document.createElement("script");
-        script.src = apiUrl("/static/purchase-context.js?v=20260920-direct-flow-v3");
+        script.src = apiUrl("/static/purchase-context.js?v=20260920-direct-flow-v4");
         script.dataset.mappingPurchaseContext = "true";
         script.onload = () => window.__purchaseContext?.initialize?.();
         document.head.appendChild(script);
     }
-
-    function keepDocumentMappingReviewAvailable(payload, {qr = false} = {}) {
-        const job = payload?.job || {};
-        const summary = payload?.summary || {};
-        const jobId = sanitizeJobId(job.id || currentDocumentJobId || "");
-        const detected = Number(summary.detected ?? job.extracted_count ?? 0) || 0;
-        const recognized = Number(summary.recognized ?? job.mapped_count ?? 0) || 0;
-        const needMapping = Number(summary.needMapping ?? Math.max(0, detected - recognized)) || 0;
-        const button = document.getElementById("continue-document-mapping");
-        if (!button || !jobId || detected <= 0) return;
-
-        // Mapping is also the purchase-item review screen. Keep it available even
-        // when every row is already mapped so the operator can see what is being
-        // purchased, verify the saved Madhushala item, and change a wrong mapping.
-        button.hidden = false;
-        button.textContent = needMapping > 0
-            ? (qr ? `Map ${needMapping} QR Item${needMapping === 1 ? "" : "s"}` : `Map ${needMapping} Item${needMapping === 1 ? "" : "s"}`)
-            : (qr ? "Review QR Item Mappings" : "Review Item Mappings");
-
-        if (needMapping === 0) {
-            setText(
-                document.getElementById("document-action-summary"),
-                `${detected} products extracted | ${recognized || detected} mapped | Review/change mappings if needed`,
-            );
-        }
-    }
-
-    // The original review hid the Mapping button when needMapping === 0. That made
-    // a fully mapped QR appear to contain no extracted rows. Always expose the
-    // mapping/review screen for a real document job.
-    const originalRenderDocumentReview = renderDocumentReview;
-    renderDocumentReview = function renderDocumentReviewWithDirectMapping(payload) {
-        const {items, invalid} = reviewConfirmItems(payload);
-        if (!items.length || invalid.length) {
-            suppressSuccessfulReview = false;
-            originalRenderDocumentReview(payload);
-            keepDocumentMappingReviewAvailable(payload, {qr: currentUploadKind === "qr"});
-            return;
-        }
-
-        // Successful extraction must never render the old source/extracted-products
-        // preview. Prime the hidden Purchase fields, show only processing state,
-        // and move directly into Mapping.
-        primeSuccessfulImport(payload);
-        void autoConfirmExtractedReview(payload);
-    };
-
-    const originalRenderQrReview = renderQrReview;
-    renderQrReview = function renderQrReviewWithDirectMapping(payload) {
-        const {items, invalid} = reviewConfirmItems(payload);
-        if (payload?.job && items.length && !invalid.length) {
-            currentUploadKind = "qr";
-            renderDocumentReview(payload);
-            return;
-        }
-        suppressSuccessfulReview = false;
-        originalRenderQrReview(payload);
-        if (payload?.job) keepDocumentMappingReviewAvailable(payload, {qr: true});
-    };
 
     mappedItemForRow = function mappedItemForUniqueRow(item) {
         const code = selectedMappings.get(mappingRowKey(item)) || item.selectedItemCode || "";
@@ -984,8 +819,6 @@
     window.__mappingRowIdentity = {
         mappingRowKey,
         mountPurchaseFormForMapping,
-        keepDocumentMappingReviewAvailable,
-        autoConfirmExtractedReview,
         continueMappingToPurchase,
         renderFinalPurchasePayload,
     };

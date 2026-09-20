@@ -3265,7 +3265,7 @@ async function extractQrUrl(qrUrl) {
         method: "POST",
         body: JSON.stringify({url: cleanUrl}),
     });
-    renderQrReview(payload);
+    await continueExtractedDocumentToMapping(payload, {qr: true});
 }
 
 function renderQrReview(payload) {
@@ -4156,6 +4156,94 @@ function renderDocumentReview(payload) {
     setText(document.getElementById("document-json"), JSON.stringify(payload, null, 2));
     updateReviewValidation();
 }
+
+function reviewConfirmPayload(items) {
+    return {
+        items: items.map((item) => ({
+            id: item.id,
+            name: String(item.name || "").trim(),
+            brand: String(item.brand || "").trim(),
+            ml: Number(item.ml),
+            batchNo: String(item.batchNo || "").trim(),
+            box: Number(item.box),
+            loose: Number(item.loose),
+        })),
+    };
+}
+
+function showDocumentReviewFallback(payload, {qr = false, message = ""} = {}) {
+    if (qr) renderQrReview(payload);
+    else {
+        renderDocumentReview(payload);
+        setDocumentImportState("review");
+    }
+    if (message) showToast(message, "error");
+}
+
+async function continueExtractedDocumentToMapping(payload, {qr = false} = {}) {
+    const jobId = sanitizeJobId(payload?.job?.id || "");
+    if (!jobId) throw new Error("Document extraction did not create a reviewable import job.");
+
+    currentDocumentResult = payload;
+    currentDocumentJobId = jobId;
+    currentUploadKind = qr ? "qr" : currentUploadKind;
+    try {
+        sessionStorage.setItem(
+            `purchaseSourceHint:${sessionId || "session"}:${jobId}`,
+            JSON.stringify({
+                supplierName: String(payload?.extractedDocument?.supplierName || "").trim(),
+                invoiceNumber: String(payload?.extractedDocument?.invoiceNumber || "").trim(),
+                invoiceDate: String(payload?.extractedDocument?.invoiceDate || "").trim(),
+                sourceType: String(payload?.job?.source_type || payload?.job?.sourceType || "").trim(),
+            }),
+        );
+    } catch {
+        // Purchase review can still resolve authoritative defaults from the backend.
+    }
+    const items = reviewItemsFromPayload(payload);
+    const invalid = items.filter((item) => validateReviewItem(item).length > 0);
+    if (!items.length || invalid.length) {
+        showDocumentReviewFallback(payload, {
+            qr,
+            message: invalid.length
+                ? `${invalid.length} extracted row${invalid.length === 1 ? "" : "s"} need correction before mapping.`
+                : "No valid extracted products were found. Review the extraction before mapping.",
+        });
+        return false;
+    }
+
+    applyPurchaseHeader(loadPurchaseHeader(jobId));
+    if (payload.extractedDocument?.invoiceDate) setInputValue("purchase-doc-date", payload.extractedDocument.invoiceDate);
+    if (payload.extractedDocument?.invoiceNumber) setInputValue("purchase-doc-no", payload.extractedDocument.invoiceNumber);
+    if (qr) setInputValue("purchase-narration", "QR HTML import");
+    persistPurchaseHeader();
+    setDocumentImportState("checking");
+    setText(document.getElementById("document-progress-title"), "Preparing item mapping");
+    setText(
+        document.getElementById("document-progress-detail"),
+        "Extraction is complete. Confirming the extracted rows and opening Madhushala mapping automatically.",
+    );
+
+    try {
+        const confirmed = await api(
+            "/api/v1/document-import/jobs/" + encodeURIComponent(jobId) + "/review/confirm",
+            {method: "POST", body: JSON.stringify(reviewConfirmPayload(items))},
+        );
+        currentDocumentResult = Object.assign({}, payload, confirmed || {});
+        window.location.href = basePath
+            + "/?view=mapping&jobId=" + encodeURIComponent(jobId)
+            + "&sessionId=" + encodeURIComponent(sessionId)
+            + "#session=" + encodeURIComponent(sessionToken);
+        return true;
+    } catch (error) {
+        showDocumentReviewFallback(payload, {
+            qr,
+            message: error.message || "Could not prepare mapping automatically",
+        });
+        return false;
+    }
+}
+
 function resetDocumentImport() {
     revokeDocumentPreview();
     currentDocumentFile = null;
@@ -4221,18 +4309,7 @@ async function uploadDocuments(files, kind = "pdf") {
             body: form,
         });
         if (!payload?.job) throw new Error(payload.detail || payload.error || "Document import failed");
-        renderDocumentReview(payload);
-        const engines = (payload.extraction?.files || [])
-            .map((entry) => entry.engine)
-            .filter(Boolean);
-        const engineText = engines.length ? Array.from(new Set(engines)).join(" + ") : (payload.extraction?.engine || "unknown");
-        setText(
-            document.getElementById("document-action-summary"),
-            (document.getElementById("document-action-summary")?.textContent || "") +
-            " • " + selectedFiles.length + " source file" + (selectedFiles.length === 1 ? "" : "s") +
-            " • Extractor: " + engineText
-        );
-        setDocumentImportState("review");
+        await continueExtractedDocumentToMapping(payload);
     } catch (error) {
         setText(documentElements().errorMessage, error.message || "Document import failed.");
         setDocumentImportState("error");
@@ -4396,16 +4473,7 @@ async function confirmReviewAndContinue() {
     try {
         const payload = await api("/api/v1/document-import/jobs/" + encodeURIComponent(jobId) + "/review/confirm", {
             method: "POST",
-            body: JSON.stringify({
-                items: items.map((item) => ({
-                    id: item.id,
-                    name: String(item.name || "").trim(),
-                    brand: String(item.brand || "").trim(),
-                    ml: Number(item.ml),
-                    box: Number(item.box),
-                    loose: Number(item.loose),
-                })),
-            }),
+            body: JSON.stringify(reviewConfirmPayload(items)),
         });
         currentDocumentResult = Object.assign({}, currentDocumentResult || {}, payload || {});
         window.location.href = basePath + "/?view=mapping&jobId=" + encodeURIComponent(jobId) + "&sessionId=" + encodeURIComponent(sessionId) + "#session=" + encodeURIComponent(sessionToken);
