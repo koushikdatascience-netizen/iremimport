@@ -87,11 +87,41 @@ def test_mapping_normal_flow_uses_next_purchase_and_keeps_legacy_save_hidden():
     script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
 
     assert 'next.id = "mapping-next-purchase"' in script
-    assert 'next.textContent = "Next: Review Purchase"' in script
+    assert 'next.textContent = "Next: Preview Purchase"' in script
     assert "/document-import?view=purchase&jobId=" in script
     assert 'legacySave.style.display = "none"' in script
     assert "Do not mount Purchase fields on Mapping in the simplified flow." in script
 
+
+
+def test_final_purchase_bill_mimics_madhushala_and_hides_manual_validate():
+    mapping_script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    context_script = Path("app/static/purchase-context.js").read_text(encoding="utf-8")
+
+    assert "Purchase Bill" in mapping_script
+    assert "Operation Type" in mapping_script
+    assert "AI Item" in mapping_script
+    assert "T.P.Pass No" in mapping_script
+    assert "Purchase Head" in mapping_script
+    assert "Tax N Other" in mapping_script
+    assert "SAVE PURCHASE" in mapping_script
+    assert 'back.textContent = "CANCEL"' in mapping_script
+    assert "ms-bill-table" in mapping_script
+    assert "ms-bill-total-discount" in mapping_script
+    assert "ensureCompactMappingStyles" in mapping_script
+
+    assert 'purchaseReviewMode && source === "review"' in context_script
+    assert "Do not render a separate Validate button." in context_script
+    assert "schedulePurchasePreviewRefresh" in context_script
+    assert "getContext: () => latestContext" in context_script
+
+
+def test_purchase_bill_save_still_revalidates_before_backend_save():
+    context_script = Path("app/static/purchase-context.js").read_text(encoding="utf-8")
+
+    assert "const validated = await validatePurchase(source, {showSuccessToast: false});" in context_script
+    assert "if (!validated) return;" in context_script
+    assert "return originalSave.call(this, source);" in context_script
 
 def test_purchase_review_renders_server_validated_purchase_payload():
     mapping_script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
@@ -120,6 +150,6 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260920-direct-flow-v4"' in main
+    assert 'STATIC_ASSET_VERSION = "20260920-purchase-bill-v5"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
