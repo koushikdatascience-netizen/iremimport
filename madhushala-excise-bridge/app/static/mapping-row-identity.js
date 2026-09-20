@@ -22,6 +22,34 @@
         ).length;
     }
 
+    function purchaseSourceHintKey(jobId) {
+        return `purchaseSourceHint:${sessionId || "session"}:${jobId || "latest"}`;
+    }
+
+    function storePurchaseSourceHint(payload, jobId) {
+        try {
+            sessionStorage.setItem(
+                purchaseSourceHintKey(jobId),
+                JSON.stringify({
+                    supplierName: String(payload?.extractedDocument?.supplierName || "").trim(),
+                    invoiceNumber: String(payload?.extractedDocument?.invoiceNumber || "").trim(),
+                    invoiceDate: String(payload?.extractedDocument?.invoiceDate || "").trim(),
+                    sourceType: String(payload?.job?.source_type || payload?.job?.sourceType || "").trim(),
+                }),
+            );
+        } catch {
+            // Session storage is a convenience only; backend validation remains authoritative.
+        }
+    }
+
+    function loadPurchaseSourceHint(jobId) {
+        try {
+            return JSON.parse(sessionStorage.getItem(purchaseSourceHintKey(jobId)) || "{}");
+        } catch {
+            return {};
+        }
+    }
+
     function reviewConfirmItems(payload) {
         const items = typeof reviewItemsFromPayload === "function" ? reviewItemsFromPayload(payload) : [];
         const invalid = items.filter((item) => (
@@ -50,6 +78,7 @@
 
         autoConfirmingJobs.add(jobId);
         currentDocumentJobId = jobId;
+        storePurchaseSourceHint(payload, jobId);
         persistPurchaseHeader();
         setDocumentImportState("checking");
         setText(document.getElementById("document-progress-title"), "Preparing item mapping");
@@ -836,7 +865,8 @@
 
         const validateWhenReady = async () => {
             try {
-                await window.__purchaseContext?.refresh?.("");
+                const hint = loadPurchaseSourceHint(jobId);
+                await window.__purchaseContext?.refresh?.(hint.supplierName || "");
                 applyPurchaseHeader(loadPurchaseHeader(jobId));
                 await window.__purchaseContext?.validate?.("review", {showSuccessToast: false});
             } catch {
@@ -853,6 +883,13 @@
         ensurePurchaseContextOnMapping();
         setupMappingNextButton();
         const result = originalInitMapping();
+        const jobId = sanitizeJobId(currentDocumentJobId || activeJobId || "");
+        if (jobId) {
+            const hint = loadPurchaseSourceHint(jobId);
+            window.setTimeout(() => {
+                void window.__purchaseContext?.refresh?.(hint.supplierName || "");
+            }, 0);
+        }
         const legacySave = document.getElementById("save-purchase-from-mapping");
         if (legacySave) {
             legacySave.hidden = true;
