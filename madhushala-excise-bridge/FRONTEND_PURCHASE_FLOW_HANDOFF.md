@@ -92,9 +92,9 @@ Keep the existing row-safe mapping request/behavior. Do not alter company scope 
 
 ### 5. Purchase master/context
 
-`GET /api/v1/document-import/purchase/context`
+`GET /api/v1/document-import/purchase/context?supplierName={extractedSupplierName}`
 
-Use the current response to populate Supplier, Store, Scheme, Purchase A/c, User, and other current Purchase fields.
+Pass the extracted supplier name when it is available so the existing server-side matcher can select the correct Supplier Code. Use the current response to populate Supplier, Store, Scheme, Purchase A/c, User, and other current Purchase fields. Do not guess or switch company scope when a supplier/item lookup fails.
 
 ### 6. Validate / Calculate Preview
 
