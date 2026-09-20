@@ -50,7 +50,10 @@ def migrate(sqlite_path: str, database_url: str) -> None:
     # Create the target schema/triggers using the application's canonical DDL.
     init_postgres()
 
-    source = sqlite3.connect(str(source_path))
+    # The production SQLite volume is intentionally mounted read-only during
+    # migration. Open the source explicitly in SQLite read-only URI mode so the
+    # driver never tries to create a journal/WAL beside the source database.
+    source = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
     source.row_factory = sqlite3.Row
     copied: dict[str, int] = {}
 
