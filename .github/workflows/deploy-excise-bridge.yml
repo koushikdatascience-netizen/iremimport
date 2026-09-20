@@ -340,7 +340,42 @@ jobs:
             docker rm -f madhushala_automation_web >/dev/null
           fi
           dc rm -sf api1 api2 api-gateway >/dev/null 2>&1 || true
-          dc up -d --force-recreate web api1 api2 api-gateway
+
+          echo "== Start singleton browser and first API replica =="
+          dc up -d --force-recreate web api1
+
+          wait_service_healthy() {
+            service="$1"
+            for attempt in $(seq 1 40); do
+              cid="$(dc ps -q "$service")"
+              if [ -n "$cid" ]; then
+                status="$(docker inspect "$cid" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null || true)"
+                if [ "$status" = "healthy" ] || [ "$status" = "running" ]; then
+                  echo "$service is $status"
+                  return 0
+                fi
+                if [ "$status" = "unhealthy" ] || [ "$status" = "exited" ] || [ "$status" = "dead" ]; then
+                  echo "ERROR: $service became $status"
+                  dc logs --tail=200 "$service" || true
+                  return 1
+                fi
+              fi
+              sleep 2
+            done
+            echo "ERROR: $service did not become healthy"
+            dc logs --tail=200 "$service" || true
+            return 1
+          }
+
+          wait_service_healthy api1
+
+          echo "== Start second API replica after schema initialization =="
+          dc up -d --force-recreate api2
+          wait_service_healthy api2
+
+          echo "== Start API gateway after both replicas are healthy =="
+          dc up -d --force-recreate api-gateway
+          wait_service_healthy api-gateway
 
           echo "== Verify host port ownership =="
           WEB_CID="$(dc ps -q web)"
