@@ -250,6 +250,16 @@ jobs:
           fi
 
           if [ "$LOCAL_POSTGRES" -eq 1 ]; then
+            if [ "$MIGRATE_SQLITE" -eq 1 ]; then
+              echo "== Reset incomplete PostgreSQL migration target =="
+              # DATABASE_URL is still SQLite, so PostgreSQL is not authoritative
+              # yet. A previous interrupted migration may have initialized the
+              # volume with a password that was never persisted. Recreate only
+              # this incomplete target before the one-time migration.
+              docker rm -f madhushala_postgres >/dev/null 2>&1 || true
+              docker volume rm madhushala-automation-platform_postgres_data >/dev/null 2>&1 || true
+            fi
+
             echo "== Start PostgreSQL =="
             dc --profile local-postgres up -d postgres
 
