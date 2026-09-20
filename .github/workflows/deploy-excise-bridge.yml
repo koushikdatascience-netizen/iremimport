@@ -232,7 +232,9 @@ jobs:
           echo "== Wait for Redis =="
           REDIS_READY=0
           for attempt in $(seq 1 30); do
-            if dc exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then
+            # Never let docker compose exec inherit the SSH heredoc stdin; it can
+            # consume the remaining deployment script and make SSH exit 0 early.
+            if dc exec -T redis redis-cli ping </dev/null 2>/dev/null | grep -q PONG; then
               REDIS_READY=1
               break
             fi
@@ -251,7 +253,7 @@ jobs:
             POSTGRES_READY=0
             for attempt in $(seq 1 30); do
               if dc --profile local-postgres exec -T postgres \
-                pg_isready -U madhushala_bridge -d madhushala_bridge >/dev/null 2>&1; then
+                pg_isready -U madhushala_bridge -d madhushala_bridge </dev/null >/dev/null 2>&1; then
                 POSTGRES_READY=1
                 break
               fi
@@ -349,7 +351,7 @@ jobs:
               exit 1
             fi
             echo "$svc container=$cid image=$(docker inspect "$cid" --format '{{.Image}}')"
-            REPLICA_HTML="$(dc exec -T "$svc" curl -fsS "http://127.0.0.1:8091/document-import?replica=$svc-$SHORT_SHA")"
+            REPLICA_HTML="$(dc exec -T "$svc" curl -fsS "http://127.0.0.1:8091/document-import?replica=$svc-$SHORT_SHA" </dev/null)"
             echo "$svc scripts:"
             printf '%s' "$REPLICA_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
             if ! printf '%s' "$REPLICA_HTML" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
