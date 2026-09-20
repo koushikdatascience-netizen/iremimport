@@ -191,7 +191,7 @@ jobs:
 
           if printf '%s' "$CURRENT_DATABASE_URL" | grep -Eq '^postgres(ql)?://'; then
             DATABASE_URL="$CURRENT_DATABASE_URL"
-            if printf '%s' "$DATABASE_URL" | grep -q '@postgres:5432/'; then
+            if grep -q '@postgres:5432/' <<<"$DATABASE_URL"; then
               LOCAL_POSTGRES=1
               POSTGRES_PASSWORD="$(grep -E '^POSTGRES_PASSWORD=' "$CONFIG_ENV" | tail -n 1 | cut -d= -f2- || true)"
               if [ -z "$POSTGRES_PASSWORD" ]; then
@@ -391,18 +391,18 @@ jobs:
           echo "web bindings: $WEB_BINDINGS"
           echo "api-gateway bindings: $GATEWAY_BINDINGS"
 
-          if printf '%s' "$WEB_BINDINGS" | grep -q '"8091/tcp"'; then
+          if grep -q '"8091/tcp"' <<<"$WEB_BINDINGS"; then
             echo "ERROR: legacy web container still publishes host port 8091"
             exit 1
           fi
-          if ! printf '%s' "$GATEWAY_BINDINGS" | grep -q '"8091/tcp"'; then
+          if ! grep -q '"8091/tcp"' <<<"$GATEWAY_BINDINGS"; then
             echo "ERROR: api-gateway does not own host port 8091"
             exit 1
           fi
 
           OWNER_8091="$(docker ps --format '{{.Names}} {{.Ports}}' | grep '127.0.0.1:8091->8091/tcp' || true)"
           echo "host 8091 owner: $OWNER_8091"
-          if ! printf '%s' "$OWNER_8091" | grep -q 'api-gateway'; then
+          if ! grep -q 'api-gateway' <<<"$OWNER_8091"; then
             echo "ERROR: host port 8091 is not owned by api-gateway"
             docker ps --format '{{.ID}} {{.Image}} {{.Names}} {{.Ports}}'
             exit 1
@@ -419,8 +419,8 @@ jobs:
             REPLICA_HTML="$(dc exec -T "$svc" curl -fsS "http://127.0.0.1:8091/document-import?replica=$svc-$SHORT_SHA" </dev/null)"
             echo "$svc scripts:"
             printf '%s' "$REPLICA_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
-            if ! printf '%s' "$REPLICA_HTML" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
-              || ! printf '%s' "$REPLICA_HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+            if ! grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' <<<"$REPLICA_HTML" \
+              || ! grep -q 'continueExtractedDocumentToMapping' <<<"$REPLICA_HTML"; then
               echo "ERROR: $svc is serving an old/incorrect frontend"
               exit 1
             fi
@@ -477,9 +477,8 @@ jobs:
           echo "== Verify freshly deployed frontend at the API gateway =="
           LOCAL_GATEWAY_HTML="$(curl -fsS -H 'Cache-Control: no-cache, no-store' \
             "http://127.0.0.1:8091/document-import?deploy=$SHORT_SHA")"
-          if ! printf '%s' "$LOCAL_GATEWAY_HTML" \
-            | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
-            || ! printf '%s' "$LOCAL_GATEWAY_HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+          if ! grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' <<<"$LOCAL_GATEWAY_HTML" \
+            || ! grep -q 'continueExtractedDocumentToMapping' <<<"$LOCAL_GATEWAY_HTML"; then
             echo "ERROR: 127.0.0.1:8091 is not serving deployment $DEPLOY_SHA"
             printf '%s' "$LOCAL_GATEWAY_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
             exit 1
@@ -490,9 +489,8 @@ jobs:
             --resolve integrations.madhushalasoftware.com:443:127.0.0.1 \
             -H 'Cache-Control: no-cache, no-store' \
             "https://integrations.madhushalasoftware.com/excise-import/document-import?deploy=$SHORT_SHA")"
-          if ! printf '%s' "$LOCAL_NGINX_HTML" \
-            | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
-            || ! printf '%s' "$LOCAL_NGINX_HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+          if ! grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' <<<"$LOCAL_NGINX_HTML" \
+            || ! grep -q 'continueExtractedDocumentToMapping' <<<"$LOCAL_NGINX_HTML"; then
             echo "ERROR: local Nginx route for integrations.madhushalasoftware.com is not serving the release gateway"
             echo "Selected enabled config: $NGINX_CONFIG"
             sudo -n sed -n '/server_name.*integrations\.madhushalasoftware\.com/,+140p' "$NGINX_CONFIG" || true
@@ -646,8 +644,8 @@ jobs:
             echo "$label"
             HTML="$("$@" 2>/dev/null || true)"
             printf '%s' "$HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
-            if printf '%s' "$HTML" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
-              && printf '%s' "$HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+            if grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' <<<"$HTML" \
+              && grep -q 'continueExtractedDocumentToMapping' <<<"$HTML"; then
               echo "$label => CURRENT"
             else
               echo "$label => OLD_OR_OTHER"
@@ -701,8 +699,8 @@ jobs:
           getent ahostsv6 integrations.madhushalasoftware.com || true
 
           is_current_frontend() {
-            printf '%s' "$1" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
-              && printf '%s' "$1" | grep -q 'continueExtractedDocumentToMapping'
+            grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' <<<"$1" \
+              && grep -q 'continueExtractedDocumentToMapping' <<<"$1"
           }
 
           READY=0
