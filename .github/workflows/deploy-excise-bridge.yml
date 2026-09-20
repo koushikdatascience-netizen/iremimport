@@ -205,20 +205,9 @@ jobs:
             MIGRATE_SQLITE=1
             LOCAL_POSTGRES=1
             POSTGRES_PASSWORD="$(grep -E '^POSTGRES_PASSWORD=' "$CONFIG_ENV" | tail -n 1 | cut -d= -f2- || true)"
-            if [ -z "$POSTGRES_PASSWORD" ] && docker inspect madhushala_postgres >/dev/null 2>&1; then
-              # A previous interrupted migration may already have initialized the
-              # persistent PostgreSQL volume. Reuse the password from that container
-              # instead of generating a new password for the existing cluster.
-              POSTGRES_PASSWORD="$(
-                docker inspect madhushala_postgres \
-                  --format '{{range .Config.Env}}{{println .}}{{end}}' \
-                  | grep '^POSTGRES_PASSWORD=' \
-                  | tail -n 1 \
-                  | cut -d= -f2- \
-                  || true
-              )"
-            fi
             if [ -z "$POSTGRES_PASSWORD" ]; then
+              # Hex-only so it is safe to use in the local ALTER ROLE statement
+              # and directly in the PostgreSQL URL.
               POSTGRES_PASSWORD="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
             fi
             DATABASE_URL="postgresql://madhushala_bridge:$POSTGRES_PASSWORD@postgres:5432/madhushala_bridge"
@@ -277,6 +266,20 @@ jobs:
               echo "ERROR: PostgreSQL did not become ready"
               dc --profile local-postgres logs --tail=150 postgres
               exit 1
+            fi
+
+            if [ "$MIGRATE_SQLITE" -eq 1 ]; then
+              echo "== Normalize PostgreSQL migration credentials =="
+              # POSTGRES_PASSWORD only initializes a fresh cluster; it does not
+              # change an existing role password in a reused data volume. A prior
+              # interrupted migration can therefore leave the volume and env out
+              # of sync. Local socket access as the postgres OS user lets us reset
+              # the application role deterministically before migration.
+              docker exec -u postgres madhushala_postgres \
+                psql -d postgres -v ON_ERROR_STOP=1 \
+                -c "ALTER ROLE madhushala_bridge WITH PASSWORD '$POSTGRES_PASSWORD';" \
+                >/dev/null
+              set_env_value "POSTGRES_PASSWORD" "$POSTGRES_PASSWORD" "$CONFIG_ENV"
             fi
           fi
 
