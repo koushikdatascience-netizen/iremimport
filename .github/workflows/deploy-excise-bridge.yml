@@ -304,6 +304,24 @@ jobs:
           # replicas cannot keep serving the previous image behind the gateway.
           dc up -d --force-recreate web api1 api2 api-gateway
 
+          echo "== Verify every API replica serves this release =="
+          for svc in api1 api2; do
+            cid="$(dc ps -q "$svc")"
+            if [ -z "$cid" ]; then
+              echo "ERROR: $svc container is missing"
+              exit 1
+            fi
+            echo "$svc container=$cid image=$(docker inspect "$cid" --format '{{.Image}}')"
+            REPLICA_HTML="$(dc exec -T "$svc" curl -fsS "http://127.0.0.1:8091/document-import?replica=$svc-$SHORT_SHA")"
+            echo "$svc scripts:"
+            printf '%s' "$REPLICA_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
+            if ! printf '%s' "$REPLICA_HTML" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
+              || ! printf '%s' "$REPLICA_HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+              echo "ERROR: $svc is serving an old/incorrect frontend"
+              exit 1
+            fi
+          done
+
           echo "== Health check =="
           HEALTHY=0
           for attempt in $(seq 1 30); do
