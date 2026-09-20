@@ -381,6 +381,41 @@ jobs:
             exit 1
           fi
 
+          echo "== Origin identity and public-interface diagnostics =="
+          echo "Hostname: $(hostname)"
+          echo "IPv4 addresses:"
+          ip -4 addr show || true
+          echo "443 listeners:"
+          sudo -n ss -ltnp 2>/dev/null | grep -E '(:443[[:space:]]|:443$)' || true
+
+          IMDS_TOKEN="$(curl -fsS -m 2 -X PUT \
+            -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
+            http://169.254.169.254/latest/api/token 2>/dev/null || true)"
+          if [ -n "$IMDS_TOKEN" ]; then
+            EC2_PUBLIC_IPV4="$(curl -fsS -m 2 \
+              -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+              http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)"
+            EC2_INSTANCE_ID="$(curl -fsS -m 2 \
+              -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+              http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || true)"
+            echo "EC2 instance id: $EC2_INSTANCE_ID"
+            echo "EC2 public IPv4: $EC2_PUBLIC_IPV4"
+          else
+            echo "EC2 metadata unavailable."
+          fi
+
+          echo "Enabled integrations.madhushalasoftware.com server blocks:"
+          sudo -n nginx -T 2>/dev/null \
+            | awk '
+                /server[[:space:]]*\{/ {block=$0; capture=1; found=0; next}
+                capture {block=block ORS $0}
+                /server_name[[:space:]].*integrations\.madhushalasoftware\.com/ {found=1}
+                capture && /^}/ {
+                  if (found) print block ORS "---"
+                  capture=0; block=""; found=0
+                }
+              ' || true
+
           echo "== Start Prometheus and Grafana =="
           dc up -d prometheus grafana
 
