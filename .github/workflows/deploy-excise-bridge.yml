@@ -62,7 +62,7 @@ jobs:
     steps:
       - name: Deploy via existing server SSH
         env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_HOST: integrations.madhushalasoftware.com
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_SSH_KEY_B64: ${{ secrets.SERVER_SSH_KEY_B64 }}
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
@@ -70,8 +70,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "${SERVER_HOST:-}" ] || [ -z "${SERVER_USER:-}" ] || [ -z "${SERVER_SSH_KEY_B64:-}" ]; then
-            echo "SERVER_HOST, SERVER_USER, and SERVER_SSH_KEY_B64 secrets are required."
+          if [ -z "${SERVER_USER:-}" ] || [ -z "${SERVER_SSH_KEY_B64:-}" ]; then
+            echo "SERVER_USER and SERVER_SSH_KEY_B64 secrets are required."
             exit 1
           fi
 
