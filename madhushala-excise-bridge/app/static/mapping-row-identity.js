@@ -163,7 +163,7 @@
         }
         if (document.querySelector('script[data-mapping-purchase-context="true"]')) return;
         const script = document.createElement("script");
-        script.src = apiUrl("/static/purchase-context.js?v=20260920-direct-flow-v4");
+        script.src = apiUrl("/static/purchase-context.js?v=20260920-direct-flow-v5");
         script.dataset.mappingPurchaseContext = "true";
         script.onload = () => window.__purchaseContext?.initialize?.();
         document.head.appendChild(script);
@@ -495,11 +495,124 @@
             next = document.createElement("button");
             next.id = "mapping-next-purchase";
             next.type = "button";
-            next.textContent = "Next: Review Purchase";
+            next.textContent = "Next: Preview Purchase";
             next.addEventListener("click", () => void continueMappingToPurchase());
             footer.appendChild(next);
         }
         next.disabled = true;
+    }
+
+    function ensureCompactMappingStyles() {
+        if (document.getElementById("compact-mapping-final-ui-style")) return;
+        const style = document.createElement("style");
+        style.id = "compact-mapping-final-ui-style";
+        style.textContent = `
+            body.mapping-mode {
+                background: #fff !important;
+                overflow: hidden !important;
+            }
+            body.mapping-mode #mapping-view {
+                width: 100% !important;
+                max-width: none !important;
+                height: 100vh !important;
+                min-height: 100vh !important;
+                margin: 0 !important;
+                padding: 4px 6px 5px !important;
+                gap: 4px !important;
+            }
+            body.mapping-mode #mapping-view .mapping-purchase-details,
+            body.mapping-mode #document-import-view > .page-toolbar,
+            body.mapping-mode .document-preview-actions,
+            body.mapping-mode .app-header {
+                display: none !important;
+            }
+            body.mapping-mode #mapping-view .mapping-layout {
+                flex: 1 1 auto !important;
+                height: calc(100vh - 50px) !important;
+                min-height: 0 !important;
+                max-height: none !important;
+                gap: 6px !important;
+                padding: 0 !important;
+                margin: 0 !important;
+            }
+            body.mapping-mode #mapping-view .unmapped-list,
+            body.mapping-mode #mapping-view .mapper {
+                height: 100% !important;
+                min-height: 0 !important;
+                max-height: none !important;
+                border-radius: 4px !important;
+            }
+            body.mapping-mode #mapping-view .list-title,
+            body.mapping-mode #mapping-view .mapper-title {
+                min-height: 30px !important;
+                padding: 5px 8px !important;
+                font-size: 11px !important;
+            }
+            body.mapping-mode #mapping-view .list-body,
+            body.mapping-mode #mapping-view .candidate-list {
+                min-height: 0 !important;
+                max-height: none !important;
+            }
+            body.mapping-mode #mapping-view .mapping-footer {
+                flex: 0 0 42px !important;
+                min-height: 42px !important;
+                margin: 0 !important;
+                padding: 5px 8px !important;
+                border-radius: 4px !important;
+                gap: 7px !important;
+            }
+            body.mapping-mode #mapping-view .mapping-footer button {
+                min-height: 30px !important;
+                height: 30px !important;
+                padding: 0 12px !important;
+                font-size: 11px !important;
+            }
+            body.mapping-mode #mapping-summary {
+                margin-right: auto !important;
+                font-size: 11px !important;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function formatPurchaseMoney(value) {
+        const number = Number(value ?? 0);
+        return Number.isFinite(number) ? number.toFixed(2) : String(value ?? "0.00");
+    }
+
+    function ensureSchemeFieldForBill() {
+        if (document.getElementById("purchase-scheme-code")) return;
+        const form = document.getElementById("purchase-form");
+        if (!form) return;
+        const label = document.createElement("label");
+        label.append(document.createTextNode("Scheme"));
+        const select = document.createElement("select");
+        select.id = "purchase-scheme-code";
+        select.name = "schemeCode";
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "None";
+        select.appendChild(option);
+        label.appendChild(select);
+        const accountField = document.getElementById("purchase-acc-code")?.closest("label");
+        form.insertBefore(label, accountField || null);
+    }
+
+    function setBillFieldLabel(label, text, className = "") {
+        if (!label) return;
+        label.className = `ms-bill-field ${className}`.trim();
+        const textNode = Array.from(label.childNodes).find(
+            (node) => node.nodeType === Node.TEXT_NODE && String(node.textContent || "").trim(),
+        );
+        if (textNode) textNode.textContent = text;
+    }
+
+    function staticBillField(id, label, value = "-") {
+        const field = document.createElement("div");
+        field.id = id;
+        field.className = "ms-bill-field ms-bill-static-field";
+        field.innerHTML = `<span class="ms-bill-label">${escapeHtml(label)}</span><div class="ms-bill-static-value">${escapeHtml(value)}</div>`;
+        return field;
     }
 
     function ensurePurchaseReviewStyles() {
@@ -507,179 +620,681 @@
         const style = document.createElement("style");
         style.id = "purchase-review-flow-style";
         style.textContent = `
-            body.purchase-review-mode #document-review-panel {
-                grid-template-columns: 1fr;
-                max-width: 1500px;
-                margin: 0 auto;
+            body.purchase-review-mode {
+                background: #d8dadd !important;
+                overflow: auto;
             }
+            body.purchase-review-mode #document-import-view {
+                width: 100% !important;
+                max-width: none !important;
+                margin: 0 !important;
+                padding: 3px !important;
+            }
+            body.purchase-review-mode #document-import-view > .page-toolbar,
             body.purchase-review-mode #document-review-panel .document-preview-card,
             body.purchase-review-mode #document-review-panel .document-data-card > header,
             body.purchase-review-mode #document-review-panel .document-metrics,
             body.purchase-review-mode #document-review-panel .document-review-toolbar,
             body.purchase-review-mode #document-review-panel .document-table-wrap,
-            body.purchase-review-mode #document-review-panel .document-review-validation {
+            body.purchase-review-mode #document-review-panel .document-review-validation,
+            body.purchase-review-mode #document-review-panel .document-technical,
+            body.purchase-review-mode #document-action-summary,
+            body.purchase-review-mode .purchase-validate-button,
+            body.purchase-review-mode .purchase-validation-status {
                 display: none !important;
             }
+            body.purchase-review-mode #document-review-panel {
+                display: block !important;
+                width: 100% !important;
+                max-width: none !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
             body.purchase-review-mode #document-review-panel .document-data-card {
-                display: block;
-                width: 100%;
-                max-width: none;
+                display: block !important;
+                width: 100% !important;
+                max-width: none !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: 0 !important;
+                border-radius: 0 !important;
+                background: transparent !important;
             }
             body.purchase-review-mode #document-review-panel .purchase-details {
-                display: block;
-                margin: 0 0 14px;
-                border: 1px solid var(--line);
-                border-radius: 10px;
-                background: #fff;
+                display: block !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: 1px solid #aeb2b7 !important;
+                border-top: 3px solid #876a16 !important;
+                border-radius: 4px !important;
+                background: #fff !important;
+                overflow: visible !important;
             }
             body.purchase-review-mode #document-review-panel .purchase-details > summary {
-                padding: 14px 16px;
-                font-size: 15px;
-                font-weight: 800;
-                cursor: default;
+                display: none !important;
             }
-            .purchase-final-preview {
-                margin-top: 14px;
-                border: 1px solid var(--line);
-                border-radius: 10px;
-                background: #fff;
-                overflow: hidden;
+            .madhushala-bill-form {
+                display: block !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                border: 0 !important;
+                background: #fff !important;
+                font-family: Arial, Helvetica, sans-serif !important;
+                color: #171717 !important;
             }
-            .purchase-final-preview > header {
+            .ms-bill-titlebar {
                 display: flex;
                 align-items: center;
-                justify-content: space-between;
-                gap: 12px;
-                padding: 12px 14px;
-                border-bottom: 1px solid var(--line);
-                background: var(--warm);
+                gap: 7px;
+                height: 31px;
+                padding: 3px 8px;
+                border-bottom: 1px solid #c5c8cc;
+                background: #fff;
+                font-size: 12px;
+                font-weight: 700;
             }
-            .purchase-final-preview .purchase-preview-metrics {
+            .ms-bill-title-icon {
                 display: grid;
-                grid-template-columns: repeat(4, minmax(120px, 1fr));
-                gap: 8px;
-                padding: 12px 14px;
-            }
-            .purchase-final-preview .purchase-preview-metrics div {
-                padding: 8px 10px;
-                border: 1px solid var(--line);
-                border-radius: 8px;
-            }
-            .purchase-final-preview .purchase-preview-metrics span {
-                display: block;
-                color: var(--muted);
-                font-size: 10px;
-                text-transform: uppercase;
-                letter-spacing: .04em;
-            }
-            .purchase-final-preview .purchase-preview-metrics strong {
-                display: block;
-                margin-top: 3px;
-                font-size: 14px;
-            }
-            .purchase-final-table-wrap {
-                overflow: auto;
-                max-height: 46vh;
-                border-top: 1px solid var(--line);
-            }
-            .purchase-final-table {
-                width: 100%;
-                border-collapse: collapse;
+                place-items: center;
+                width: 20px;
+                height: 20px;
+                background: #ffc400;
+                border: 1px solid #d89d00;
                 font-size: 12px;
             }
-            .purchase-final-table th,
-            .purchase-final-table td {
-                padding: 8px 10px;
-                border-bottom: 1px solid var(--line);
+            .ms-bill-titlebar strong {
+                display: block;
+                font-size: 13px;
+                line-height: 1;
+            }
+            .ms-bill-titlebar small {
+                display: block;
+                margin-top: 1px;
+                color: #111;
+                font-family: "Space Mono", monospace;
+                font-size: 6px;
+                letter-spacing: .12em;
+            }
+            .ms-bill-modebar {
+                display: flex;
+                align-items: end;
+                justify-content: space-between;
+                min-height: 51px;
+                padding: 5px 8px;
+                border: 1px solid #c7cbd0;
+                border-width: 0 0 1px;
+                background: #f7f8f9;
+            }
+            .ms-bill-modegroups {
+                display: flex;
+                gap: 9px;
+            }
+            .ms-bill-modegroup {
+                display: grid;
+                gap: 4px;
+            }
+            .ms-bill-mode-label,
+            .ms-bill-label,
+            .ms-bill-field {
+                color: #666;
+                font-family: "Space Mono", monospace;
+                font-size: 7px;
+                font-weight: 700;
+                letter-spacing: .04em;
+                text-transform: uppercase;
+            }
+            .ms-bill-tabs {
+                display: flex;
+                gap: 0;
+            }
+            .ms-bill-tab {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                height: 26px;
+                min-width: 78px;
+                padding: 0 11px;
+                border: 1px solid #d5d8dc;
+                background: #fff;
+                color: #696969;
+                font-family: Arial, Helvetica, sans-serif;
+                font-size: 10px;
+                font-weight: 600;
+                text-transform: none;
+            }
+            .ms-bill-tab + .ms-bill-tab {
+                border-left: 0;
+            }
+            .ms-bill-tab.active {
+                border-color: #111;
+                background: #111;
+                color: #ffd328;
+            }
+            .ms-bill-modeactions {
+                display: flex;
+                gap: 8px;
+            }
+            .ms-bill-action-chip {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                height: 31px;
+                min-width: 116px;
+                padding: 0 12px;
+                border: 1px solid #d7d9dc;
+                background: #fff;
+                color: #555;
+                font-family: "Space Mono", monospace;
+                font-size: 7px;
+                font-weight: 700;
+                letter-spacing: .04em;
+            }
+            .ms-bill-master-grid {
+                display: grid;
+                grid-template-columns: 1.15fr 1.45fr .9fr 1.45fr;
+                column-gap: 9px;
+                row-gap: 5px;
+                padding: 7px 8px 6px;
+                border-bottom: 1px solid #aeb2b7;
+                background: #fff;
+            }
+            .ms-bill-field {
+                display: grid;
+                grid-template-columns: 92px minmax(0, 1fr);
+                align-items: center;
+                gap: 5px;
+                min-width: 0;
+                text-transform: uppercase;
+            }
+            .ms-bill-field input,
+            .ms-bill-field select {
+                width: 100%;
+                min-width: 0;
+                height: 29px !important;
+                padding: 0 9px !important;
+                border: 1px solid #d6d9dd !important;
+                border-radius: 6px !important;
+                outline: none !important;
+                background: #fff !important;
+                color: #333 !important;
+                font-family: Arial, Helvetica, sans-serif !important;
+                font-size: 10px !important;
+                font-weight: 500 !important;
+                text-transform: none !important;
+            }
+            .ms-bill-field input:focus,
+            .ms-bill-field select:focus {
+                border-color: #ffbe00 !important;
+                box-shadow: 0 0 0 1px #ffbe00 !important;
+            }
+            .ms-bill-static-value {
+                display: flex;
+                align-items: center;
+                width: 100%;
+                height: 29px;
+                padding: 0 9px;
+                border: 1px solid #d6d9dd;
+                border-radius: 2px;
+                background: #f7f2e6;
+                color: #333;
+                font-family: Arial, Helvetica, sans-serif;
+                font-size: 10px;
+                font-weight: 600;
+                text-transform: none;
+            }
+            .ms-bill-static-field .ms-bill-label {
+                display: block;
+            }
+            .ms-bill-items {
+                min-height: 166px;
+                border-bottom: 6px solid #eef0f2;
+                background: #fff;
+            }
+            .ms-bill-section-title {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                height: 31px;
+                padding: 0 10px;
+                border-bottom: 1px solid #c6c9cc;
+                background: #e9ecef;
+                color: #111;
+                font-family: Arial, Helvetica, sans-serif;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            .ms-bill-section-title::before {
+                content: "☷";
+                color: #c99300;
+                font-size: 12px;
+            }
+            .ms-bill-table-wrap {
+                overflow: auto;
+                max-height: 275px;
+                min-height: 132px;
+            }
+            .ms-bill-table {
+                width: 100%;
+                min-width: 1040px;
+                border-collapse: collapse;
+                table-layout: auto;
+                font-family: "Space Mono", monospace;
+                font-size: 8px;
+            }
+            .ms-bill-table th {
+                position: sticky;
+                top: 0;
+                z-index: 2;
+                height: 31px;
+                padding: 0 7px;
+                border-right: 1px solid #151515;
+                background: #050505;
+                color: #fff;
+                font-size: 7px;
+                font-weight: 700;
                 text-align: left;
                 white-space: nowrap;
             }
-            .purchase-final-table th {
-                position: sticky;
-                top: 0;
-                background: #f7f7f7;
-                z-index: 1;
+            .ms-bill-table td {
+                height: 34px;
+                padding: 3px 7px;
+                border-right: 1px solid #eef0f2;
+                border-bottom: 1px solid #e2e4e6;
+                color: #111;
+                text-align: right;
+                white-space: nowrap;
             }
-            @media (max-width: 760px) {
-                .purchase-final-preview .purchase-preview-metrics {
-                    grid-template-columns: repeat(2, minmax(100px, 1fr));
+            .ms-bill-table td:nth-child(1),
+            .ms-bill-table td:nth-child(2),
+            .ms-bill-table td:nth-child(3) {
+                text-align: left;
+            }
+            .ms-bill-item-name {
+                display: block;
+                max-width: 265px;
+                overflow: hidden;
+                color: #333;
+                font-family: Arial, Helvetica, sans-serif;
+                font-size: 10px;
+                font-weight: 600;
+                text-overflow: ellipsis;
+            }
+            .ms-bill-item-code {
+                display: block;
+                margin-top: 1px;
+                color: #8a8a8a;
+                font-size: 7px;
+            }
+            .ms-bill-bottom-grid {
+                display: grid;
+                grid-template-columns: 1.1fr .85fr .95fr;
+                min-height: 96px;
+                border-bottom: 1px solid #c9ccd0;
+                background: #fff;
+            }
+            .ms-bill-bottom-panel {
+                padding: 6px 8px;
+                border-right: 7px solid #eef0f2;
+            }
+            .ms-bill-bottom-panel:last-child {
+                border-right: 0;
+            }
+            .ms-bill-bottom-title {
+                margin-bottom: 7px;
+                color: #111;
+                font-family: "Space Mono", monospace;
+                font-size: 7px;
+                font-weight: 700;
+                letter-spacing: .04em;
+                text-transform: uppercase;
+            }
+            .ms-bill-scheme-host .ms-bill-field {
+                display: block;
+            }
+            .ms-bill-scheme-host .ms-bill-field {
+                color: transparent;
+                font-size: 0;
+            }
+            .ms-bill-scheme-host .ms-bill-field select {
+                height: 29px !important;
+            }
+            .ms-bill-metric-row {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) 98px;
+                align-items: center;
+                min-height: 22px;
+                gap: 8px;
+                color: #444;
+                font-family: Arial, Helvetica, sans-serif;
+                font-size: 10px;
+            }
+            .ms-bill-metric-value {
+                height: 19px;
+                padding: 2px 6px;
+                border: 1px solid #d5d7da;
+                background: #f7f2e6;
+                font-family: "Space Mono", monospace;
+                font-size: 9px;
+                font-weight: 700;
+                text-align: right;
+            }
+            .ms-bill-narration-host {
+                min-height: 49px;
+                padding: 5px 8px 6px;
+                background: #fff;
+            }
+            .ms-bill-narration-host .ms-bill-field {
+                display: block;
+            }
+            .ms-bill-narration-host .ms-bill-field {
+                color: #666;
+                font-size: 7px;
+            }
+            .ms-bill-narration-host .ms-bill-field input {
+                width: 315px !important;
+                max-width: 100%;
+                margin-top: 4px;
+                border-radius: 0 !important;
+            }
+            .ms-bill-hidden-fields {
+                display: none !important;
+            }
+            body.purchase-review-mode #document-action-bar {
+                display: flex !important;
+                align-items: center !important;
+                justify-content: flex-end !important;
+                min-height: 45px !important;
+                margin: 0 !important;
+                padding: 5px 7px !important;
+                border: 1px solid #c5c8cc !important;
+                border-top: 0 !important;
+                border-radius: 0 0 4px 4px !important;
+                background: #fff !important;
+            }
+            body.purchase-review-mode #document-action-bar > div {
+                display: flex !important;
+                flex-direction: row !important;
+                align-items: center !important;
+                justify-content: flex-end !important;
+                gap: 7px !important;
+                width: auto !important;
+            }
+            body.purchase-review-mode #document-action-bar button {
+                width: auto !important;
+                min-width: 86px !important;
+                height: 31px !important;
+                padding: 0 12px !important;
+                border-radius: 2px !important;
+                font-family: "Space Mono", monospace !important;
+                font-size: 7px !important;
+                font-weight: 700 !important;
+                letter-spacing: .03em !important;
+            }
+            body.purchase-review-mode #save-purchase {
+                border-color: #9b9b9b !important;
+                background: #9b9b9b !important;
+                color: #fff !important;
+            }
+            body.purchase-review-mode #save-purchase:not(:disabled) {
+                border-color: #111 !important;
+                background: #111 !important;
+            }
+            body.purchase-review-mode #purchase-back-to-mapping {
+                border: 1px solid #c8cbcf !important;
+                background: #fff !important;
+                color: #333 !important;
+            }
+            @media (max-width: 980px) {
+                .ms-bill-master-grid {
+                    grid-template-columns: 1fr 1fr;
+                }
+                .ms-bill-bottom-grid {
+                    grid-template-columns: 1fr;
+                }
+                .ms-bill-bottom-panel {
+                    border-right: 0;
+                    border-bottom: 6px solid #eef0f2;
+                }
+            }
+            @media (max-width: 640px) {
+                .ms-bill-master-grid {
+                    grid-template-columns: 1fr;
+                }
+                .ms-bill-field {
+                    grid-template-columns: 88px minmax(0, 1fr);
+                }
+                .ms-bill-modebar {
+                    align-items: stretch;
+                    flex-direction: column;
+                    gap: 6px;
+                }
+                .ms-bill-modegroups,
+                .ms-bill-modeactions {
+                    flex-wrap: wrap;
                 }
             }
         `;
         document.head.appendChild(style);
     }
 
-    function ensureFinalPurchasePreview() {
-        const card = document.querySelector("#document-review-panel .document-data-card");
-        const technical = document.querySelector("#document-review-panel .document-technical");
-        if (!card) return null;
-        let preview = document.getElementById("purchase-final-preview");
-        if (!preview) {
-            preview = document.createElement("section");
-            preview.id = "purchase-final-preview";
-            preview.className = "purchase-final-preview";
-            preview.innerHTML = `
-                <header>
-                    <div>
-                        <span class="app-kicker">Madhushala Calculate</span>
-                        <strong>Final Purchase Payload Preview</strong>
+    function ensureMadhushalaPurchaseBill() {
+        const details = document.querySelector("#document-review-panel .purchase-details");
+        const form = document.getElementById("purchase-form");
+        if (!details || !form) return null;
+
+        ensureSchemeFieldForBill();
+
+        if (form.dataset.madhushalaBillLayout !== "true") {
+            const fieldIds = [
+                "purchase-year-code",
+                "purchase-trn-date",
+                "purchase-doc-date",
+                "purchase-doc-no",
+                "purchase-tp-pass-no",
+                "purchase-supplier-code",
+                "purchase-store-code",
+                "purchase-scheme-code",
+                "purchase-acc-code",
+                "purchase-user-code",
+                "purchase-tax-mode",
+                "purchase-narration",
+            ];
+            const labels = Object.fromEntries(
+                fieldIds.map((id) => [id, document.getElementById(id)?.closest("label") || null]),
+            );
+
+            const titlebar = document.createElement("div");
+            titlebar.className = "ms-bill-titlebar";
+            titlebar.innerHTML = `
+                <span class="ms-bill-title-icon">▣</span>
+                <div><strong>Purchase Bill</strong><small>NEW BILL</small></div>
+            `;
+
+            const modebar = document.createElement("div");
+            modebar.className = "ms-bill-modebar";
+            modebar.innerHTML = `
+                <div class="ms-bill-modegroups">
+                    <div class="ms-bill-modegroup">
+                        <span class="ms-bill-mode-label">Operation Type</span>
+                        <div class="ms-bill-tabs">
+                            <span class="ms-bill-tab active">Purchase</span>
+                            <span class="ms-bill-tab">Return</span>
+                            <span class="ms-bill-tab">Purchase Order</span>
+                        </div>
                     </div>
-                    <span id="purchase-final-validation-state">Waiting for validation</span>
-                </header>
-                <div class="purchase-preview-metrics">
-                    <div><span>Items</span><strong id="purchase-final-items">0</strong></div>
-                    <div><span>Gross</span><strong id="purchase-final-gross">0</strong></div>
-                    <div><span>Tax</span><strong id="purchase-final-tax">0</strong></div>
-                    <div><span>Net</span><strong id="purchase-final-net">0</strong></div>
+                    <div class="ms-bill-modegroup">
+                        <span class="ms-bill-mode-label">Item Type <b style="color:#d62d20">*</b></span>
+                        <div class="ms-bill-tabs">
+                            <span class="ms-bill-tab active">AI Item</span>
+                            <span class="ms-bill-tab">NAI Item</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="purchase-final-table-wrap">
-                    <table class="purchase-final-table">
+                <div class="ms-bill-modeactions">
+                    <span class="ms-bill-action-chip">▧ ADD NEW ITEM</span>
+                    <span class="ms-bill-action-chip">⌁ ADD NEW SUPPLIER</span>
+                </div>
+            `;
+
+            const master = document.createElement("div");
+            master.id = "ms-bill-master-grid";
+            master.className = "ms-bill-master-grid";
+            master.append(
+                staticBillField("ms-bill-retail", "Retail", "-"),
+                staticBillField("ms-bill-company", "Company", "-"),
+                staticBillField("ms-bill-trn-no", "TRN No", "Auto"),
+            );
+
+            const supplier = labels["purchase-supplier-code"];
+            const trnDate = labels["purchase-trn-date"];
+            const docDate = labels["purchase-doc-date"];
+            const docNo = labels["purchase-doc-no"];
+            const tpPass = labels["purchase-tp-pass-no"];
+            const purchaseAcc = labels["purchase-acc-code"];
+            const storage = labels["purchase-store-code"];
+            setBillFieldLabel(supplier, "Supplier *");
+            setBillFieldLabel(trnDate, "Trans. Date *");
+            setBillFieldLabel(docDate, "Doc./Bill Date");
+            setBillFieldLabel(docNo, "Doc./Bill No");
+            setBillFieldLabel(tpPass, "T.P.Pass No");
+            setBillFieldLabel(purchaseAcc, "Purchase Head *");
+            setBillFieldLabel(storage, "Storage *");
+            [supplier, trnDate, docDate, docNo, tpPass, purchaseAcc, storage].filter(Boolean).forEach((label) => master.appendChild(label));
+
+            const items = document.createElement("section");
+            items.id = "purchase-final-preview";
+            items.className = "ms-bill-items";
+            items.innerHTML = `
+                <div class="ms-bill-section-title">Items</div>
+                <div class="ms-bill-table-wrap">
+                    <table class="ms-bill-table">
                         <thead>
                             <tr>
-                                <th>Item Code</th><th>Item</th><th>Batch</th><th>Box</th>
-                                <th>Loose</th><th>Qty</th><th>Rate</th><th>MRP</th><th>Amount</th>
+                                <th>SL.NO</th><th>ITEM NAME</th><th>BATCH NO</th><th>CASE</th><th>LOOSE</th>
+                                <th>QUANTITY</th><th>CASE RATE</th><th>MRP</th><th>LOOSE RATE</th>
+                                <th>DISCOUNT</th><th>AMOUNT</th>
                             </tr>
                         </thead>
                         <tbody id="purchase-final-table-body">
-                            <tr><td colspan="9">Validate Purchase to load the final payload.</td></tr>
+                            <tr><td colspan="11">Calculating purchase preview…</td></tr>
                         </tbody>
                     </table>
                 </div>
             `;
-            card.insertBefore(preview, technical || null);
+
+            const bottom = document.createElement("div");
+            bottom.className = "ms-bill-bottom-grid";
+
+            const schemePanel = document.createElement("section");
+            schemePanel.className = "ms-bill-bottom-panel";
+            schemePanel.innerHTML = '<div class="ms-bill-bottom-title">Tax Scheme</div><div id="ms-bill-scheme-host" class="ms-bill-scheme-host"></div>';
+
+            const taxPanel = document.createElement("section");
+            taxPanel.className = "ms-bill-bottom-panel";
+            taxPanel.innerHTML = `
+                <div class="ms-bill-bottom-title">Tax N Other</div>
+                <div class="ms-bill-metric-row"><span>ROUND OFF</span><span id="ms-bill-round-off" class="ms-bill-metric-value">0.00</span></div>
+                <div class="ms-bill-metric-row"><span>SPECIAL PURPOSE FEE</span><span id="ms-bill-special-fee" class="ms-bill-metric-value">0.00</span></div>
+                <div class="ms-bill-metric-row"><span>TCS</span><span id="ms-bill-tcs" class="ms-bill-metric-value">0.00</span></div>
+            `;
+
+            const totalPanel = document.createElement("section");
+            totalPanel.className = "ms-bill-bottom-panel";
+            totalPanel.innerHTML = `
+                <div class="ms-bill-bottom-title">Total</div>
+                <div class="ms-bill-metric-row"><span>Gross Amount</span><span id="purchase-final-gross" class="ms-bill-metric-value">0.00</span></div>
+                <div class="ms-bill-metric-row"><span>Total Discount</span><span id="ms-bill-total-discount" class="ms-bill-metric-value">0.00</span></div>
+                <div class="ms-bill-metric-row"><span>ETD</span><span id="ms-bill-etd" class="ms-bill-metric-value">0.00</span></div>
+                <div class="ms-bill-metric-row"><span>Sales Tax on MRP</span><span id="ms-bill-sales-tax" class="ms-bill-metric-value">0.00</span></div>
+                <div class="ms-bill-metric-row"><span>Tax Amount</span><span id="purchase-final-tax" class="ms-bill-metric-value">0.00</span></div>
+                <div class="ms-bill-metric-row"><span>Net Amount</span><span id="purchase-final-net" class="ms-bill-metric-value">0.00</span></div>
+            `;
+            bottom.append(schemePanel, taxPanel, totalPanel);
+
+            const narrationHost = document.createElement("div");
+            narrationHost.id = "ms-bill-narration-host";
+            narrationHost.className = "ms-bill-narration-host";
+
+            const hiddenHost = document.createElement("div");
+            hiddenHost.className = "ms-bill-hidden-fields";
+
+            const scheme = labels["purchase-scheme-code"];
+            const narration = labels["purchase-narration"];
+            const year = labels["purchase-year-code"];
+            const user = labels["purchase-user-code"];
+            const taxMode = labels["purchase-tax-mode"];
+            setBillFieldLabel(scheme, "Tax Scheme");
+            setBillFieldLabel(narration, "Narration");
+            if (scheme) schemePanel.querySelector("#ms-bill-scheme-host")?.appendChild(scheme);
+            if (narration) narrationHost.appendChild(narration);
+            [year, user, taxMode].filter(Boolean).forEach((label) => hiddenHost.appendChild(label));
+
+            form.replaceChildren(titlebar, modebar, master, items, bottom, narrationHost, hiddenHost);
+            form.classList.add("madhushala-bill-form");
+            form.dataset.madhushalaBillLayout = "true";
         }
-        return preview;
+
+        const context = window.__purchaseContext?.getContext?.() || null;
+        const retail = document.querySelector("#ms-bill-retail .ms-bill-static-value");
+        const company = document.querySelector("#ms-bill-company .ms-bill-static-value");
+        if (retail) retail.textContent = context?.shopCode || retail.textContent || "-";
+        if (company) company.textContent = context?.jwtContext?.companyName || context?.companyCode || company.textContent || "-";
+
+        return form;
+    }
+
+    function ensureFinalPurchasePreview() {
+        ensureMadhushalaPurchaseBill();
+        return document.getElementById("purchase-final-preview");
     }
 
     function renderFinalPurchasePayload(response) {
         if (!purchaseReviewMode) return;
         const payload = response?.purchasePayload || {};
         const items = Array.isArray(payload.items) ? payload.items : [];
-        ensureFinalPurchasePreview();
-        setText(document.getElementById("purchase-final-validation-state"), response?.validated ? "Validated" : "Preview");
-        setText(document.getElementById("purchase-final-items"), String(items.length));
-        setText(document.getElementById("purchase-final-gross"), String(payload.grossAmount ?? 0));
-        setText(document.getElementById("purchase-final-tax"), String(payload.taxAmount ?? 0));
-        setText(document.getElementById("purchase-final-net"), String(payload.netAmount ?? 0));
+        ensureMadhushalaPurchaseBill();
+
+        const context = window.__purchaseContext?.getContext?.() || null;
+        const retail = document.querySelector("#ms-bill-retail .ms-bill-static-value");
+        const company = document.querySelector("#ms-bill-company .ms-bill-static-value");
+        if (retail) retail.textContent = payload.shopCode || context?.shopCode || "-";
+        if (company) company.textContent = context?.jwtContext?.companyName || payload.companyCode || context?.companyCode || "-";
 
         const tbody = document.getElementById("purchase-final-table-body");
         if (tbody) {
             tbody.innerHTML = items.length
-                ? items.map((item) => `
+                ? items.map((item, index) => `
                     <tr>
-                        <td>${escapeHtml(item.itemCode ?? "")}</td>
-                        <td>${escapeHtml(item.itemName ?? "")}</td>
+                        <td>${index + 1}</td>
+                        <td>
+                            <span class="ms-bill-item-name">${escapeHtml(item.itemName ?? "")}</span>
+                            <span class="ms-bill-item-code">${escapeHtml(item.itemCode ?? "")}</span>
+                        </td>
                         <td>${escapeHtml(item.batchNo ?? "")}</td>
                         <td>${escapeHtml(item.box ?? 0)}</td>
                         <td>${escapeHtml(item.loose ?? 0)}</td>
                         <td>${escapeHtml(item.qnty ?? 0)}</td>
-                        <td>${escapeHtml(item.rate ?? 0)}</td>
+                        <td>${escapeHtml(item.boxRate ?? item.rate ?? 0)}</td>
                         <td>${escapeHtml(item.mrp ?? 0)}</td>
+                        <td>${escapeHtml(item.looseRate ?? 0)}</td>
+                        <td>${escapeHtml(item.discount ?? 0)}</td>
                         <td>${escapeHtml(item.itemAmount ?? 0)}</td>
                     </tr>
                 `).join("")
-                : '<tr><td colspan="9">No purchase items returned by validation.</td></tr>';
+                : '<tr><td colspan="11">No purchase items returned by Calculate Preview.</td></tr>';
         }
+
+        const etd = items.reduce((sum, item) => sum + (Number(item.etd) || 0), 0);
+        const totalDiscount = payload.discount ?? items.reduce((sum, item) => sum + (Number(item.discount) || 0), 0);
+        setText(document.getElementById("purchase-final-gross"), formatPurchaseMoney(payload.grossAmount));
+        setText(document.getElementById("purchase-final-tax"), formatPurchaseMoney(payload.taxAmount));
+        setText(document.getElementById("purchase-final-net"), formatPurchaseMoney(payload.netAmount));
+        setText(document.getElementById("ms-bill-total-discount"), formatPurchaseMoney(totalDiscount));
+        setText(document.getElementById("ms-bill-etd"), formatPurchaseMoney(payload.etd ?? etd));
+        setText(document.getElementById("ms-bill-sales-tax"), formatPurchaseMoney(payload.salesTaxOnMRP));
+        setText(document.getElementById("ms-bill-round-off"), formatPurchaseMoney(payload.roundOff));
+        setText(document.getElementById("ms-bill-special-fee"), formatPurchaseMoney(payload.specialPurposeFee ?? payload.specialPurposeFeeAmount));
+        setText(document.getElementById("ms-bill-tcs"), formatPurchaseMoney(payload.tcs ?? payload.tcsAmount));
 
         const json = document.getElementById("document-json");
         if (json) json.textContent = JSON.stringify(payload, null, 2);
@@ -700,30 +1315,17 @@
         setHidden(document.getElementById("document-import-view"), false);
         setDocumentImportState("review");
 
-        const title = document.querySelector("#document-import-view .page-toolbar h1");
-        if (title) title.textContent = "Review Purchase";
         setHidden(document.getElementById("document-refresh"), true);
         setHidden(document.getElementById("document-upload-another"), true);
         setHidden(document.getElementById("continue-document-mapping"), true);
         setHidden(document.getElementById("save-purchase"), false);
 
         const details = document.querySelector("#document-review-panel .purchase-details");
-        if (details) {
-            details.open = true;
-            const summary = details.querySelector("summary");
-            if (summary) summary.textContent = "Purchase Details";
-        }
-        const technical = document.querySelector("#document-review-panel .document-technical");
-        if (technical) {
-            const summary = technical.querySelector("summary");
-            if (summary) summary.textContent = "Final Payload JSON / Technical Details";
-        }
+        if (details) details.open = true;
+        ensureMadhushalaPurchaseBill();
 
-        ensureFinalPurchasePreview();
-        setText(
-            document.getElementById("document-action-summary"),
-            "Review the pre-filled purchase values. Validate against Madhushala, then save the purchase.",
-        );
+        const save = document.getElementById("save-purchase");
+        if (save) save.textContent = "SAVE PURCHASE";
 
         const actionButtons = document.querySelector("#document-action-bar > div");
         if (actionButtons && !document.getElementById("purchase-back-to-mapping")) {
@@ -731,7 +1333,7 @@
             back.id = "purchase-back-to-mapping";
             back.type = "button";
             back.className = "secondary";
-            back.textContent = "Back to Mapping";
+            back.textContent = "CANCEL";
             back.addEventListener("click", () => {
                 persistPurchaseHeader();
                 window.location.href = basePath
@@ -739,7 +1341,7 @@
                     + "&sessionId=" + encodeURIComponent(sessionId)
                     + "#session=" + encodeURIComponent(sessionToken);
             });
-            actionButtons.insertBefore(back, actionButtons.firstChild);
+            actionButtons.appendChild(back);
         }
 
         try {
@@ -753,9 +1355,10 @@
                 const hint = loadPurchaseSourceHint(jobId);
                 await window.__purchaseContext?.refresh?.(hint.supplierName || "");
                 applyPurchaseHeader(loadPurchaseHeader(jobId));
+                ensureMadhushalaPurchaseBill();
                 await window.__purchaseContext?.validate?.("review", {showSuccessToast: false});
-            } catch {
-                // The explicit Validate Purchase button remains available.
+            } catch (error) {
+                showToast(error?.message || "Could not calculate purchase preview.", "error");
             }
         };
         window.setTimeout(() => void validateWhenReady(), 0);
@@ -766,6 +1369,7 @@
         // Do not mount Purchase fields on Mapping in the simplified flow.
         // The function is retained above so the old UI can be restored later.
         ensurePurchaseContextOnMapping();
+        ensureCompactMappingStyles();
         setupMappingNextButton();
         const result = originalInitMapping();
         const jobId = sanitizeJobId(currentDocumentJobId || activeJobId || "");
