@@ -482,7 +482,17 @@
         const actionSummary = document.getElementById("document-action-summary");
         if (actionSummary) actionSummary.textContent = summary;
         const json = document.getElementById("document-json");
-        if (json) json.textContent = JSON.stringify(payload, null, 2);
+        if (json) {
+            // On the final Purchase screen render the exact business payload that
+            // will be sent to Madhushala after save-time revalidation. Other
+            // legacy/review views retain the complete debug response.
+            json.textContent = JSON.stringify(
+                pageParams.get("view") === "purchase" ? purchase : payload,
+                null,
+                2,
+            );
+        }
+        window.dispatchEvent(new CustomEvent("purchase-preview-ready", {detail: payload}));
         return summary;
     }
 
