@@ -61,7 +61,7 @@ def auth(session: dict) -> dict[str, str]:
 def test_document_import_loads_qr_compatibility_script(client: TestClient):
     response = client.get("/document-import")
     assert response.status_code == 200
-    assert '<script src="./static/qr-browser-fallback.js?v=20260920-direct-flow-v4"></script>' in response.text
+    assert '<script src="./static/qr-browser-fallback.js?v=20260920-purchase-bill-v5"></script>' in response.text
 
 
 def test_server_qr_decode_endpoint_returns_detected_url(client: TestClient, monkeypatch):
