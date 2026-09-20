@@ -324,29 +324,33 @@ jobs:
           cat /tmp/madhushala-health.json
           echo
 
-          echo "== Verify public Excise route serves this release =="
-          PUBLIC_IMPORT_URL="https://integrations.madhushalasoftware.com/excise-import"
-          PUBLIC_READY=0
-          for attempt in $(seq 1 20); do
-            if curl -fsS -H 'Cache-Control: no-cache' \
-              "$PUBLIC_IMPORT_URL/document-import?deploy=$SHORT_SHA-$attempt" \
-              | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4'; then
-              PUBLIC_READY=1
-              break
-            fi
-            sleep 3
-          done
-          if [ "$PUBLIC_READY" -ne 1 ]; then
-            echo "ERROR: public Excise route is not serving deployment $DEPLOY_SHA"
-            echo "Internal gateway scripts:"
-            curl -fsS http://127.0.0.1:8091/document-import \
-              | grep -oE '<script[^>]+src="[^"]+"' || true
-            echo "Public route scripts:"
-            curl -fsS -H 'Cache-Control: no-cache' \
-              "$PUBLIC_IMPORT_URL/document-import?deploy=$SHORT_SHA-final" \
-              | grep -oE '<script[^>]+src="[^"]+"' || true
+          echo "== Point the enabled public Excise location at the release gateway =="
+          if ! sudo -n true 2>/dev/null; then
+            echo "ERROR: passwordless sudo is required to validate the enabled Nginx route"
             exit 1
           fi
+          NGINX_CONFIGS=""
+          for candidate in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*; do
+            [ -f "$candidate" ] || continue
+            if sudo -n grep -q 'server_name.*integrations\.madhushalasoftware\.com' "$candidate" \
+              && sudo -n grep -q 'location.*\/excise-import\/' "$candidate"; then
+              NGINX_CONFIGS="$NGINX_CONFIGS $(readlink -f "$candidate")"
+            fi
+          done
+          NGINX_CONFIGS="$(printf '%s\n' $NGINX_CONFIGS | sed '/^$/d' | sort -u)"
+          NGINX_CONFIG_COUNT="$(printf '%s\n' "$NGINX_CONFIGS" | sed '/^$/d' | wc -l)"
+          if [ "$NGINX_CONFIG_COUNT" -ne 1 ]; then
+            echo "ERROR: expected one enabled integrations.madhushalasoftware.com Excise config, found $NGINX_CONFIG_COUNT"
+            printf '%s\n' "$NGINX_CONFIGS"
+            exit 1
+          fi
+          NGINX_CONFIG="$NGINX_CONFIGS"
+          sudo -n cp "$NGINX_CONFIG" "$NGINX_CONFIG.before-$SHORT_SHA"
+          sudo -n sed -i \
+            '/location.*\/excise-import\//,/^[[:space:]]*}/ s#proxy_pass[[:space:]].*;#proxy_pass http://127.0.0.1:8091/;#' \
+            "$NGINX_CONFIG"
+          sudo -n nginx -t
+          sudo -n systemctl reload nginx
 
           echo "== Start Prometheus and Grafana =="
           dc up -d prometheus grafana
@@ -398,3 +402,29 @@ jobs:
 
           echo "Deployment complete: $DEPLOY_SHA"
           REMOTE
+
+      - name: Verify externally served frontend
+        env:
+          TARGET_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(printf '%s' "$TARGET_COMMIT" | cut -c1-8)"
+          PUBLIC_URL="https://integrations.madhushalasoftware.com/excise-import"
+          READY=0
+          for attempt in $(seq 1 20); do
+            HTML="$(curl -fsS -H 'Cache-Control: no-cache' \
+              "$PUBLIC_URL/document-import?deploy=$SHORT_SHA-$attempt")"
+            if printf '%s' "$HTML" \
+              | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
+              && printf '%s' "$HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+              READY=1
+              break
+            fi
+            sleep 3
+          done
+          if [ "$READY" -ne 1 ]; then
+            echo "ERROR: external public URL is not serving $TARGET_COMMIT"
+            printf '%s' "$HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
+            exit 1
+          fi
+          curl -fsS "$PUBLIC_URL/health/ready" >/dev/null
