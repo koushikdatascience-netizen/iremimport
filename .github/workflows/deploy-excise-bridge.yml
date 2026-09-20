@@ -352,6 +352,35 @@ jobs:
           sudo -n nginx -t
           sudo -n systemctl reload nginx
 
+          echo "== Verify freshly deployed frontend at the API gateway =="
+          LOCAL_GATEWAY_HTML="$(curl -fsS -H 'Cache-Control: no-cache, no-store' \
+            "http://127.0.0.1:8091/document-import?deploy=$SHORT_SHA")"
+          if ! printf '%s' "$LOCAL_GATEWAY_HTML" \
+            | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
+            || ! printf '%s' "$LOCAL_GATEWAY_HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+            echo "ERROR: 127.0.0.1:8091 is not serving deployment $DEPLOY_SHA"
+            printf '%s' "$LOCAL_GATEWAY_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
+            exit 1
+          fi
+
+          echo "== Verify local Nginx/SNI route reaches the same release =="
+          LOCAL_NGINX_HTML="$(curl -kfsSL \
+            --resolve integrations.madhushalasoftware.com:443:127.0.0.1 \
+            -H 'Cache-Control: no-cache, no-store' \
+            "https://integrations.madhushalasoftware.com/excise-import/document-import?deploy=$SHORT_SHA")"
+          if ! printf '%s' "$LOCAL_NGINX_HTML" \
+            | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
+            || ! printf '%s' "$LOCAL_NGINX_HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+            echo "ERROR: local Nginx route for integrations.madhushalasoftware.com is not serving the release gateway"
+            echo "Selected enabled config: $NGINX_CONFIG"
+            sudo -n sed -n '/server_name.*integrations\.madhushalasoftware\.com/,+140p' "$NGINX_CONFIG" || true
+            echo "Gateway scripts:"
+            printf '%s' "$LOCAL_GATEWAY_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
+            echo "Local Nginx scripts:"
+            printf '%s' "$LOCAL_NGINX_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
+            exit 1
+          fi
+
           echo "== Start Prometheus and Grafana =="
           dc up -d prometheus grafana
 
@@ -410,21 +439,69 @@ jobs:
           set -euo pipefail
           SHORT_SHA="$(printf '%s' "$TARGET_COMMIT" | cut -c1-8)"
           PUBLIC_URL="https://integrations.madhushalasoftware.com/excise-import"
+
+          echo "== Public DNS addresses seen by GitHub Actions =="
+          getent ahostsv4 integrations.madhushalasoftware.com || true
+          getent ahostsv6 integrations.madhushalasoftware.com || true
+
+          is_current_frontend() {
+            printf '%s' "$1" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
+              && printf '%s' "$1" | grep -q 'continueExtractedDocumentToMapping'
+          }
+
           READY=0
           for attempt in $(seq 1 20); do
-            HTML="$(curl -fsS -H 'Cache-Control: no-cache' \
+            HTML="$(curl -fsSL \
+              -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              -H 'Pragma: no-cache' \
               "$PUBLIC_URL/document-import?deploy=$SHORT_SHA-$attempt")"
-            if printf '%s' "$HTML" \
-              | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
-              && printf '%s' "$HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+            if is_current_frontend "$HTML"; then
               READY=1
               break
             fi
             sleep 3
           done
+
           if [ "$READY" -ne 1 ]; then
             echo "ERROR: external public URL is not serving $TARGET_COMMIT"
+            echo "Default public response scripts:"
             printf '%s' "$HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
+
+            echo "== IPv4 diagnostic =="
+            HTML4="$(curl -4 -fsSL \
+              -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              -H 'Pragma: no-cache' \
+              "$PUBLIC_URL/document-import?deploy=$SHORT_SHA-ipv4" 2>/dev/null || true)"
+            if [ -n "$HTML4" ]; then
+              if is_current_frontend "$HTML4"; then
+                echo "IPv4 serves the CURRENT release."
+              else
+                echo "IPv4 serves an OLD/OTHER release."
+              fi
+              printf '%s' "$HTML4" | grep -oE '<script[^>]+src="[^"]+"' || true
+            else
+              echo "No usable IPv4 response."
+            fi
+
+            echo "== IPv6 diagnostic =="
+            HTML6="$(curl -6 -fsSL \
+              -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              -H 'Pragma: no-cache' \
+              "$PUBLIC_URL/document-import?deploy=$SHORT_SHA-ipv6" 2>/dev/null || true)"
+            if [ -n "$HTML6" ]; then
+              if is_current_frontend "$HTML6"; then
+                echo "IPv6 serves the CURRENT release."
+              else
+                echo "IPv6 serves an OLD/OTHER release."
+              fi
+              printf '%s' "$HTML6" | grep -oE '<script[^>]+src="[^"]+"' || true
+            else
+              echo "No usable IPv6 response."
+            fi
+
+            echo "The application container and local Nginx were verified earlier in this job."
+            echo "If they are current while this public check is old, DNS/CDN/upstream routing points at another origin and must be corrected there."
             exit 1
           fi
+
           curl -fsS "$PUBLIC_URL/health/ready" >/dev/null
