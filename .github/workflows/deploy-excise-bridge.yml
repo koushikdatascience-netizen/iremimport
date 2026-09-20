@@ -205,6 +205,19 @@ jobs:
             MIGRATE_SQLITE=1
             LOCAL_POSTGRES=1
             POSTGRES_PASSWORD="$(grep -E '^POSTGRES_PASSWORD=' "$CONFIG_ENV" | tail -n 1 | cut -d= -f2- || true)"
+            if [ -z "$POSTGRES_PASSWORD" ] && docker inspect madhushala_postgres >/dev/null 2>&1; then
+              # A previous interrupted migration may already have initialized the
+              # persistent PostgreSQL volume. Reuse the password from that container
+              # instead of generating a new password for the existing cluster.
+              POSTGRES_PASSWORD="$(
+                docker inspect madhushala_postgres \
+                  --format '{{range .Config.Env}}{{println .}}{{end}}' \
+                  | grep '^POSTGRES_PASSWORD=' \
+                  | tail -n 1 \
+                  | cut -d= -f2- \
+                  || true
+              )"
+            fi
             if [ -z "$POSTGRES_PASSWORD" ]; then
               POSTGRES_PASSWORD="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
             fi
