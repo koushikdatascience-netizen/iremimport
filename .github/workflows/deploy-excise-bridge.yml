@@ -382,10 +382,11 @@ jobs:
             fi
             echo "$svc container=$cid image=$(docker inspect "$cid" --format '{{.Image}}')"
             REPLICA_HTML="$(dc exec -T "$svc" curl -fsS "http://127.0.0.1:8091/document-import?replica=$svc-$SHORT_SHA" </dev/null)"
+            REPLICA_JS="$(dc exec -T "$svc" curl -fsS "http://127.0.0.1:8091/static/mapping-row-identity.js?v=20260920-direct-flow-v4" </dev/null)"
             echo "$svc scripts:"
             printf '%s' "$REPLICA_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
             if ! printf '%s' "$REPLICA_HTML" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
-              || ! printf '%s' "$REPLICA_HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+              || ! printf '%s' "$REPLICA_JS" | grep -q 'continueExtractedDocumentToMapping'; then
               echo "ERROR: $svc is serving an old/incorrect frontend"
               exit 1
             fi
@@ -442,9 +443,11 @@ jobs:
           echo "== Verify freshly deployed frontend at the API gateway =="
           LOCAL_GATEWAY_HTML="$(curl -fsS -H 'Cache-Control: no-cache, no-store' \
             "http://127.0.0.1:8091/document-import?deploy=$SHORT_SHA")"
+          LOCAL_GATEWAY_JS="$(curl -fsS -H 'Cache-Control: no-cache, no-store' \
+            "http://127.0.0.1:8091/static/mapping-row-identity.js?v=20260920-direct-flow-v4")"
           if ! printf '%s' "$LOCAL_GATEWAY_HTML" \
             | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
-            || ! printf '%s' "$LOCAL_GATEWAY_HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+            || ! printf '%s' "$LOCAL_GATEWAY_JS" | grep -q 'continueExtractedDocumentToMapping'; then
             echo "ERROR: 127.0.0.1:8091 is not serving deployment $DEPLOY_SHA"
             printf '%s' "$LOCAL_GATEWAY_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
             exit 1
@@ -455,9 +458,13 @@ jobs:
             --resolve integrations.madhushalasoftware.com:443:127.0.0.1 \
             -H 'Cache-Control: no-cache, no-store' \
             "https://integrations.madhushalasoftware.com/excise-import/document-import?deploy=$SHORT_SHA")"
+          LOCAL_NGINX_JS="$(curl -kfsSL \
+            --resolve integrations.madhushalasoftware.com:443:127.0.0.1 \
+            -H 'Cache-Control: no-cache, no-store' \
+            "https://integrations.madhushalasoftware.com/excise-import/static/mapping-row-identity.js?v=20260920-direct-flow-v4")"
           if ! printf '%s' "$LOCAL_NGINX_HTML" \
             | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
-            || ! printf '%s' "$LOCAL_NGINX_HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+            || ! printf '%s' "$LOCAL_NGINX_JS" | grep -q 'continueExtractedDocumentToMapping'; then
             echo "ERROR: local Nginx route for integrations.madhushalasoftware.com is not serving the release gateway"
             echo "Selected enabled config: $NGINX_CONFIG"
             sudo -n sed -n '/server_name.*integrations\.madhushalasoftware\.com/,+140p' "$NGINX_CONFIG" || true
@@ -611,8 +618,7 @@ jobs:
             echo "$label"
             HTML="$("$@" 2>/dev/null || true)"
             printf '%s' "$HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
-            if printf '%s' "$HTML" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
-              && printf '%s' "$HTML" | grep -q 'continueExtractedDocumentToMapping'; then
+            if printf '%s' "$HTML" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4'; then
               echo "$label => CURRENT"
             else
               echo "$label => OLD_OR_OTHER"
@@ -666,8 +672,7 @@ jobs:
           getent ahostsv6 integrations.madhushalasoftware.com || true
 
           is_current_frontend() {
-            printf '%s' "$1" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4' \
-              && printf '%s' "$1" | grep -q 'continueExtractedDocumentToMapping'
+            printf '%s' "$1" | grep -q 'mapping-row-identity.js?v=20260920-direct-flow-v4'
           }
 
           READY=0
@@ -682,6 +687,17 @@ jobs:
             fi
             sleep 3
           done
+
+          if [ "$READY" -eq 1 ]; then
+            PUBLIC_JS="$(curl -fsSL \
+              -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              -H 'Pragma: no-cache' \
+              "$PUBLIC_URL/static/mapping-row-identity.js?v=20260920-direct-flow-v4&deploy=$SHORT_SHA")"
+            if ! printf '%s' "$PUBLIC_JS" | grep -q 'continueExtractedDocumentToMapping'; then
+              echo "ERROR: public HTML is current but mapping-row-identity.js is not the direct-flow build"
+              exit 1
+            fi
+          fi
 
           if [ "$READY" -ne 1 ]; then
             echo "ERROR: external public URL is not serving $TARGET_COMMIT"
