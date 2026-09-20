@@ -818,6 +818,7 @@
 
         const title = document.querySelector("#document-import-view .page-toolbar h1");
         if (title) title.textContent = "Review Purchase";
+        setHidden(document.getElementById("document-refresh"), true);
         setHidden(document.getElementById("document-upload-another"), true);
         setHidden(document.getElementById("continue-document-mapping"), true);
         setHidden(document.getElementById("save-purchase"), false);
