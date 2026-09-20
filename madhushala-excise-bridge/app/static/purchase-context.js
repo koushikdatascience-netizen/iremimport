@@ -8,6 +8,7 @@
     ];
 
     const pageParams = new URLSearchParams(window.location.search);
+    const purchaseReviewMode = pageParams.get("view") === "purchase";
     const sessionId = pageParams.get("sessionId") || "";
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, "?"));
     const sessionToken = hashParams.get("session") || sessionStorage.getItem("exciseSession") || "";
@@ -20,6 +21,7 @@
     let latestJobId = pageParams.get("jobId") || "";
     let latestSupplierName = "";
     let validatedFingerprint = "";
+    let purchasePreviewTimer = null;
 
     function clean(value) {
         return String(value ?? "").trim();
@@ -433,7 +435,15 @@
             elements.validate.disabled = state === "pending";
             elements.validate.textContent = state === "ok" ? "Validated ✓" : (state === "pending" ? "Validating…" : "Validate Purchase");
         }
-        if (elements.save) elements.save.disabled = state !== "ok";
+        if (elements.save) {
+            // On the final Purchase Bill there is no visible Validate button.
+            // Keep Save clickable (except while Calculate is running); the existing
+            // save wrapper performs a fresh Calculate/revalidation immediately
+            // before the real Purchase Save.
+            elements.save.disabled = purchaseReviewMode && source === "review"
+                ? state === "pending"
+                : state !== "ok";
+        }
     }
 
     function invalidatePurchaseValidation(message = "Validate against Madhushala before saving.") {
@@ -451,6 +461,17 @@
             const save = document.getElementById(saveId);
             if (!save) return;
             const suffix = source === "mapping" ? "mapping" : "review";
+            if (purchaseReviewMode && source === "review") {
+                // Final Purchase Bill validates automatically in the background
+                // and again at Save time. Do not render a separate Validate button.
+                const existingValidate = document.getElementById(`validate-purchase-${suffix}`);
+                existingValidate?.remove();
+                const existingStatus = document.getElementById(`purchase-validation-status-${suffix}`);
+                existingStatus?.remove();
+                save.disabled = false;
+                return;
+            }
+
             let validate = document.getElementById(`validate-purchase-${suffix}`);
             if (!validate) {
                 validate = document.createElement("button");
@@ -575,6 +596,14 @@
         }
     }
 
+    function schedulePurchasePreviewRefresh() {
+        if (!purchaseReviewMode) return;
+        if (purchasePreviewTimer) window.clearTimeout(purchasePreviewTimer);
+        purchasePreviewTimer = window.setTimeout(() => {
+            void validatePurchase("review", {showSuccessToast: false});
+        }, 450);
+    }
+
     function installHooks() {
         installHeaderHooks();
 
@@ -667,11 +696,15 @@
         if (isMappingView) installMappingSearchVisibility();
 
         const form = document.getElementById("purchase-form");
-        form?.addEventListener("input", () => invalidatePurchaseValidation());
+        form?.addEventListener("input", () => {
+            invalidatePurchaseValidation();
+            schedulePurchasePreviewRefresh();
+        });
         form?.addEventListener("change", (event) => {
             if (fieldConfig.some((field) => field.persist && field.id === event.target?.id)) saveProfile();
             if (isMappingView && typeof window.persistPurchaseHeader === "function") window.persistPurchaseHeader();
             invalidatePurchaseValidation();
+            schedulePurchasePreviewRefresh();
         });
 
         void fetchPurchaseContext("").then(() => {
@@ -688,6 +721,7 @@
         refresh: fetchPurchaseContext,
         validate: validatePurchase,
         invalidateValidation: invalidatePurchaseValidation,
+        getContext: () => latestContext,
     };
 
     if (document.readyState === "loading") {
