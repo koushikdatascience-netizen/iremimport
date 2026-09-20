@@ -544,6 +544,19 @@ jobs:
           sudo -n nginx -T 2>/dev/null \
             | grep -n -B 8 -A 90 'server_name.*integrations\.madhushalasoftware\.com' \
             || true
+
+          echo "NGINX_CACHE_DIRECTIVES:"
+          sudo -n nginx -T 2>/dev/null \
+            | grep -nE 'proxy_cache|fastcgi_cache|cache_path|proxy_store|expires|Cache-Control' \
+            || true
+
+          echo "LOOPBACK_RESPONSE_HEADERS:"
+          curl -kfsSI --resolve "$HOSTNAME_FQDN:443:127.0.0.1" \
+            "https://$HOSTNAME_FQDN/excise-import/document-import?diag=headers-loopback" \
+            || true
+
+          echo "DIRECT_GATEWAY_RESPONSE_HEADERS:"
+          curl -fsSI "http://127.0.0.1:8091/document-import?diag=headers-gateway" || true
           REMOTE_DIAG
 
       - name: Verify externally served frontend
