@@ -60,12 +60,13 @@ async def lifespan(_app: FastAPI):
 
 PUBLIC_PREFIX = "/excise-import"
 INDEX_HTML_PATH = Path("app/static/index.html")
+STATIC_ASSET_VERSION = "20260920-direct-flow-v3"
 DOCUMENT_IMPORT_SCRIPTS = (
-    '<script src="./static/qr-browser-fallback.js"></script>',
-    '<script src="./static/purchase-context.js"></script>',
+    f'<script src="./static/qr-browser-fallback.js?v={STATIC_ASSET_VERSION}"></script>',
+    f'<script src="./static/purchase-context.js?v={STATIC_ASSET_VERSION}"></script>',
 )
 PAGE_END_SCRIPTS = (
-    '<script src="./static/mapping-row-identity.js"></script>',
+    f'<script src="./static/mapping-row-identity.js?v={STATIC_ASSET_VERSION}"></script>',
 )
 
 

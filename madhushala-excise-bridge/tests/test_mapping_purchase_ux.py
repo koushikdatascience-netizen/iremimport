@@ -94,3 +94,21 @@ def test_purchase_review_renders_server_validated_purchase_payload():
 
     assert 'pageParams.get("view") === "purchase" ? purchase : payload' in context_script
     assert 'new CustomEvent("purchase-preview-ready", {detail: payload})' in context_script
+
+
+def test_successful_import_never_renders_legacy_preview_before_mapping():
+    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+
+    assert "suppressSuccessfulReview" in script
+    assert "setDocumentImportStateWithoutSuccessfulPreview" in script
+    assert "renderDocumentReviewWithDirectMapping" in script
+    assert "primeSuccessfulImport(payload)" in script
+    assert "Successful extraction must never render the old source/extracted-products" in script
+
+
+def test_frontend_static_assets_are_cache_busted():
+    main = Path("app/main.py").read_text(encoding="utf-8")
+
+    assert 'STATIC_ASSET_VERSION = "20260920-direct-flow-v3"' in main
+    assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
+    assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
