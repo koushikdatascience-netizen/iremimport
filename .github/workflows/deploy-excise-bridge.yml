@@ -531,6 +531,10 @@ jobs:
 
           echo "LISTENERS_443:"
           sudo -n ss -ltnp | grep ':443' || true
+          echo "LISTENERS_8091:"
+          sudo -n ss -ltnp | grep ':8091' || true
+          echo "DOCKER_8091:"
+          docker ps --no-trunc --format '{{.ID}} {{.Image}} {{.Names}} {{.Ports}}' | grep '8091' || true
 
           show_scripts() {
             label="$1"
@@ -545,6 +549,9 @@ jobs:
               echo "$label => OLD_OR_OTHER"
             fi
           }
+
+          show_scripts "DIRECT_GATEWAY_HTTP" \
+            curl -fsSL "http://127.0.0.1:8091/document-import?diag=direct-gateway"
 
           show_scripts "LOOPBACK_HTTPS" \
             curl -kfsSL --resolve "$HOSTNAME_FQDN:443:127.0.0.1" \
