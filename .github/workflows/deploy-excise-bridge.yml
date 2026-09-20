@@ -313,7 +313,10 @@ jobs:
               --network madhushala-automation-platform_default \
               -e DATABASE_URL="$DATABASE_URL" \
               -e SQLITE_PATH=/app/data/bridge.db \
-              -v "$LIVE_VOLUME:/app/data:ro" \
+              # The migration code opens SQLite itself in read-only mode, but
+              # SQLite may still need to create/read WAL/SHM sidecars in /app/data.
+              # The old API is quiesced and a volume backup already exists.
+              -v "$LIVE_VOLUME:/app/data:rw" \
               madhushala-automation-platform-web:latest \
               python -m app.migrate_sqlite_to_postgres
 
