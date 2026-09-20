@@ -156,7 +156,7 @@
     }
 
     function ensurePurchaseContextOnMapping() {
-        if (!mappingMode) return;
+        if (!mappingMode || !sanitizeJobId(currentDocumentJobId || activeJobId || "")) return;
         if (window.__purchaseContext?.initialize) {
             window.__purchaseContext.initialize();
             return;
