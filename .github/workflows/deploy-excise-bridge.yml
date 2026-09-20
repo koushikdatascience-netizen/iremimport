@@ -148,7 +148,8 @@ jobs:
             echo "== Back up PostgreSQL =="
             docker exec madhushala_postgres \
               pg_dump -U madhushala_bridge -d madhushala_bridge \
-              | gzip > "$BACKUPS/madhushala-postgres-$STAMP-$SHORT_SHA.sql.gz"
+              | gzip \
+              | sudo -n tee "$BACKUPS/madhushala-postgres-$STAMP-$SHORT_SHA.sql.gz" >/dev/null
           fi
 
           echo "== Create immutable release =="
