@@ -2850,9 +2850,9 @@ body.document-viewer-open {
 <body>
     <main id="launch-view" class="launch-card">
         <div class="portal-settings">
-            <label>Excise Login URL<input id="excise-login-url" type="url" autocomplete="url"></label>
-            <label>User ID<input id="excise-user" autocomplete="username"></label>
-            <label>Password<input id="excise-password" type="password" autocomplete="current-password"></label>
+            <label>Company<input id="excise-company-name" readonly value="Loading..."></label>
+            <label>State<input id="excise-state" readonly value="Loading..."></label>
+            <label>Excise Portal<input id="excise-login-url" type="url" readonly autocomplete="url"></label>
         </div>
         <div class="launch-actions">
             <button id="open-portal" type="button">Open Excise Portal</button>
@@ -3160,29 +3160,16 @@ let portalMappingWatchTimer = null;
 let portalMappingNavigating = false;
 const DEFAULT_EXCISE_LOGIN_URL = "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx";
 
-function portalSettingsFromForm() {
-    return {
-        exciseLoginUrl: document.getElementById("excise-login-url")?.value.trim() || DEFAULT_EXCISE_LOGIN_URL,
-        exciseUser: document.getElementById("excise-user")?.value.trim() || "",
-        excisePassword: document.getElementById("excise-password")?.value || "",
-    };
-}
+let currentPortalBootstrap = null;
 
-function applyPortalSettings(settings = {}) {
+function applyPortalBootstrap(portal = {}) {
+    currentPortalBootstrap = portal;
+    const company = document.getElementById("excise-company-name");
+    const state = document.getElementById("excise-state");
     const url = document.getElementById("excise-login-url");
-    const user = document.getElementById("excise-user");
-    const password = document.getElementById("excise-password");
-    if (url) url.value = settings.exciseLoginUrl || DEFAULT_EXCISE_LOGIN_URL;
-    if (user) user.value = settings.exciseUser || "";
-    if (password) password.value = settings.excisePassword || "";
-}
-
-function missingPortalFields(settings = portalSettingsFromForm()) {
-    const missing = [];
-    if (!settings.exciseLoginUrl) missing.push("login URL");
-    if (!settings.exciseUser) missing.push("user ID");
-    if (!settings.excisePassword) missing.push("password");
-    return missing;
+    if (company) company.value = portal.companyName || portal.companyCode || "";
+    if (state) state.value = portal.state || "";
+    if (url) url.value = portal.exciseLoginUrl || "";
 }
 
 
@@ -3598,9 +3585,12 @@ async function initLaunch() {
 
     try {
         const session = await api("/session/status");
+        const portal = await api("/portal/bootstrap");
+        applyPortalBootstrap(portal);
+
         const sessionInfo = document.getElementById("session-info");
         if (sessionInfo) {
-            sessionInfo.textContent = `Shop ${session.shopCode} | Session expires ${new Date(session.expiresAt).toLocaleString()}`;
+            sessionInfo.textContent = `Shop ${session.shopCode} | ${portal.state} | Session expires ${new Date(session.expiresAt).toLocaleString()}`;
         }
 
         await new Promise((resolve) => setTimeout(resolve, 350));
@@ -3611,14 +3601,7 @@ async function initLaunch() {
             sessionToken,
             mappingUrl,
         });
-        const settings = await extensionRequest("GET_SETTINGS");
-        applyPortalSettings(settings);
-        const missing = missingPortalFields(settings);
-        if (missing.length) {
-            setStatus(`Fill ${missing.join(", ")} once, then open the portal.`, true);
-        } else {
-            setStatus("Ready. Open Excise Portal and enter CAPTCHA manually.");
-        }
+        setStatus(`Ready for ${portal.state} Excise. Credentials will be loaded automatically from Company Master.`);
         startPortalMappingWatch();
     } catch (error) {
         setStatus(error.message || "CRM session could not be opened.", true);
@@ -3626,20 +3609,12 @@ async function initLaunch() {
 }
 
 async function openPortal() {
-    const portalSettings = portalSettingsFromForm();
-    const missing = missingPortalFields(portalSettings);
-    if (missing.length) {
-        setStatus(`Fill ${missing.join(", ")} before opening the portal.`, true);
-        return;
-    }
     try {
-        await extensionRequest("SAVE_SETTINGS", portalSettings);
+        setStatus("Loading company Excise settings...");
+        const portal = await api("/portal/bootstrap");
+        applyPortalBootstrap(portal);
         const result = await extensionRequest("OPEN_PORTAL", {}, 30000);
-        if (result.status === "needs_credentials") {
-            setStatus("Fill and save Excise portal details, then click Open Excise Portal again.", true);
-            return;
-        }
-        setStatus("WB Excise opened with saved details. Enter CAPTCHA, login, then prepare indent. Mapping will open here automatically after capture.");
+        setStatus(result.message || `${portal.state} Excise portal opened.`);
         startPortalMappingWatch();
     } catch (error) {
         setStatus(error.message || "Could not open Excise portal.", true);
