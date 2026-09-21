@@ -262,26 +262,16 @@ async function openPortal() {
 }
 
 async function focusMappingWorkspace(settings) {
-  const mappingUrl = String(settings?.mappingUrl || "").trim();
-  if (!mappingUrl) return {opened: false, reason: "missing_mapping_url"};
-
-  const tabs = await chrome.tabs.query({});
-  const bridgeBase = normalizeBaseUrl(settings.bridgeUrl);
-  const existing = tabs.find((tab) => {
-    const url = String(tab.url || "");
-    return url.startsWith(bridgeBase) && !url.includes("excise.wb.gov.in");
-  });
-
-  if (existing?.id) {
-    await chrome.tabs.update(existing.id, {url: mappingUrl, active: true});
-    if (existing.windowId != null) {
-      await chrome.windows.update(existing.windowId, {focused: true});
-    }
-    return {opened: true, tabId: existing.id, reused: true};
-  }
-
-  const tab = await chrome.tabs.create({url: mappingUrl, active: true});
-  return {opened: true, tabId: tab?.id, reused: false};
+  // Do not open or replace tabs here. The original Excise Import bridge page
+  // continuously watches session status and switches its own embedded view to
+  // Mapping when capture returns mappingRequired. Keeping navigation here would
+  // create an unwanted second Mapping tab.
+  return {
+    opened: false,
+    inline: true,
+    reason: "bridge_page_handles_mapping",
+    mappingUrl: String(settings?.mappingUrl || "").trim(),
+  };
 }
 
 async function handleAutoCapture(payload = {}) {
