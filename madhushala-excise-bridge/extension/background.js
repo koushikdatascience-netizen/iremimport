@@ -90,10 +90,13 @@ async function apiError(response) {
   } catch {
     body = {};
   }
+  const detail = typeof body.detail === "object" && body.detail
+    ? (body.detail.message || body.detail.error || JSON.stringify(body.detail))
+    : body.detail;
   if (response.status === 401 || response.status === 403) {
-    return new Error(body.detail || "CRM session expired. Open import from CRM again.");
+    return new Error(detail || "CRM session expired. Open import from CRM again.");
   }
-  return new Error(body.detail || body.error || `Server returned HTTP ${response.status}`);
+  return new Error(detail || body.error || `Server returned HTTP ${response.status}`);
 }
 
 async function postCapture(items, pageUrl, capturedAt) {
