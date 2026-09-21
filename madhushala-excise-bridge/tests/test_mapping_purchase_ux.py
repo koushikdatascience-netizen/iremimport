@@ -224,21 +224,24 @@ def test_mapping_management_uses_official_excise_master_and_table_ui():
     assert 'submit.textContent = "Save"' in script
 
 
-def test_state_aware_excise_login_bootstrap_supports_wb_and_mp():
+def test_state_aware_excise_login_bootstrap_is_registry_driven():
     main = Path("app/main.py").read_text(encoding="utf-8")
     client = Path("app/integrations/madhushala/client.py").read_text(encoding="utf-8")
     runtime = Path("app/static/index.html").read_text(encoding="utf-8")
     extension = Path("extension/background.js").read_text(encoding="utf-8")
+    registry = Path("app/excise_portals.json").read_text(encoding="utf-8")
 
     assert 'f"/api/company-mast/{safe_company_code}"' in client
     assert 'params={"shopCode": self.shop_code}' in client
-    assert '"WEST BENGAL": "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx"' in main
-    assert '"MADHYA PRADESH": "https://eaabkari.mp.gov.in/"' in main
+    assert 'resolve_excise_portal(raw_state)' in main
     assert '@app.get("/portal/bootstrap")' in main
-    assert 'company.get("exciseUserId")' in main
-    assert 'company.get("excisePassword")' in main
+    assert '"loginProfile": portal["loginProfile"]' in main
     assert 'const portal = await api("/portal/bootstrap");' in runtime
     assert 'extensionRequest("OPEN_PORTAL", {}, 30000)' in runtime
     assert 'loadPortalBootstrap(settings)' in extension
-    assert '"eaabkari.mp.gov.in"' in extension
-    assert 'captchaRequired: Boolean(captcha)' in extension
+    assert "ALLOWED_EXCISE_HOSTS" not in extension
+    assert "allowedOrigins.includes(location.origin)" in extension
+    assert "profile.usernameSelectors" in extension
+    assert "profile.passwordSelectors" in extension
+    assert '"WEST BENGAL"' in registry
+    assert '"MADHYA PRADESH"' in registry
