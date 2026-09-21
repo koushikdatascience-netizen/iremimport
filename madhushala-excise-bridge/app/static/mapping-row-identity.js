@@ -241,14 +241,21 @@
         ).length;
         const mapped = Math.max(0, rows.length - left);
         const visible = mappingManagementMode ? filteredManagementRows().length : rows.length;
-        setText(
-            document.getElementById("mapping-summary"),
-            mappingManagementMode
-                ? `All: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left} | Showing: ${visible}`
-                : (isDocumentWorkspace()
-                    ? `Extracted: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left}`
-                    : `Selected: ${selectedMappings.size} | Left: ${left}`),
-        );
+        const mappingSummary = document.getElementById("mapping-summary");
+        if (mappingSummary) {
+            if (isDocumentWorkspace() && !mappingManagementMode) {
+                mappingSummary.hidden = true;
+                mappingSummary.textContent = "";
+            } else {
+                mappingSummary.hidden = false;
+                setText(
+                    mappingSummary,
+                    mappingManagementMode
+                        ? `All: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left} | Showing: ${visible}`
+                        : `Selected: ${selectedMappings.size} | Left: ${left}`,
+                );
+            }
+        }
         const submit = document.getElementById("submit-mappings");
         if (submit) submit.disabled = selectedMappings.size === 0;
         const next = document.getElementById("mapping-next-purchase");
@@ -713,12 +720,6 @@
         if (!mappingMode || !sanitizeJobId(currentDocumentJobId)) return;
         const footer = document.querySelector("#mapping-view .mapping-footer");
         if (!footer) return;
-
-        const legacySave = document.getElementById("save-purchase-from-mapping");
-        if (legacySave) {
-            legacySave.hidden = true;
-            legacySave.style.display = "none";
-        }
 
         let next = document.getElementById("mapping-next-purchase");
         if (!next) {
