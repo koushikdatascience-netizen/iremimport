@@ -520,18 +520,27 @@ class MappingService:
         shop_code = session["shop_code"]
         client = self._client_for_session(session)
         company_code = str(session.get("company_code") or settings.DEFAULT_COMPANY_CODE).strip()
-        madhushala_items = await reference_data_service.catalogue(session)
-        match_index = MatchIndex(madhushala_items)
-        item_by_code = {
-            str(item.get("itemCode") or "").strip(): item
-            for item in madhushala_items
-            if isinstance(item, dict) and str(item.get("itemCode") or "").strip()
-        }
-        valid_item_codes = {
-            str(item.get("itemCode") or "").strip()
-            for item in madhushala_items
-            if str(item.get("itemCode") or "").strip()
-        }
+        madhushala_items: list[dict[str, Any]] = []
+        match_index = MatchIndex([])
+        item_by_code: dict[str, dict[str, Any]] = {}
+        valid_item_codes: set[str] = set()
+
+        # Document Mapping and Mapping Management need the complete catalogue in
+        # the initial response. Portal Mapping does not: returning its left-side
+        # Excise rows must never wait for the full Item Master catalogue.
+        if job_id or include_mapped:
+            madhushala_items = await reference_data_service.catalogue(session)
+            match_index = MatchIndex(madhushala_items)
+            item_by_code = {
+                str(item.get("itemCode") or "").strip(): item
+                for item in madhushala_items
+                if isinstance(item, dict) and str(item.get("itemCode") or "").strip()
+            }
+            valid_item_codes = {
+                str(item.get("itemCode") or "").strip()
+                for item in madhushala_items
+                if str(item.get("itemCode") or "").strip()
+            }
 
         if job_id:
             rows: list[dict[str, Any]] = []
@@ -866,7 +875,7 @@ class MappingService:
                         "exciseItemCode": unmapped_item.get("exciseItemCode"),
                         "itemName": unmapped_item.get("itemName"),
                         "capturedItem": captured,
-                        "suggestions": suggest_matches(context, madhushala_items, index=match_index),
+                        "suggestions": [],
                         "selectedItemCode": mapped["madhushala_item_code"] if mapped else None,
                     }
                 )
@@ -876,8 +885,9 @@ class MappingService:
             "jobId": job_id,
             "documentMapping": False,
             "unmappedItems": rows,
-            "madhushalaItems": madhushala_items,
-            "dropdownCount": len(madhushala_items),
+            "madhushalaItems": [],
+            "dropdownCount": 0,
+            "itemMasterDeferred": True,
             "latestOnly": latest_only,
         }
 

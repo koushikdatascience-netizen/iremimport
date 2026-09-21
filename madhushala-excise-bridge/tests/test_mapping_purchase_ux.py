@@ -151,7 +151,7 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260921-fast-mapping-workspace-v18"' in main
+    assert 'STATIC_ASSET_VERSION = "20260921-deferred-item-master-v19"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
 
@@ -428,3 +428,27 @@ def test_mapping_workspace_has_hard_timeout_and_targeted_latest_status_probe():
     portal_section = portal_section.split("rows: list[dict[str, Any]] = []", 1)[0]
     assert "excise_master = await client.get_excise_items()" not in portal_section
     assert "mappingPendingSync" in portal_section
+
+
+def test_portal_mapping_defers_item_master_until_after_left_rows_render():
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+    service = Path("app/services/mapping_service.py").read_text(encoding="utf-8")
+    main = Path("app/main.py").read_text(encoding="utf-8")
+
+    workspace_start = service.split("async def workspace_for_session(", 1)[1]
+    portal_section = workspace_start.split(
+        "# For portal import this is intentionally AFTER ExciseItemMasterSave.", 1
+    )[1].split("async def prepare_document_job", 1)[0]
+
+    assert "if job_id or include_mapped:" in workspace_start
+    assert '"madhushalaItems": []' in portal_section
+    assert '"itemMasterDeferred": True' in portal_section
+    assert '"suggestions": []' in portal_section
+
+    assert '@app.get("/mapping/item-master")' in main
+    assert "await reference_data_service.catalogue(session)" in main
+
+    assert "async function loadDeferredMappingItemMaster()" in runtime
+    assert 'await api("/mapping/item-master"' in runtime
+    assert "You can already review the Excise items on the left." in runtime
+    assert "void loadDeferredMappingItemMaster();" in runtime
