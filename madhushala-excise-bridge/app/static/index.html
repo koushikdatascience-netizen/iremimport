@@ -3470,13 +3470,36 @@ async function api(path, options = {}) {
     return data;
 }
 
-function extensionRequest(type, payload = {}, timeoutMs = 15000) {
-    return new Promise((resolve, reject) => {
-        if (!extensionConnected) {
-            reject(new Error("Madhushala Excise Chrome extension is not installed or not reloaded."));
-            return;
-        }
+function discoverExtension(timeoutMs = 2500) {
+    if (extensionConnected) return Promise.resolve(true);
 
+    return new Promise((resolve) => {
+        const startedAt = Date.now();
+        const timer = window.setInterval(() => {
+            if (extensionConnected) {
+                window.clearInterval(timer);
+                resolve(true);
+                return;
+            }
+            window.postMessage({source: "madhushala-web", type: "DISCOVER"}, window.location.origin);
+            if (Date.now() - startedAt >= timeoutMs) {
+                window.clearInterval(timer);
+                resolve(extensionConnected);
+            }
+        }, 150);
+        window.postMessage({source: "madhushala-web", type: "DISCOVER"}, window.location.origin);
+    });
+}
+
+async function extensionRequest(type, payload = {}, timeoutMs = 15000) {
+    if (!extensionConnected) {
+        const found = await discoverExtension();
+        if (!found) {
+            throw new Error("Madhushala Excise Chrome extension is not available on this page. Reload the extension and refresh Excise Import.");
+        }
+    }
+
+    return new Promise((resolve, reject) => {
         const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
         const timeout = setTimeout(() => {
             extensionRequests.delete(requestId);
