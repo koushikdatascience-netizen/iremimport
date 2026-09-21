@@ -173,8 +173,7 @@ def test_portal_mapping_is_mapping_only_without_purchase_controls():
     assert 'if (!mappingMode || !sanitizeJobId(currentDocumentJobId || activeJobId || "")) return;' in mapping_script
     assert 'if (!mappingMode || !sanitizeJobId(currentDocumentJobId)) return;' in mapping_script
     assert 'next.textContent = "Next: Purchase"' in mapping_script
-    assert 'const isDocumentMappingView = isMappingView && Boolean(clean(pageParams.get("jobId")));' in context_script
-    assert 'if (!isDocumentImport && !isDocumentMappingView) return;' in context_script
+    assert 'if (!isDocumentImport || isMappingView) return;' in context_script
 
 
 def test_extension_focuses_mapping_workspace_after_portal_capture():
@@ -257,7 +256,7 @@ def test_mapping_hands_calculated_purchase_to_real_madhushala_ui():
     assert '"/app/purchase#prefill=" + encoded' in script
     assert "window.top.location.href = url" in script
     assert "async function buildPurchaseHandoff(jobId)" in script
-    assert "/purchase/calculate-preview" in script
+    assert "/purchase/handoff" in script
     assert "const purchase = preview?.purchasePayload;" in script
     assert "openPurchaseInMadhushala(purchase);" in script
     assert 'next.textContent = "Next: Purchase"' in script
