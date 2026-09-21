@@ -657,90 +657,36 @@ class MappingService:
                 "latestOnly": latest_only,
             }
 
-        # For portal import this is intentionally AFTER ExciseItemMasterSave. Madhushala
-        # is the source of truth for which submitted rows still require mapping.
-        unmapped = await client.get_unmapped_items()
-
+        # Management mode uses Madhushala's authoritative Excise mapping master.
+        # Normal portal mapping intentionally keeps using the upstream unmapped endpoint.
         if include_mapped:
-            # Mapping management is intentionally broader than the normal portal
-            # handoff. The upstream API currently exposes the live unmapped set,
-            # while the bridge persists every Excise item it has seen plus every
-            # mapping saved through this integration. Union those sources so the
-            # user can audit and re-map known mapped and unmapped items without
-            # changing the regular latest-capture workflow.
-            remote_by_code = {
-                str(item.get("exciseItemCode") or "").strip(): item
-                for item in (unmapped or [])
-                if isinstance(item, dict) and str(item.get("exciseItemCode") or "").strip()
-            }
-            imported_by_code: dict[str, Any] = {}
-            mapped_by_code: dict[str, str] = {}
-            with conn() as db:
-                imported_rows = db.execute(
-                    """
-                    SELECT excise_item_code, item_name, captured_item_json, updated_at
-                    FROM imports
-                    WHERE shop_code=?
-                      AND excise_item_code IS NOT NULL
-                      AND TRIM(excise_item_code) <> ''
-                    ORDER BY updated_at DESC
-                    """,
-                    (shop_code,),
-                ).fetchall()
-                for imported in imported_rows:
-                    code = str(imported["excise_item_code"] or "").strip()
-                    if code and code not in imported_by_code:
-                        imported_by_code[code] = imported
-
-                mapping_rows = db.execute(
-                    """
-                    SELECT excise_item_code, madhushala_item_code
-                    FROM mappings_v2
-                    WHERE shop_code=? AND company_code=?
-                    """,
-                    (shop_code, company_code),
-                ).fetchall()
-                mapped_by_code = {
-                    str(row["excise_item_code"] or "").strip(): str(row["madhushala_item_code"] or "").strip()
-                    for row in mapping_rows
-                    if str(row["excise_item_code"] or "").strip()
-                }
-
-            def management_sort_key(code: str) -> tuple[int, Any]:
-                return (0, int(code)) if code.isdigit() else (1, code.casefold())
-
+            excise_items = await client.get_excise_items()
             rows: list[dict[str, Any]] = []
-            all_codes = set(remote_by_code) | set(imported_by_code) | set(mapped_by_code)
-            for excise_code in sorted(all_codes, key=management_sort_key):
-                remote = remote_by_code.get(excise_code) or {}
-                imported = imported_by_code.get(excise_code)
-                captured = None
-                if imported:
-                    try:
-                        loaded = json.loads(imported["captured_item_json"] or "{}")
-                        captured = loaded if isinstance(loaded, dict) else None
-                    except Exception:
-                        captured = None
-
-                item_name = str(remote.get("itemName") or "").strip()
-                if not item_name and imported:
-                    item_name = str(imported["item_name"] or "").strip()
-                if not item_name:
-                    item_name = f"Excise Item {excise_code}"
-
-                context = dict(remote)
-                if captured:
-                    context.update(captured)
-                context.setdefault("exciseItemCode", excise_code)
-                context.setdefault("itemName", item_name)
-
-                mapped_code = mapped_by_code.get(excise_code, "")
+            for remote in excise_items or []:
+                excise_code = str(remote.get("exciseItemCode") or "").strip()
+                if not excise_code:
+                    continue
+                item_name = str(remote.get("exciseItemName") or remote.get("itemName") or "").strip()
+                mapped_code = str(remote.get("mappedItemCode") or "").strip()
+                mapped_name = str(remote.get("mappedItemName") or "").strip()
                 mapped_item = item_by_code.get(mapped_code) if mapped_code else None
+                if mapped_code and mapped_item is None:
+                    # The authoritative API can return a mapping outside the currently
+                    # loaded company catalogue. Keep it visible rather than pretending
+                    # the Excise item is unmapped.
+                    mapped_item = {
+                        "itemCode": mapped_code,
+                        "itemName": mapped_name or "Mapped item",
+                    }
+                context = {
+                    "exciseItemCode": excise_code,
+                    "itemName": item_name or f"Excise Item {excise_code}",
+                }
                 rows.append(
                     {
                         "exciseItemCode": excise_code,
-                        "itemName": item_name,
-                        "capturedItem": captured,
+                        "itemName": context["itemName"],
+                        "capturedItem": None,
                         "suggestions": [] if mapped_code else suggest_matches(context, madhushala_items, index=match_index),
                         "selectedItemCode": mapped_code or None,
                         "selectedItem": mapped_item,
@@ -764,6 +710,10 @@ class MappingService:
                     "unmapped": sum(1 for row in rows if not row.get("selectedItemCode")),
                 },
             }
+
+        # For portal import this is intentionally AFTER ExciseItemMasterSave. Madhushala
+        # is the source of truth for which submitted rows still require mapping.
+        unmapped = await client.get_unmapped_items()
 
         latest_codes: set[str] = set()
 
