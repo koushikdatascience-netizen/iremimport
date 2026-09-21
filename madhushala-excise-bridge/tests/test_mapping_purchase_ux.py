@@ -205,7 +205,7 @@ def test_mapping_management_entrypoint_and_filters_are_available():
     assert 'Change / Re-map' in enhancer
 
     assert 'include_mapped: bool = False' in service
-    assert 'set(remote_by_code) | set(imported_by_code) | set(mapped_by_code)' in service
+    assert 'excise_items = await client.get_excise_items()' in service
     assert '"mappingStatus": "MAPPED" if mapped_code else "UNMAPPED"' in service
     assert 'includeMapped: bool = False' in main
 
