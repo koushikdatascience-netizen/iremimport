@@ -3166,9 +3166,14 @@ function applyPortalBootstrap(portal = {}) {
     const company = document.getElementById("excise-company-name");
     const state = document.getElementById("excise-state");
     const url = document.getElementById("excise-login-url");
-    if (company) company.value = portal.companyName || portal.companyCode || "";
-    if (state) state.value = portal.state || "";
-    if (url) url.value = portal.exciseLoginUrl || "";
+    const openButton = document.getElementById("open-portal");
+    if (company) company.value = portal.companyName || portal.companyCode || "Unknown company";
+    if (state) state.value = portal.state || "Unknown state";
+    if (url) url.value = portal.exciseLoginUrl || "Not configured";
+    if (openButton) {
+        openButton.disabled = portal.ready === false;
+        openButton.title = portal.error?.message || "";
+    }
 }
 
 
@@ -3600,8 +3605,12 @@ async function initLaunch() {
             sessionToken,
             mappingUrl,
         });
-        setStatus(`Ready for ${portal.state} Excise. Credentials will be loaded automatically from Company Master.`);
-        startPortalMappingWatch();
+        if (portal.ready === false) {
+            setStatus(portal.error?.message || "Excise portal setup is incomplete for this company.", true);
+        } else {
+            setStatus(`Ready for ${portal.state} Excise. Credentials will be loaded automatically from Company Master.`);
+            startPortalMappingWatch();
+        }
     } catch (error) {
         setStatus(error.message || "CRM session could not be opened.", true);
     }
@@ -3612,6 +3621,9 @@ async function openPortal() {
         setStatus("Loading company Excise settings...");
         const portal = await api("/portal/bootstrap");
         applyPortalBootstrap(portal);
+        if (portal.ready === false) {
+            throw new Error(portal.error?.message || "Excise portal setup is incomplete for this company.");
+        }
         const result = await extensionRequest("OPEN_PORTAL", {}, 30000);
         setStatus(result.message || `${portal.state} Excise portal opened.`);
         startPortalMappingWatch();
