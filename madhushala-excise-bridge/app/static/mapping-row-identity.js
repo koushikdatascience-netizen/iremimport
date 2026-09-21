@@ -644,30 +644,8 @@
     }
 
     async function buildPurchaseHandoff(jobId) {
-        const hint = loadPurchaseSourceHint(jobId);
-        try {
-            await window.__purchaseContext?.refresh?.(hint.supplierName || "");
-        } catch {
-            // The backend resolver below remains authoritative for required fields.
-        }
-
-        try {
-            applyPurchaseHeader(loadPurchaseHeader(jobId));
-        } catch {
-            // Continue with backend-resolved document/master defaults.
-        }
-
-        persistPurchaseHeader();
-        const header = typeof collectPurchaseHeader === "function"
-            ? collectPurchaseHeader()
-            : loadPurchaseHeader(jobId);
-
         return api(
-            `/api/v1/document-import/jobs/${encodeURIComponent(jobId)}/purchase/calculate-preview`,
-            {
-                method: "POST",
-                body: JSON.stringify({header}),
-            },
+            `/api/v1/document-import/jobs/${encodeURIComponent(jobId)}/purchase/handoff`,
         );
     }
 
@@ -1712,18 +1690,10 @@
     initMapping = function initMappingWithPurchaseDetails() {
         // Do not mount Purchase fields on Mapping in the simplified flow.
         // The function is retained above so the old UI can be restored later.
-        ensurePurchaseContextOnMapping();
         ensureCompactMappingStyles();
         setupMappingNextButton();
         setupMappingManagementControls();
         const result = originalInitMapping();
-        const jobId = sanitizeJobId(currentDocumentJobId || activeJobId || "");
-        if (jobId) {
-            const hint = loadPurchaseSourceHint(jobId);
-            window.setTimeout(() => {
-                void window.__purchaseContext?.refresh?.(hint.supplierName || "");
-            }, 0);
-        }
         const legacySave = document.getElementById("save-purchase-from-mapping");
         if (legacySave) {
             legacySave.hidden = true;
