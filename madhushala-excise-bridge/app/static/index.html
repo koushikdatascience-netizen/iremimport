@@ -3132,6 +3132,7 @@ const activeJobId = sanitizeJobId(pageParams.get("jobId")) || "";
 const basePath = window.location.pathname.startsWith("/excise-import/") ? "/excise-import" : "";
 
 document.body.classList.toggle("mapping-mode", mappingMode);
+document.body.classList.toggle("mapping-management-mode", mappingManagementMode);
 
 if (sessionToken) {
     sessionStorage.setItem("exciseSession", sessionToken);
@@ -3925,6 +3926,7 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
 }
 
 function startMappingAutoRefresh() {
+    if (mappingManagementMode) return;
     if (mappingRefreshTimer) return;
     mappingRefreshTimer = window.setInterval(async () => {
         if (mappingRefreshInFlight || document.getElementById("mapping-view")?.hidden) return;
