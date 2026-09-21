@@ -176,13 +176,20 @@ def test_portal_mapping_is_mapping_only_without_purchase_controls():
     assert 'if (!isDocumentImport || isMappingView) return;' in context_script
 
 
-def test_extension_focuses_mapping_workspace_after_portal_capture():
+def test_extension_keeps_mapping_in_existing_bridge_page_after_portal_capture():
     background = Path("extension/background.js").read_text(encoding="utf-8")
     manifest = Path("extension/manifest.json").read_text(encoding="utf-8")
 
     assert "async function focusMappingWorkspace(settings)" in background
+    assert "bridge_page_handles_mapping" in background
     assert "result?.mappingStatus?.mappingRequired" in background
     assert "result.mappingNavigation = await focusMappingWorkspace(settings)" in background
+    focus = background.split("async function focusMappingWorkspace(settings)", 1)[1].split(
+        "async function handleAutoCapture", 1
+    )[0]
+    assert "chrome.tabs.create" not in focus
+    assert "chrome.tabs.update" not in focus
+    assert '"version": "1.4.4"' in manifest
     assert "https://integrations.madhushalasoftware.com/*" in manifest
 
 
@@ -345,7 +352,7 @@ def test_extension_bridge_supports_embedded_excise_import_and_handshake_retry():
     manifest = Path("extension/manifest.json").read_text(encoding="utf-8")
     runtime = Path("app/static/index.html").read_text(encoding="utf-8")
 
-    assert '"version": "1.4.3"' in manifest
+    assert '"version": "1.4.4"' in manifest
     assert '"all_frames": true' in manifest
     assert "function discoverExtension(timeoutMs = 2500)" in runtime
     assert 'type: "DISCOVER"' in runtime
@@ -358,12 +365,13 @@ def test_mapping_management_item_picker_is_searchable():
     manifest = Path("extension/manifest.json").read_text(encoding="utf-8")
 
     assert 'class="management-item-search"' in script
-    assert 'list="management-item-options"' in script
+    assert 'class="management-search-results"' in script
     assert 'placeholder="Search item code or name"' in script
-    assert "function ensureManagementItemDatalist()" in script
-    assert "function managementCodeFromSearchValue(value)" in script
-    assert 'input.addEventListener("change", commit)' in script
-    assert '"version": "1.4.3"' in manifest
+    assert "function managementSearchResults(query, limit = 12)" in script
+    assert "function renderManagementPickerResults(input, results, query = \"\")" in script
+    assert 'input.addEventListener("input"' in script
+    assert 'data-item-code=' in script
+    assert '"version": "1.4.4"' in manifest
     assert '"all_frames": true' in manifest
     assert '"match_origin_as_fallback": true' in manifest
     assert '"https://report.madhushalasoftware.com/*"' in manifest
@@ -376,5 +384,8 @@ def test_mapping_workspace_shows_modern_loading_overlay():
     assert 'class="mapping-loading-spinner"' in runtime
     assert "Loading Item Map Master" in runtime
     assert "function setMappingLoading(loading" in runtime
+    assert 'list.className = "list-body mapping-inline-loading"' in runtime
+    assert "mapping-inline-loading-card" in runtime
+    assert "Fetching Excise items and Item Master" in runtime
     assert "if (showLoading) setMappingLoading(false);" in runtime
     assert "@keyframes mapping-spin" in runtime
