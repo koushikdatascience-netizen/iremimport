@@ -388,5 +388,7 @@ def test_mapping_workspace_shows_modern_loading_overlay():
     assert 'list.className = "list-body mapping-inline-loading"' in runtime
     assert "mapping-inline-loading-card" in runtime
     assert "Fetching Excise items and Item Master" in runtime
-    assert "if (showLoading) setMappingLoading(false);" in runtime
+    assert "minimumLoadingMs = 650" in runtime
+    assert "requestAnimationFrame(() => requestAnimationFrame(resolve))" in runtime
+    assert "setMappingLoading(false);" in runtime
     assert "@keyframes mapping-spin" in runtime
