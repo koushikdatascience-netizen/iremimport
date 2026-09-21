@@ -205,7 +205,7 @@
         }
         if (document.querySelector('script[data-mapping-purchase-context="true"]')) return;
         const script = document.createElement("script");
-        script.src = apiUrl("/static/purchase-context.js?v=20260921-mapping-management-v7");
+        script.src = apiUrl("/static/purchase-context.js?v=20260921-madhushala-purchase-handoff-v10");
         script.dataset.mappingPurchaseContext = "true";
         script.onload = () => window.__purchaseContext?.initialize?.();
         document.head.appendChild(script);
@@ -595,6 +595,75 @@
         }
     };
 
+    const MADHUSHALA_PURCHASE_URL = "https://report.madhushalasoftware.com";
+
+    function openPurchaseInMadhushala(purchase) {
+        if (!purchase || typeof purchase !== "object") {
+            throw new Error("Purchase payload is missing.");
+        }
+        if (!String(purchase.shopCode || "").trim()) {
+            throw new Error("Purchase payload has no shopCode.");
+        }
+        if (!String(purchase.companyCode || "").trim()) {
+            throw new Error("Purchase payload has no companyCode.");
+        }
+        if (!Array.isArray(purchase.items) || purchase.items.length === 0) {
+            throw new Error("Purchase payload has no item lines.");
+        }
+        const missingItemCode = purchase.items.findIndex(
+            (item) => !item || !String(item.itemCode || "").trim(),
+        );
+        if (missingItemCode >= 0) {
+            throw new Error(`Purchase item ${missingItemCode + 1} has no itemCode.`);
+        }
+
+        const bytes = new TextEncoder().encode(JSON.stringify(purchase));
+        let binary = "";
+        const chunkSize = 0x8000;
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+            binary += String.fromCharCode.apply(
+                null,
+                bytes.subarray(offset, offset + chunkSize),
+            );
+        }
+        const encoded = btoa(binary)
+            .replace(/\+/g, "-")
+            .replace(/\//g, "_")
+            .replace(/=+$/, "");
+
+        const url = MADHUSHALA_PURCHASE_URL.replace(/\/+$/, "")
+            + "/app/purchase#prefill=" + encoded;
+        window.top.location.href = url;
+    }
+
+    async function buildPurchaseHandoff(jobId) {
+        const hint = loadPurchaseSourceHint(jobId);
+        try {
+            await window.__purchaseContext?.refresh?.(hint.supplierName || "");
+        } catch {
+            // The backend resolver below remains authoritative for required fields.
+        }
+
+        try {
+            applyPurchaseHeader(loadPurchaseHeader(jobId));
+        } catch {
+            // Continue with backend-resolved document/master defaults.
+        }
+
+        persistPurchaseHeader();
+        const header = typeof collectPurchaseHeader === "function"
+            ? collectPurchaseHeader()
+            : loadPurchaseHeader(jobId);
+
+        return api(
+            `/api/v1/document-import/jobs/${encodeURIComponent(jobId)}/purchase/calculate-preview`,
+            {
+                method: "POST",
+                body: JSON.stringify({header}),
+            },
+        );
+    }
+
     async function continueMappingToPurchase() {
         const jobId = sanitizeJobId(currentDocumentJobId || workspace?.jobId || "");
         if (!jobId) {
@@ -602,28 +671,42 @@
             return;
         }
 
-        if (selectedMappings.size > 0) {
-            const saved = await saveMappings();
-            if (!saved) return;
-        } else {
-            await loadWorkspace(jobId, {preserveState: true});
+        const next = document.getElementById("mapping-next-purchase");
+        const originalText = next?.textContent || "Next: Purchase";
+        if (next) {
+            next.disabled = true;
+            next.textContent = "Preparing Purchase…";
         }
 
-        const left = mappingRowsLeft();
-        if (left > 0) {
-            showToast(
-                `Map all extracted items before continuing. ${left} item${left === 1 ? "" : "s"} still unmapped.`,
-                "error",
-            );
-            updateSummary();
-            return;
-        }
+        try {
+            if (selectedMappings.size > 0) {
+                const saved = await saveMappings();
+                if (!saved) return;
+            } else {
+                await loadWorkspace(jobId, {preserveState: true});
+            }
 
-        persistPurchaseHeader();
-        window.location.href = basePath
-            + "/document-import?view=purchase&jobId=" + encodeURIComponent(jobId)
-            + "&sessionId=" + encodeURIComponent(sessionId)
-            + "#session=" + encodeURIComponent(sessionToken);
+            const left = mappingRowsLeft();
+            if (left > 0) {
+                showToast(
+                    `Map all extracted items before continuing. ${left} item${left === 1 ? "" : "s"} still unmapped.`,
+                    "error",
+                );
+                updateSummary();
+                return;
+            }
+
+            const preview = await buildPurchaseHandoff(jobId);
+            const purchase = preview?.purchasePayload;
+            openPurchaseInMadhushala(purchase);
+        } catch (error) {
+            showToast(error?.message || "Could not prepare Madhushala Purchase.", "error");
+        } finally {
+            if (next && document.contains(next)) {
+                next.textContent = originalText;
+                updateSummary();
+            }
+        }
     }
 
     function setupMappingNextButton() {
@@ -642,7 +725,7 @@
             next = document.createElement("button");
             next.id = "mapping-next-purchase";
             next.type = "button";
-            next.textContent = "Next: Preview Purchase";
+            next.textContent = "Next: Purchase";
             next.addEventListener("click", () => void continueMappingToPurchase());
             footer.appendChild(next);
         }
