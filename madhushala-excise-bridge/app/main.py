@@ -556,7 +556,12 @@ async def capture_from_extension(payload: CaptureRequest, request: Request):
 
 
 @app.get("/mapping/workspace")
-async def get_mapping_workspace(request: Request, latestOnly: bool = True, jobId: str | None = None):
+async def get_mapping_workspace(
+    request: Request,
+    latestOnly: bool = True,
+    jobId: str | None = None,
+    includeMapped: bool = False,
+):
     session = session_service.from_request(request)
     try:
         workspace = await mapping_service.workspace_for_session(
@@ -564,6 +569,7 @@ async def get_mapping_workspace(request: Request, latestOnly: bool = True, jobId
             latest_capture_for_session(session["session_id"]),
             latest_only=latestOnly,
             job_id=jobId,
+            include_mapped=includeMapped,
         )
     except MadhushalaApiError as exc:
         if exc.status_code in (401, 403):
