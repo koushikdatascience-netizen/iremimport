@@ -162,7 +162,10 @@ def test_portal_capture_auto_hands_launch_page_to_mapping():
     assert "function startPortalMappingWatch()" in runtime
     assert "function checkPortalMappingHandoff" in runtime
     assert 'session?.state === "mapping_required"' in runtime
-    assert "window.location.replace(portalMappingUrl())" in runtime
+    assert "window.location.replace(portalMappingUrl())" not in runtime
+    assert 'window.history.replaceState(null, "", portalMappingUrl())' in runtime
+    assert 'setHidden(document.getElementById("mapping-view"), false)' in runtime
+    assert "initMapping();" in runtime
     assert "Excise items captured. Opening product mapping…" in runtime
 
 
