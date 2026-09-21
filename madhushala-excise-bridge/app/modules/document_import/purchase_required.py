@@ -109,6 +109,8 @@ async def resolve_required_purchase_header(
     session: dict[str, Any],
     job_id: str,
     header: dict[str, Any] | None,
+    *,
+    strict: bool = True,
 ) -> dict[str, Any]:
     """Resolve the master values required by the current Purchase screen.
 

@@ -89,6 +89,8 @@ async def calculate_purchase_preview(
     session: dict[str, Any],
     job_id: str,
     header: dict[str, Any],
+    *,
+    require_complete_header: bool = True,
 ) -> dict[str, Any]:
     """Run the live Madhushala Calculate step without saving a purchase.
 
@@ -165,7 +167,8 @@ async def calculate_purchase_preview(
         for helper_key in _CALCULATION_HELPER_KEYS:
             item.pop(helper_key, None)
 
-    purchase_orchestrator._validate_final_payload(payload)
+    if require_complete_header:
+        purchase_orchestrator._validate_final_payload(payload)
 
     return {
         "success": True,
