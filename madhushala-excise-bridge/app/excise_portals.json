@@ -1,0 +1,16 @@
+{
+  "states": {
+    "WEST BENGAL": {
+      "aliases": ["WB", "WESTBENGAL", "WEST BENGAL"],
+      "loginUrl": "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx",
+      "allowedOrigins": ["https://excise.wb.gov.in"],
+      "autoSubmit": true
+    },
+    "MADHYA PRADESH": {
+      "aliases": ["MP", "MADHYAPRADESH", "MADHYA PRADESH"],
+      "loginUrl": "https://eaabkari.mp.gov.in/",
+      "allowedOrigins": ["https://eaabkari.mp.gov.in"],
+      "autoSubmit": true
+    }
+  }
+}
