@@ -3975,10 +3975,22 @@ function updateSummary() {
 
 function setMappingLoading(loading, message = "Loading item mappings") {
     const overlay = document.getElementById("mapping-loading-overlay");
-    if (!overlay) return;
-    overlay.hidden = !loading;
-    const title = overlay.querySelector("strong");
-    if (title && message) title.textContent = message;
+    if (overlay) {
+        overlay.hidden = !loading;
+        const title = overlay.querySelector("strong");
+        if (title && message) title.textContent = message;
+    }
+
+    const list = document.getElementById("unmapped-items");
+    if (loading && list) {
+        list.className = "list-body mapping-inline-loading";
+        list.innerHTML = `
+            <div class="mapping-inline-loading-card">
+                <span class="mapping-loading-spinner" aria-hidden="true"></span>
+                <strong>${escapeHtml(message || "Loading item mappings")}</strong>
+                <small>Fetching Excise items and Item Master…</small>
+            </div>`;
+    }
 }
 
 async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
@@ -4006,7 +4018,14 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
         renderWorkspace();
         if (previousSearch) runSearch();
     } catch (error) {
-        if (!options.quiet) showToast(error.message || "Could not load mapping", "error");
+        if (!options.quiet) {
+            showToast(error.message || "Could not load mapping", "error");
+            const list = document.getElementById("unmapped-items");
+            if (list) {
+                list.className = "list-body empty";
+                list.textContent = error.message || "Could not load mapping";
+            }
+        }
     } finally {
         if (showLoading) setMappingLoading(false);
     }
