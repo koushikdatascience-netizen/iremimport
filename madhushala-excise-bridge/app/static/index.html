@@ -4010,6 +4010,46 @@ function setMappingLoading(loading, message = "Loading item mappings") {
     }
 }
 
+async function loadDeferredMappingItemMaster() {
+    if (!workspace?.itemMasterDeferred || (workspace.madhushalaItems || []).length) return;
+
+    const suggestions = document.getElementById("suggestions");
+    if (suggestions) {
+        suggestions.className = "candidate-list empty";
+        suggestions.innerHTML = `
+            <div class="mapping-inline-loading-card">
+                <span class="mapping-loading-spinner" aria-hidden="true"></span>
+                <strong>Loading Item Master</strong>
+                <small>You can already review the Excise items on the left.</small>
+            </div>`;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15000);
+    try {
+        const payload = await api("/mapping/item-master", {signal: controller.signal});
+        workspace.madhushalaItems = Array.isArray(payload?.items) ? payload.items : [];
+        workspace.dropdownCount = workspace.madhushalaItems.length;
+        workspace.itemMasterDeferred = false;
+
+        const search = document.getElementById("madhushala-search");
+        if (search?.value?.trim()) runSearch();
+        else renderSelectedExcise(currentExciseItem());
+    } catch (error) {
+        const timedOut = error?.name === "AbortError";
+        const message = timedOut
+            ? "Item Master is taking too long. You can retry by refreshing Mapping."
+            : (error.message || "Could not load Item Master");
+        if (suggestions) {
+            suggestions.className = "candidate-list empty";
+            suggestions.textContent = message;
+        }
+        showToast(message, "error");
+    } finally {
+        window.clearTimeout(timeout);
+    }
+}
+
 async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
     const normalizedJobId = sanitizeJobId(isEventLike(jobId) ? "" : jobId || currentDocumentJobId);
     const preserveState = options.preserveState !== false;
@@ -4043,6 +4083,9 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
         if (search) search.value = previousSearch;
         renderWorkspace();
         if (previousSearch) runSearch();
+        if (workspace?.itemMasterDeferred) {
+            void loadDeferredMappingItemMaster();
+        }
     } catch (error) {
         if (!options.quiet) {
             const timedOut = error?.name === "AbortError";
