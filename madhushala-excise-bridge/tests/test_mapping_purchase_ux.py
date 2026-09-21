@@ -151,7 +151,7 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260921-nonblocking-handoff-v12"' in main
+    assert 'STATIC_ASSET_VERSION = "20260921-mapping-search-loader-v13"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
 
@@ -345,7 +345,7 @@ def test_extension_bridge_supports_embedded_excise_import_and_handshake_retry():
     manifest = Path("extension/manifest.json").read_text(encoding="utf-8")
     runtime = Path("app/static/index.html").read_text(encoding="utf-8")
 
-    assert '"version": "1.4.1"' in manifest
+    assert '"version": "1.4.3"' in manifest
     assert '"all_frames": true' in manifest
     assert "function discoverExtension(timeoutMs = 2500)" in runtime
     assert 'type: "DISCOVER"' in runtime
@@ -363,6 +363,18 @@ def test_mapping_management_item_picker_is_searchable():
     assert "function ensureManagementItemDatalist()" in script
     assert "function managementCodeFromSearchValue(value)" in script
     assert 'input.addEventListener("change", commit)' in script
-    assert '"version": "1.4.2"' in manifest
+    assert '"version": "1.4.3"' in manifest
     assert '"all_frames": true' in manifest
     assert '"match_origin_as_fallback": true' in manifest
+    assert '"https://report.madhushalasoftware.com/*"' in manifest
+
+
+def test_mapping_workspace_shows_modern_loading_overlay():
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+
+    assert 'id="mapping-loading-overlay"' in runtime
+    assert 'class="mapping-loading-spinner"' in runtime
+    assert "Loading Item Map Master" in runtime
+    assert "function setMappingLoading(loading" in runtime
+    assert "if (showLoading) setMappingLoading(false);" in runtime
+    assert "@keyframes mapping-spin" in runtime
