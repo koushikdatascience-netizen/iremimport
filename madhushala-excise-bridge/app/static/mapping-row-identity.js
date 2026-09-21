@@ -21,6 +21,48 @@
         ).length;
     }
 
+    let managementStatusFilter = "all";
+
+    function filteredManagementRows() {
+        const rows = workspace?.unmappedItems || [];
+        if (!mappingManagementMode) return rows;
+        const query = String(document.getElementById("mapping-management-search")?.value || "")
+            .trim()
+            .toLowerCase();
+        return rows.filter((item) => {
+            const mapped = Boolean(selectedMappings.get(mappingRowKey(item)) || item.selectedItemCode);
+            if (managementStatusFilter === "mapped" && !mapped) return false;
+            if (managementStatusFilter === "unmapped" && mapped) return false;
+            if (!query) return true;
+            const mappedItem = mappedItemForRow(item);
+            const haystack = [
+                item.exciseItemCode,
+                item.itemName,
+                item.capturedItem?.brand,
+                item.capturedItem?.measureMl,
+                mappedItem?.itemCode,
+                mappedItem?.itemName,
+            ].map((value) => String(value || "").toLowerCase()).join(" ");
+            return haystack.includes(query);
+        });
+    }
+
+    function setupMappingManagementControls() {
+        if (!mappingManagementMode) return;
+        const search = document.getElementById("mapping-management-search");
+        search?.addEventListener("input", () => renderWorkspace());
+        document.querySelectorAll("[data-mapping-filter]").forEach((button) => {
+            button.addEventListener("click", () => {
+                managementStatusFilter = String(button.dataset.mappingFilter || "all");
+                document.querySelectorAll("[data-mapping-filter]").forEach((candidate) => {
+                    candidate.classList.toggle("active", candidate === button);
+                });
+                selectedExciseCode = null;
+                renderWorkspace();
+            });
+        });
+    }
+
     function purchaseSourceHintKey(jobId) {
         return `purchaseSourceHint:${sessionId || "session"}:${jobId || "latest"}`;
     }
@@ -163,7 +205,7 @@
         }
         if (document.querySelector('script[data-mapping-purchase-context="true"]')) return;
         const script = document.createElement("script");
-        script.src = apiUrl("/static/purchase-context.js?v=20260920-portal-mapping-v6");
+        script.src = apiUrl("/static/purchase-context.js?v=20260921-mapping-management-v7");
         script.dataset.mappingPurchaseContext = "true";
         script.onload = () => window.__purchaseContext?.initialize?.();
         document.head.appendChild(script);
@@ -180,10 +222,15 @@
     };
 
     function setDocumentListTitle() {
-        if (!isDocumentWorkspace()) return;
         const title = document.querySelector("#mapping-view .list-title span:first-child");
-        if (title) title.textContent = "Extracted Items";
         const mapperTitle = document.querySelector("#mapping-view .mapper-title");
+        if (mappingManagementMode) {
+            if (title) title.textContent = "All Excise Items";
+            if (mapperTitle) mapperTitle.textContent = "Madhushala Mapping / Re-map";
+            return;
+        }
+        if (!isDocumentWorkspace()) return;
+        if (title) title.textContent = "Extracted Items";
         if (mapperTitle) mapperTitle.textContent = "Madhushala Mapping / Re-map";
     }
 
@@ -193,11 +240,14 @@
             (item) => !selectedMappings.get(mappingRowKey(item)) && !item.selectedItemCode,
         ).length;
         const mapped = Math.max(0, rows.length - left);
+        const visible = mappingManagementMode ? filteredManagementRows().length : rows.length;
         setText(
             document.getElementById("mapping-summary"),
-            isDocumentWorkspace()
-                ? `Extracted: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left}`
-                : `Selected: ${selectedMappings.size} | Left: ${left}`,
+            mappingManagementMode
+                ? `All: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left} | Showing: ${visible}`
+                : (isDocumentWorkspace()
+                    ? `Extracted: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left}`
+                    : `Selected: ${selectedMappings.size} | Left: ${left}`),
         );
         const submit = document.getElementById("submit-mappings");
         if (submit) submit.disabled = selectedMappings.size === 0;
@@ -209,23 +259,28 @@
         const list = document.getElementById("unmapped-items");
         if (!list) return;
         setDocumentListTitle();
-        setText(document.getElementById("unmapped-count"), String(workspace.unmappedItems.length));
+        const rows = mappingManagementMode ? filteredManagementRows() : (workspace.unmappedItems || []);
+        setText(
+            document.getElementById("unmapped-count"),
+            mappingManagementMode ? `${rows.length}/${(workspace.unmappedItems || []).length}` : String(rows.length),
+        );
 
-        if (!workspace.unmappedItems.length) {
+        if (!rows.length) {
             list.className = "list-body empty";
-            list.textContent = "No extracted items found for this document";
+            list.textContent = mappingManagementMode ? "No items match this filter" : "No extracted items found for this document";
+            selectedExciseCode = null;
             renderSelectedExcise(null);
             updateSummary();
             return;
         }
 
-        const firstKey = mappingRowKey(workspace.unmappedItems[0]);
-        if (!selectedExciseCode) selectedExciseCode = firstKey;
-        if (selectedExciseCode && !currentExciseItem()) selectedExciseCode = firstKey;
+        const firstKey = mappingRowKey(rows[0]);
+        const visibleKeys = new Set(rows.map(mappingRowKey));
+        if (!selectedExciseCode || !visibleKeys.has(String(selectedExciseCode))) selectedExciseCode = firstKey;
 
         const documentModeRows = isDocumentWorkspace();
         list.className = documentModeRows ? "list-body document-map-list" : "list-body";
-        list.innerHTML = workspace.unmappedItems.map((item) => {
+        list.innerHTML = rows.map((item) => {
             const code = String(item.exciseItemCode ?? "");
             const rowKey = mappingRowKey(item);
             const selected = rowKey === String(selectedExciseCode);
@@ -348,7 +403,9 @@
         const previousSelected = preserveState ? selectedExciseCode : null;
         const search = document.getElementById("madhushala-search");
         try {
-            const query = normalizedJobId ? `?jobId=${encodeURIComponent(normalizedJobId)}` : "?latestOnly=true";
+            const query = normalizedJobId
+                ? `?jobId=${encodeURIComponent(normalizedJobId)}`
+                : (mappingManagementMode ? "?latestOnly=false&includeMapped=true" : "?latestOnly=true");
             workspace = await api(`/mapping/workspace${query}`);
             currentDocumentJobId = normalizedJobId || sanitizeJobId(workspace?.jobId) || currentDocumentJobId;
             const keys = new Set((workspace.unmappedItems || []).map(mappingRowKey));
@@ -369,9 +426,9 @@
     };
 
     startMappingAutoRefresh = function startStableMappingAutoRefresh() {
-        // Document mappings are changed by this page itself, so polling every three
-        // seconds only causes UI churn and can interfere with search typing.
-        if (sanitizeJobId(currentDocumentJobId)) return;
+        // Document and management mappings are changed by this page itself, so
+        // polling every three seconds only causes UI churn and expensive catalogue reloads.
+        if (mappingManagementMode || sanitizeJobId(currentDocumentJobId)) return;
         if (mappingRefreshTimer) return;
         mappingRefreshTimer = window.setInterval(async () => {
             const search = document.getElementById("madhushala-search");
@@ -534,6 +591,13 @@
                 gap: 6px !important;
                 padding: 0 !important;
                 margin: 0 !important;
+            }
+            body.mapping-management-mode #mapping-view .mapping-layout {
+                flex: 1 1 0 !important;
+                height: auto !important;
+            }
+            body.mapping-management-mode #mapping-management-toolbar {
+                flex: 0 0 auto !important;
             }
             body.mapping-mode #mapping-view .unmapped-list,
             body.mapping-mode #mapping-view .mapper {
@@ -1371,6 +1435,7 @@
         ensurePurchaseContextOnMapping();
         ensureCompactMappingStyles();
         setupMappingNextButton();
+        setupMappingManagementControls();
         const result = originalInitMapping();
         const jobId = sanitizeJobId(currentDocumentJobId || activeJobId || "");
         if (jobId) {
