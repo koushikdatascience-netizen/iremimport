@@ -217,6 +217,9 @@ async function openPortal() {
   requireSession(settings);
 
   const portal = await loadPortalBootstrap(settings);
+  if (portal?.ready === false) {
+    throw new Error(portal?.error?.message || "Excise portal setup is incomplete for this company.");
+  }
   const exciseLoginUrl = normalizeExciseLoginUrl(portal.exciseLoginUrl);
   const exciseUser = String(portal.exciseUserId || "").trim();
   const excisePassword = String(portal.excisePassword || "");
