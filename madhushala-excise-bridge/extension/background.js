@@ -3,24 +3,19 @@ const STORAGE_KEYS = {
   sessionId: "sessionId",
   sessionToken: "sessionToken",
   mappingUrl: "mappingUrl",
-  exciseLoginUrl: "exciseLoginUrl",
-  exciseUser: "exciseUser",
-  excisePassword: "excisePassword",
 };
 
 const DEFAULT_BRIDGE_URL = "https://integrations.madhushalasoftware.com/excise-import";
-const DEFAULT_EXCISE_LOGIN_URL = "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx";
-const ALLOWED_EXCISE_HOSTS = new Set(["excise.wb.gov.in", "eaabkari.mp.gov.in"]);
 
 function normalizeBaseUrl(value) {
   return String(value || DEFAULT_BRIDGE_URL).trim().replace(/\/+$/, "");
 }
 
 function normalizeExciseLoginUrl(value) {
-  const raw = String(value || DEFAULT_EXCISE_LOGIN_URL).trim();
+  const raw = String(value || "").trim();
   try {
     const url = new URL(raw);
-    if (url.protocol !== "https:" || !ALLOWED_EXCISE_HOSTS.has(url.hostname.toLowerCase())) return "";
+    if (url.protocol !== "https:" || !url.hostname) return "";
     return url.href;
   } catch {
     return "";
@@ -37,18 +32,12 @@ async function getSettings() {
     [STORAGE_KEYS.sessionId]: "",
     [STORAGE_KEYS.sessionToken]: "",
     [STORAGE_KEYS.mappingUrl]: "",
-    [STORAGE_KEYS.exciseLoginUrl]: DEFAULT_EXCISE_LOGIN_URL,
-    [STORAGE_KEYS.exciseUser]: "",
-    [STORAGE_KEYS.excisePassword]: "",
   });
   return {
     bridgeUrl: normalizeBaseUrl(data[STORAGE_KEYS.bridgeUrl]),
     sessionId: data[STORAGE_KEYS.sessionId] || "",
     sessionToken: data[STORAGE_KEYS.sessionToken] || "",
     mappingUrl: data[STORAGE_KEYS.mappingUrl] || "",
-    exciseLoginUrl: normalizeExciseLoginUrl(data[STORAGE_KEYS.exciseLoginUrl]) || DEFAULT_EXCISE_LOGIN_URL,
-    exciseUser: data[STORAGE_KEYS.exciseUser] || "",
-    excisePassword: data[STORAGE_KEYS.excisePassword] || "",
   };
 }
 
@@ -62,19 +51,6 @@ async function setSession(payload = {}) {
   };
   await chrome.storage.local.set(updates);
   return {status: "session_ready"};
-}
-
-async function saveSettings(payload = {}) {
-  const updates = {};
-  if ("exciseLoginUrl" in payload) {
-    const url = normalizeExciseLoginUrl(payload.exciseLoginUrl);
-    if (!url) throw new Error("Excise login URL must be a configured WB or MP Excise portal.");
-    updates[STORAGE_KEYS.exciseLoginUrl] = url;
-  }
-  if ("exciseUser" in payload) updates[STORAGE_KEYS.exciseUser] = String(payload.exciseUser || "").trim();
-  if ("excisePassword" in payload) updates[STORAGE_KEYS.excisePassword] = String(payload.excisePassword || "");
-  await chrome.storage.local.set(updates);
-  return {status: "saved"};
 }
 
 function requireSession(settings) {
@@ -119,16 +95,26 @@ async function postCapture(items, pageUrl, capturedAt) {
 }
 
 function fillExciseLogin(credentials) {
-  const host = location.hostname.toLowerCase();
-  const allowedHosts = new Set(["excise.wb.gov.in", "eaabkari.mp.gov.in"]);
-  if (!allowedHosts.has(host)) {
-    return {userFilled: false, passwordFilled: false, submitted: false, blocked: "unexpected_host"};
+  const profile = credentials?.loginProfile || {};
+  const allowedOrigins = Array.isArray(profile.allowedOrigins) ? profile.allowedOrigins : [];
+  if (!allowedOrigins.includes(location.origin)) {
+    return {
+      userFilled: false,
+      passwordFilled: false,
+      submitted: false,
+      blocked: "unexpected_origin",
+      origin: location.origin,
+    };
   }
 
-  function visibleInput(selectors) {
-    for (const selector of selectors) {
-      const input = document.querySelector(selector);
-      if (input && input.offsetParent !== null) return input;
+  function visibleElement(selectors) {
+    for (const selector of Array.isArray(selectors) ? selectors : []) {
+      try {
+        const element = document.querySelector(selector);
+        if (element && element.offsetParent !== null && !element.disabled) return element;
+      } catch {
+        // Ignore a bad state-specific selector and continue through the profile.
+      }
     }
     return null;
   }
@@ -143,49 +129,35 @@ function fillExciseLogin(credentials) {
     return true;
   }
 
-  const user = visibleInput([
-    'input[name*="UserName" i]',
-    'input[id*="UserName" i]',
-    'input[name*="User" i]',
-    'input[id*="User" i]',
-    'input[name*="Login" i]',
-    'input[id*="Login" i]',
-    'input[name*="userid" i]',
-    'input[id*="userid" i]',
-    'input[type="text"]',
-  ]);
-  const password = visibleInput([
-    'input[type="password"]',
-    'input[name*="Password" i]',
-    'input[id*="Password" i]',
-    'input[name*="pwd" i]',
-    'input[id*="pwd" i]',
-  ]);
-
+  const user = visibleElement(profile.usernameSelectors);
+  const password = visibleElement(profile.passwordSelectors);
   const userFilled = setNativeValue(user, credentials.exciseUser);
   const passwordFilled = setNativeValue(password, credentials.excisePassword);
-
-  const captcha = visibleInput([
-    'input[name*="captcha" i]',
-    'input[id*="captcha" i]',
-    'input[name*="capcha" i]',
-    'input[id*="capcha" i]',
-    'input[name*="verification" i]',
-    'input[id*="verification" i]',
-  ]);
+  const captcha = visibleElement(profile.captchaSelectors);
 
   let submitted = false;
-  if (userFilled && passwordFilled && !captcha) {
-    const candidates = Array.from(document.querySelectorAll(
-      'button[type="submit"], input[type="submit"], button, input[type="button"]'
-    ));
-    const loginButton = candidates.find((element) => {
-      if (element.offsetParent === null) return false;
-      const text = String(element.textContent || element.value || "").trim().toLowerCase();
-      return text === "login" || text === "log in" || text === "sign in" || text.includes("login");
-    });
+  if (userFilled && passwordFilled && !captcha && profile.autoSubmit !== false) {
+    let loginButton = visibleElement(profile.loginSelectors);
+    if (!loginButton) {
+      const words = (Array.isArray(profile.loginText) ? profile.loginText : [])
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean);
+      const candidates = Array.from(document.querySelectorAll(
+        'button, input[type="button"], input[type="submit"], [role="button"]'
+      ));
+      loginButton = candidates.find((element) => {
+        if (element.offsetParent === null || element.disabled) return false;
+        const label = String(
+          element.textContent || element.value || element.getAttribute("aria-label") || ""
+        ).trim().toLowerCase();
+        return words.some((word) => label === word || label.includes(word));
+      }) || null;
+    }
     if (loginButton) {
       loginButton.click();
+      submitted = true;
+    } else if (password?.form && typeof password.form.requestSubmit === "function") {
+      password.form.requestSubmit();
       submitted = true;
     }
   }
@@ -249,9 +221,15 @@ async function openPortal() {
   const exciseUser = String(portal.exciseUserId || "").trim();
   const excisePassword = String(portal.excisePassword || "");
   const state = String(portal.state || "").trim();
+  const loginProfile = portal.loginProfile && typeof portal.loginProfile === "object"
+    ? portal.loginProfile
+    : {};
 
   if (!exciseLoginUrl) {
-    throw new Error(`No supported Excise portal is configured for ${state || "this state"}.`);
+    throw new Error(`No valid HTTPS Excise portal is configured for ${state || "this state"}.`);
+  }
+  if (!Array.isArray(loginProfile.allowedOrigins) || !loginProfile.allowedOrigins.length) {
+    throw new Error(`Excise login profile is missing allowed origins for ${state || "this state"}.`);
   }
   if (!exciseUser || !excisePassword) {
     throw new Error("Excise User ID or password is missing in Madhushala Company Master.");
@@ -264,6 +242,7 @@ async function openPortal() {
       state,
       exciseUser,
       excisePassword,
+      loginProfile,
     });
   }
   return {
@@ -327,7 +306,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     if (message.type === "SET_SESSION") return setSession(message.payload);
     if (message.type === "GET_SETTINGS") return getSettings();
-    if (message.type === "SAVE_SETTINGS") return saveSettings(message.payload);
     if (message.type === "OPEN_PORTAL") return openPortal();
     if (message.type === "AUTO_CAPTURE") return handleAutoCapture(message.payload);
     throw new Error("Unknown extension action.");

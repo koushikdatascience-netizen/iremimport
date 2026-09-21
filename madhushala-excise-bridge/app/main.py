@@ -24,6 +24,7 @@ from app.automation.row_parser import normalize_raw_items
 from app.config import settings
 from app.db import close_db, conn, init_db
 from app.errors import error_payload, is_retryable_status, normalize_http_detail
+from app.excise_portals import resolve_excise_portal
 from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaClient, close_madhushala_http_clients
 from app.modules.document_import.routes import create_router as create_document_import_router
 from app.modules.document_import.service import DocumentImportService
@@ -60,7 +61,7 @@ async def lifespan(_app: FastAPI):
 
 PUBLIC_PREFIX = "/excise-import"
 INDEX_HTML_PATH = Path("app/static/index.html")
-STATIC_ASSET_VERSION = "20260921-official-mapping-master-v8"
+STATIC_ASSET_VERSION = "20260921-generic-multistate-v9"
 DOCUMENT_IMPORT_SCRIPTS = (
     f'<script src="./static/qr-browser-fallback.js?v={STATIC_ASSET_VERSION}"></script>',
     f'<script src="./static/purchase-context.js?v={STATIC_ASSET_VERSION}"></script>',
@@ -68,25 +69,6 @@ DOCUMENT_IMPORT_SCRIPTS = (
 PAGE_END_SCRIPTS = (
     f'<script src="./static/mapping-row-identity.js?v={STATIC_ASSET_VERSION}"></script>',
 )
-
-EXCISE_PORTALS = {
-    "WEST BENGAL": "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx",
-    "MADHYA PRADESH": "https://eaabkari.mp.gov.in/",
-}
-EXCISE_STATE_ALIASES = {
-    "WB": "WEST BENGAL",
-    "WESTBENGAL": "WEST BENGAL",
-    "WEST BENGAL": "WEST BENGAL",
-    "MP": "MADHYA PRADESH",
-    "MADHYAPRADESH": "MADHYA PRADESH",
-    "MADHYA PRADESH": "MADHYA PRADESH",
-}
-
-
-def normalize_excise_state(value: str | None) -> str:
-    raw = " ".join(str(value or "").strip().upper().replace("_", " ").split())
-    return EXCISE_STATE_ALIASES.get(raw, raw)
-
 
 def _inject_missing_scripts(html: str, scripts: tuple[str, ...], marker: str) -> str:
     missing = [
@@ -494,7 +476,7 @@ async def session_status(request: Request):
 
 @app.get("/portal/bootstrap")
 async def portal_bootstrap(request: Request):
-    """Resolve the current company's Excise state, credentials and login portal."""
+    """Resolve company credentials plus a server-configured state login profile."""
     session = session_service.from_request(request)
     client = MadhushalaClient(
         settings.MADHUSHALA_BASE_URL,
@@ -506,35 +488,47 @@ async def portal_bootstrap(request: Request):
     except MadhushalaApiError as exc:
         handle_madhushala_error(exc)
 
-    state = normalize_excise_state(company.get("state"))
-    login_url = EXCISE_PORTALS.get(state)
-    user_id = str(company.get("exciseUserId") or "").strip()
-    password = str(company.get("excisePassword") or "")
+    raw_state = str(company.get("state") or "").strip()
+    try:
+        portal = resolve_excise_portal(raw_state)
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        logger.exception("excise_portal_registry_error state=%s", raw_state)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "EXCISE_PORTAL_REGISTRY_ERROR",
+                "message": "Excise portal configuration is invalid.",
+            },
+        ) from exc
 
-    if not login_url:
+    if not portal:
         raise HTTPException(
             status_code=422,
             detail={
                 "code": "EXCISE_STATE_NOT_SUPPORTED",
-                "message": f"Excise login automation is not configured for state '{state or 'UNKNOWN'}'.",
-                "state": state,
+                "message": f"Excise login automation is not configured for state '{raw_state or 'UNKNOWN'}'.",
+                "state": raw_state,
             },
         )
+
+    user_id = str(company.get("exciseUserId") or "").strip()
+    password = str(company.get("excisePassword") or "")
     if not user_id or not password:
         raise HTTPException(
             status_code=422,
             detail={
                 "code": "EXCISE_CREDENTIALS_MISSING",
                 "message": "Excise User ID or password is missing in Company Master.",
-                "state": state,
+                "state": portal["state"],
             },
         )
 
     return {
         "companyCode": str(company.get("companyCode") or session["company_code"]),
         "companyName": str(company.get("companyName") or ""),
-        "state": state,
-        "exciseLoginUrl": login_url,
+        "state": portal["state"],
+        "exciseLoginUrl": portal["loginUrl"],
+        "loginProfile": portal["loginProfile"],
         "exciseUserId": user_id,
         "excisePassword": password,
     }
