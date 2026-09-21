@@ -7,7 +7,7 @@ from app import main
 
 def test_mapping_page_loads_row_identity_fix_after_inline_app_script():
     html = main.index_html()
-    marker = '<script src="./static/mapping-row-identity.js?v=20260921-forced-inline-mapping-v16"></script>'
+    marker = '<script src="./static/mapping-row-identity.js?v=20260921-restored-inline-mapping-v17"></script>'
     assert marker in html
     assert html.index(marker) > html.rfind("</script>", 0, html.index(marker))
 

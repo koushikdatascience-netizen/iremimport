@@ -711,9 +711,23 @@ class MappingService:
                 },
             }
 
-        # For portal import this is intentionally AFTER ExciseItemMasterSave. Madhushala
-        # is the source of truth for which submitted rows still require mapping.
-        unmapped = await client.get_unmapped_items()
+        # For portal import this is intentionally AFTER ExciseItemMasterSave.
+        # Use Madhushala's authoritative Excise mapping master first so a newly
+        # submitted row is classified from mappedItemCode rather than relying on
+        # the eventually-consistent unmapped endpoint.
+        excise_master = await client.get_excise_items()
+        if excise_master:
+            unmapped = [
+                {
+                    **remote,
+                    "exciseItemCode": remote.get("exciseItemCode"),
+                    "itemName": remote.get("exciseItemName") or remote.get("itemName") or "",
+                }
+                for remote in excise_master
+                if not str(remote.get("mappedItemCode") or "").strip()
+            ]
+        else:
+            unmapped = await client.get_unmapped_items()
 
         latest_codes: set[str] = set()
 
@@ -762,6 +776,39 @@ class MappingService:
                         for row in batch_rows
                         if row["excise_item_code"]
                     }
+
+        # If Madhushala has not exposed a just-created Excise item in its
+        # master yet, do not incorrectly report "all mapped". Keep the latest
+        # captured code visible as pending/unmapped until the authoritative
+        # master catches up.
+        if latest_codes:
+            visible_codes = {
+                str(item.get("exciseItemCode") or "").strip()
+                for item in unmapped
+                if str(item.get("exciseItemCode") or "").strip()
+            }
+            missing_latest = latest_codes - visible_codes
+            if missing_latest:
+                mapped_master_codes = {
+                    str(item.get("exciseItemCode") or "").strip()
+                    for item in (excise_master or [])
+                    if str(item.get("mappedItemCode") or "").strip()
+                }
+                pending_codes = missing_latest - mapped_master_codes
+                if pending_codes:
+                    with conn() as db:
+                        for code in sorted(pending_codes):
+                            imported = db.execute(
+                                "SELECT item_name FROM imports WHERE shop_code=? AND excise_item_code=? ORDER BY updated_at DESC LIMIT 1",
+                                (shop_code, code),
+                            ).fetchone()
+                            unmapped.append(
+                                {
+                                    "exciseItemCode": code,
+                                    "itemName": str(imported["item_name"] if imported else f"Excise Item {code}"),
+                                    "mappingPendingSync": True,
+                                }
+                            )
 
         rows: list[dict[str, Any]] = []
         with conn() as db:

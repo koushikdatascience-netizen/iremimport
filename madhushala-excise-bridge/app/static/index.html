@@ -3631,11 +3631,28 @@ function stopPortalMappingWatch() {
 }
 
 function openPortalMapping() {
-    if (portalMappingNavigating || mappingMode || documentMode) return;
+    if (portalMappingNavigating || documentMode) return;
     portalMappingNavigating = true;
     stopPortalMappingWatch();
     setStatus("Excise items captured. Opening product mapping…");
-    window.location.replace(portalMappingUrl());
+
+    // Switch the already-open Excise Import bridge UI to Mapping in place.
+    // Do not navigate the browser/iframe to another page and do not involve
+    // the extension in Mapping navigation.
+    try {
+        window.history.replaceState(null, "", portalMappingUrl());
+    } catch {
+        // URL decoration is optional; the UI transition below is authoritative.
+    }
+
+    document.body.classList.add("mapping-mode");
+    document.body.classList.remove("mapping-management-mode");
+    setHidden(document.getElementById("launch-view"), true);
+    setHidden(document.getElementById("document-import-view"), true);
+    setHidden(document.getElementById("mapping-view"), false);
+    setHidden(document.getElementById("mapping-management-toolbar"), true);
+    setMappingLoading(true, "Loading item mappings");
+    initMapping();
 }
 
 async function checkPortalMappingHandoff({quiet = true} = {}) {
