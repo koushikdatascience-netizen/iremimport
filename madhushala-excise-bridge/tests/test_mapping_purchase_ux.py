@@ -406,3 +406,19 @@ def test_portal_mapping_status_uses_authoritative_excise_master():
     assert 'if not str(remote.get("mappedItemCode") or "").strip()' in service
     assert "pending_codes = missing_latest - mapped_master_codes" in service
     assert '"mappingPendingSync": True' in service
+
+
+def test_mapping_workspace_has_hard_timeout_and_targeted_latest_status_probe():
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+    service = Path("app/services/mapping_service.py").read_text(encoding="utf-8")
+
+    assert "new AbortController()" in runtime
+    assert "controller.abort(), 15000" in runtime
+    assert "Mapping took too long to load. Please retry." in runtime
+
+    assert "unmapped = await client.get_unmapped_items()" in service
+    assert "await client.get_excise_items(code)" in service
+    portal_section = service.split("# For portal import this is intentionally AFTER ExciseItemMasterSave.", 1)[1]
+    portal_section = portal_section.split("rows: list[dict[str, Any]] = []", 1)[0]
+    assert "excise_master = await client.get_excise_items()" not in portal_section
+    assert "mappingPendingSync" in portal_section
