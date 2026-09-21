@@ -163,14 +163,38 @@ def create_router(service: DocumentImportService) -> APIRouter:
 
     @router.get("/jobs/{job_id}/purchase/handoff")
     async def get_purchase_handoff(job_id: str, request: Request):
-        """Return the mapped document payload for the real Madhushala Purchase UI.
+        """Calculate the mapped document and hand the resulting payload to Madhushala.
 
-        This endpoint intentionally does not resolve Purchase master fields,
-        calculate financials, or save a Purchase. The Madhushala frontend owns
-        those steps after it receives the prefill payload.
+        Purchase masters are resolved when available but are not required merely
+        to open the real Madhushala Purchase UI. Calculate runs first so rates,
+        taxes, gross and net values are already populated. The Madhushala
+        frontend remains authoritative for later edits/recalculation and Save.
         """
         session = session_service.from_request(request)
-        return build_purchase_handoff(service, session, job_id)
+        base_handoff = build_purchase_handoff(service, session, job_id)
+        header = await resolve_required_purchase_header(
+            service,
+            session,
+            job_id,
+            {},
+            strict=False,
+        )
+        calculated = await calculate_purchase_preview(
+            service,
+            session,
+            job_id,
+            header,
+            require_complete_header=False,
+        )
+        purchase = calculated.get("purchasePayload") if isinstance(calculated, dict) else None
+        if isinstance(purchase, dict):
+            base = base_handoff.get("purchasePayload") if isinstance(base_handoff, dict) else {}
+            if isinstance(base, dict):
+                purchase.setdefault("jobId", base.get("jobId") or job_id)
+                purchase.setdefault("sourceType", base.get("sourceType") or "")
+                purchase.setdefault("supplierName", base.get("supplierName") or "")
+        calculated["handoffCalculated"] = True
+        return calculated
 
     @router.get("/jobs/{job_id}/purchase/transaction")
     async def get_purchase_transaction(job_id: str, request: Request):
