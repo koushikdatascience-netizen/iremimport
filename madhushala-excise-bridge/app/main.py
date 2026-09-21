@@ -39,6 +39,7 @@ from app.observability import (
 from app.services.session_service import session_service
 from app.services.cache_service import cache_service
 from app.services.mapping_service import MappingService
+from app.services.reference_data_service import reference_data_service
 
 
 configure_json_logging(logging.INFO)
@@ -646,6 +647,27 @@ async def get_mapping_workspace(
     if jobId:
         workspace = _apply_document_row_mapping_state(workspace, session, jobId)
     return workspace
+
+
+@app.get("/mapping/item-master")
+async def get_mapping_item_master(request: Request):
+    session = session_service.from_request(request)
+    try:
+        items = await reference_data_service.catalogue(session)
+    except MadhushalaApiError as exc:
+        if exc.status_code in (401, 403):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": "MADHUSHALA_AUTH_EXPIRED",
+                    "message": "Madhushala login/JWT is expired or invalid. Relaunch Excise Import from Madhushala CRM.",
+                },
+            ) from exc
+        handle_madhushala_error(exc)
+    return {
+        "items": items,
+        "count": len(items),
+    }
 
 
 @app.post("/mapping/submit")
