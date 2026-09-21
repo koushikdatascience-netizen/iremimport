@@ -268,6 +268,25 @@ class MadhushalaClient:
             headers=headers,
         )
 
+    async def get_company_master(self, company_code: str) -> dict[str, Any]:
+        """Load company/state-specific Excise credentials from Madhushala."""
+        safe_company_code = str(company_code or "").strip()
+        if not safe_company_code:
+            raise MadhushalaApiError("companyCode is required")
+        data = await self._request(
+            "GET",
+            f"/api/company-mast/{safe_company_code}",
+            params={"shopCode": self.shop_code},
+            headers=self._auth_headers("application/json"),
+        )
+        if isinstance(data, dict):
+            for key in ("data", "result", "company"):
+                nested = data.get(key)
+                if isinstance(nested, dict):
+                    return nested
+            return data
+        raise MadhushalaApiError("Company master returned an invalid response")
+
     async def get_excise_items(self, search: str = "") -> list[dict[str, Any]]:
         """Return the authoritative Excise↔software mapping master for this shop."""
         params: dict[str, Any] = {"shopCode": self.shop_code}

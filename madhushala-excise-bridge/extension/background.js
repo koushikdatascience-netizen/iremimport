@@ -10,7 +10,7 @@ const STORAGE_KEYS = {
 
 const DEFAULT_BRIDGE_URL = "https://integrations.madhushalasoftware.com/excise-import";
 const DEFAULT_EXCISE_LOGIN_URL = "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx";
-const ALLOWED_EXCISE_HOST = "excise.wb.gov.in";
+const ALLOWED_EXCISE_HOSTS = new Set(["excise.wb.gov.in", "eaabkari.mp.gov.in"]);
 
 function normalizeBaseUrl(value) {
   return String(value || DEFAULT_BRIDGE_URL).trim().replace(/\/+$/, "");
@@ -20,7 +20,7 @@ function normalizeExciseLoginUrl(value) {
   const raw = String(value || DEFAULT_EXCISE_LOGIN_URL).trim();
   try {
     const url = new URL(raw);
-    if (url.protocol !== "https:" || url.hostname.toLowerCase() !== ALLOWED_EXCISE_HOST) return "";
+    if (url.protocol !== "https:" || !ALLOWED_EXCISE_HOSTS.has(url.hostname.toLowerCase())) return "";
     return url.href;
   } catch {
     return "";
@@ -68,7 +68,7 @@ async function saveSettings(payload = {}) {
   const updates = {};
   if ("exciseLoginUrl" in payload) {
     const url = normalizeExciseLoginUrl(payload.exciseLoginUrl);
-    if (!url) throw new Error("Excise login URL must be https://excise.wb.gov.in/...");
+    if (!url) throw new Error("Excise login URL must be a configured WB or MP Excise portal.");
     updates[STORAGE_KEYS.exciseLoginUrl] = url;
   }
   if ("exciseUser" in payload) updates[STORAGE_KEYS.exciseUser] = String(payload.exciseUser || "").trim();
@@ -90,10 +90,13 @@ async function apiError(response) {
   } catch {
     body = {};
   }
+  const detail = typeof body.detail === "object" && body.detail
+    ? (body.detail.message || body.detail.error || JSON.stringify(body.detail))
+    : body.detail;
   if (response.status === 401 || response.status === 403) {
-    return new Error(body.detail || "CRM session expired. Open import from CRM again.");
+    return new Error(detail || "CRM session expired. Open import from CRM again.");
   }
-  return new Error(body.detail || body.error || `Server returned HTTP ${response.status}`);
+  return new Error(detail || body.error || `Server returned HTTP ${response.status}`);
 }
 
 async function postCapture(items, pageUrl, capturedAt) {
@@ -116,8 +119,10 @@ async function postCapture(items, pageUrl, capturedAt) {
 }
 
 function fillExciseLogin(credentials) {
-  if (location.hostname.toLowerCase() !== "excise.wb.gov.in") {
-    return {userFilled: false, passwordFilled: false, blocked: "unexpected_host"};
+  const host = location.hostname.toLowerCase();
+  const allowedHosts = new Set(["excise.wb.gov.in", "eaabkari.mp.gov.in"]);
+  if (!allowedHosts.has(host)) {
+    return {userFilled: false, passwordFilled: false, submitted: false, blocked: "unexpected_host"};
   }
 
   function visibleInput(selectors) {
@@ -139,21 +144,58 @@ function fillExciseLogin(credentials) {
   }
 
   const user = visibleInput([
-    'input[type="text"]',
+    'input[name*="UserName" i]',
+    'input[id*="UserName" i]',
     'input[name*="User" i]',
     'input[id*="User" i]',
     'input[name*="Login" i]',
     'input[id*="Login" i]',
+    'input[name*="userid" i]',
+    'input[id*="userid" i]',
+    'input[type="text"]',
   ]);
   const password = visibleInput([
     'input[type="password"]',
     'input[name*="Password" i]',
     'input[id*="Password" i]',
+    'input[name*="pwd" i]',
+    'input[id*="pwd" i]',
   ]);
 
+  const userFilled = setNativeValue(user, credentials.exciseUser);
+  const passwordFilled = setNativeValue(password, credentials.excisePassword);
+
+  const captcha = visibleInput([
+    'input[name*="captcha" i]',
+    'input[id*="captcha" i]',
+    'input[name*="capcha" i]',
+    'input[id*="capcha" i]',
+    'input[name*="verification" i]',
+    'input[id*="verification" i]',
+  ]);
+
+  let submitted = false;
+  if (userFilled && passwordFilled && !captcha) {
+    const candidates = Array.from(document.querySelectorAll(
+      'button[type="submit"], input[type="submit"], button, input[type="button"]'
+    ));
+    const loginButton = candidates.find((element) => {
+      if (element.offsetParent === null) return false;
+      const text = String(element.textContent || element.value || "").trim().toLowerCase();
+      return text === "login" || text === "log in" || text === "sign in" || text.includes("login");
+    });
+    if (loginButton) {
+      loginButton.click();
+      submitted = true;
+    }
+  }
+
   return {
-    userFilled: setNativeValue(user, credentials.exciseUser),
-    passwordFilled: setNativeValue(password, credentials.excisePassword),
+    state: credentials.state || "",
+    userFilled,
+    passwordFilled,
+    captchaRequired: Boolean(captcha),
+    submitted,
   };
 }
 
@@ -168,33 +210,73 @@ async function waitForTabComplete(tabId) {
 async function tryFillExciseLogin(tabId, credentials) {
   try {
     await waitForTabComplete(tabId);
-    const [{result}] = await chrome.scripting.executeScript({
-      target: {tabId},
-      func: fillExciseLogin,
-      args: [credentials],
-    });
-    return result || {};
+    let latest = {};
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const [{result}] = await chrome.scripting.executeScript({
+        target: {tabId},
+        func: fillExciseLogin,
+        args: [credentials],
+      });
+      latest = result || {};
+      if (latest.userFilled && latest.passwordFilled) return latest;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return latest;
   } catch (error) {
     console.warn("Excise login autofill skipped", error);
     return {warning: error?.message || "Excise login autofill skipped"};
   }
 }
 
+async function loadPortalBootstrap(settings) {
+  const response = await fetch(buildUrl(settings.bridgeUrl, "/portal/bootstrap"), {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${settings.sessionToken}`,
+      "Accept": "application/json",
+    },
+  });
+  if (!response.ok) throw await apiError(response);
+  return response.json();
+}
+
 async function openPortal() {
   const settings = await getSettings();
   requireSession(settings);
-  if (!settings.exciseLoginUrl || !settings.exciseUser || !settings.excisePassword) {
-    return {status: "needs_credentials"};
+
+  const portal = await loadPortalBootstrap(settings);
+  const exciseLoginUrl = normalizeExciseLoginUrl(portal.exciseLoginUrl);
+  const exciseUser = String(portal.exciseUserId || "").trim();
+  const excisePassword = String(portal.excisePassword || "");
+  const state = String(portal.state || "").trim();
+
+  if (!exciseLoginUrl) {
+    throw new Error(`No supported Excise portal is configured for ${state || "this state"}.`);
+  }
+  if (!exciseUser || !excisePassword) {
+    throw new Error("Excise User ID or password is missing in Madhushala Company Master.");
   }
 
-  const tab = await chrome.tabs.create({url: settings.exciseLoginUrl, active: true});
+  const tab = await chrome.tabs.create({url: exciseLoginUrl, active: true});
+  let login = {};
   if (tab?.id) {
-    tryFillExciseLogin(tab.id, {
-      exciseUser: settings.exciseUser,
-      excisePassword: settings.excisePassword,
+    login = await tryFillExciseLogin(tab.id, {
+      state,
+      exciseUser,
+      excisePassword,
     });
   }
-  return {status: "opened", tabId: tab?.id, message: "Excise portal opened. Autofill will run when the login page is ready."};
+  return {
+    status: "opened",
+    state,
+    tabId: tab?.id,
+    login,
+    message: login?.captchaRequired
+      ? `${state} Excise opened and credentials were filled. Complete CAPTCHA to continue.`
+      : (login?.submitted
+          ? `${state} Excise login was submitted automatically.`
+          : `${state} Excise opened and credentials were filled.`),
+  };
 }
 
 async function focusMappingWorkspace(settings) {

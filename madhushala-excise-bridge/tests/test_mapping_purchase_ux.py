@@ -222,3 +222,23 @@ def test_mapping_management_uses_official_excise_master_and_table_ui():
     assert "management-map-head" in script
     assert "management-item-select" in script
     assert 'submit.textContent = "Save"' in script
+
+
+def test_state_aware_excise_login_bootstrap_supports_wb_and_mp():
+    main = Path("app/main.py").read_text(encoding="utf-8")
+    client = Path("app/integrations/madhushala/client.py").read_text(encoding="utf-8")
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+    extension = Path("extension/background.js").read_text(encoding="utf-8")
+
+    assert 'f"/api/company-mast/{safe_company_code}"' in client
+    assert 'params={"shopCode": self.shop_code}' in client
+    assert '"WEST BENGAL": "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx"' in main
+    assert '"MADHYA PRADESH": "https://eaabkari.mp.gov.in/"' in main
+    assert '@app.get("/portal/bootstrap")' in main
+    assert 'company.get("exciseUserId")' in main
+    assert 'company.get("excisePassword")' in main
+    assert 'const portal = await api("/portal/bootstrap");' in runtime
+    assert 'extensionRequest("OPEN_PORTAL", {}, 30000)' in runtime
+    assert 'loadPortalBootstrap(settings)' in extension
+    assert '"eaabkari.mp.gov.in"' in extension
+    assert 'captchaRequired: Boolean(captcha)' in extension

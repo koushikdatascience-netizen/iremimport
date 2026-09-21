@@ -69,6 +69,24 @@ PAGE_END_SCRIPTS = (
     f'<script src="./static/mapping-row-identity.js?v={STATIC_ASSET_VERSION}"></script>',
 )
 
+EXCISE_PORTALS = {
+    "WEST BENGAL": "https://excise.wb.gov.in/WBSBCL/Bevco/NIC/UserLogin/Login.aspx",
+    "MADHYA PRADESH": "https://eaabkari.mp.gov.in/",
+}
+EXCISE_STATE_ALIASES = {
+    "WB": "WEST BENGAL",
+    "WESTBENGAL": "WEST BENGAL",
+    "WEST BENGAL": "WEST BENGAL",
+    "MP": "MADHYA PRADESH",
+    "MADHYAPRADESH": "MADHYA PRADESH",
+    "MADHYA PRADESH": "MADHYA PRADESH",
+}
+
+
+def normalize_excise_state(value: str | None) -> str:
+    raw = " ".join(str(value or "").strip().upper().replace("_", " ").split())
+    return EXCISE_STATE_ALIASES.get(raw, raw)
+
 
 def _inject_missing_scripts(html: str, scripts: tuple[str, ...], marker: str) -> str:
     missing = [
@@ -471,6 +489,54 @@ async def session_status(request: Request):
         "state": session["state"],
         "hasCapture": bool(capture),
         "expiresAt": session["expires_at"],
+    }
+
+
+@app.get("/portal/bootstrap")
+async def portal_bootstrap(request: Request):
+    """Resolve the current company's Excise state, credentials and login portal."""
+    session = session_service.from_request(request)
+    client = MadhushalaClient(
+        settings.MADHUSHALA_BASE_URL,
+        session["shop_code"],
+        session.get("madhushala_token") or settings.MADHUSHALA_SERVICE_TOKEN,
+    )
+    try:
+        company = await client.get_company_master(session["company_code"])
+    except MadhushalaApiError as exc:
+        handle_madhushala_error(exc)
+
+    state = normalize_excise_state(company.get("state"))
+    login_url = EXCISE_PORTALS.get(state)
+    user_id = str(company.get("exciseUserId") or "").strip()
+    password = str(company.get("excisePassword") or "")
+
+    if not login_url:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "EXCISE_STATE_NOT_SUPPORTED",
+                "message": f"Excise login automation is not configured for state '{state or 'UNKNOWN'}'.",
+                "state": state,
+            },
+        )
+    if not user_id or not password:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "EXCISE_CREDENTIALS_MISSING",
+                "message": "Excise User ID or password is missing in Company Master.",
+                "state": state,
+            },
+        )
+
+    return {
+        "companyCode": str(company.get("companyCode") or session["company_code"]),
+        "companyName": str(company.get("companyName") or ""),
+        "state": state,
+        "exciseLoginUrl": login_url,
+        "exciseUserId": user_id,
+        "excisePassword": password,
     }
 
 
