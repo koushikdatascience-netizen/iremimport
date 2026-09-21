@@ -426,9 +426,9 @@
     };
 
     startMappingAutoRefresh = function startStableMappingAutoRefresh() {
-        // Document mappings are changed by this page itself, so polling every three
-        // seconds only causes UI churn and can interfere with search typing.
-        if (sanitizeJobId(currentDocumentJobId)) return;
+        // Document and management mappings are changed by this page itself, so
+        // polling every three seconds only causes UI churn and expensive catalogue reloads.
+        if (mappingManagementMode || sanitizeJobId(currentDocumentJobId)) return;
         if (mappingRefreshTimer) return;
         mappingRefreshTimer = window.setInterval(async () => {
             const search = document.getElementById("madhushala-search");
@@ -591,6 +591,13 @@
                 gap: 6px !important;
                 padding: 0 !important;
                 margin: 0 !important;
+            }
+            body.mapping-management-mode #mapping-view .mapping-layout {
+                flex: 1 1 0 !important;
+                height: auto !important;
+            }
+            body.mapping-management-mode #mapping-management-toolbar {
+                flex: 0 0 auto !important;
             }
             body.mapping-mode #mapping-view .unmapped-list,
             body.mapping-mode #mapping-view .mapper {
