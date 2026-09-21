@@ -7,7 +7,7 @@ from app import main
 
 def test_mapping_page_loads_row_identity_fix_after_inline_app_script():
     html = main.index_html()
-    marker = '<script src="./static/mapping-row-identity.js?v=20260921-fast-mapping-workspace-v18"></script>'
+    marker = '<script src="./static/mapping-row-identity.js?v=20260921-deferred-item-master-v19"></script>'
     assert marker in html
     assert html.index(marker) > html.rfind("</script>", 0, html.index(marker))
 
