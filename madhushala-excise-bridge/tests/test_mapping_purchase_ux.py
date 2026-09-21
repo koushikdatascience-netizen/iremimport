@@ -303,3 +303,17 @@ def test_mapping_handoff_never_requires_purchase_masters_before_redirect():
     assert "collectPurchaseHeader" not in handoff
     assert "__purchaseContext" not in handoff
     assert 'if (!isDocumentImport || isMappingView) return;' in context_script
+
+
+def test_portal_bootstrap_returns_diagnostics_without_422_loading_lock():
+    main = Path("app/main.py").read_text(encoding="utf-8")
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+
+    assert '"ready": False' in main
+    assert '"EXCISE_STATE_NOT_SUPPORTED"' in main
+    assert '"EXCISE_CREDENTIALS_MISSING"' in main
+    assert 'response["error"] =' in main
+    assert 'return response' in main
+    assert 'if (portal.ready === false)' in runtime
+    assert 'url.value = portal.exciseLoginUrl || "Not configured"' in runtime
+    assert 'openButton.disabled = portal.ready === false' in runtime
