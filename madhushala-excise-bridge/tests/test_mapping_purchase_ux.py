@@ -402,11 +402,16 @@ def test_mapping_workspace_shows_modern_loading_overlay():
 def test_portal_mapping_status_uses_targeted_authoritative_probe():
     service = Path("app/services/mapping_service.py").read_text(encoding="utf-8")
 
-    assert "unmapped = await client.get_unmapped_items()" in service
-    assert "await client.get_excise_items(code)" in service
-    assert 'if str(remote.get("mappedItemCode") or "").strip()' not in service
-    assert "authoritative_by_code" in service
-    assert '"mappingPendingSync": True' in service
+    portal_section = service.split(
+        "# For portal import this is intentionally AFTER ExciseItemMasterSave.", 1
+    )[1].split("rows: list[dict[str, Any]] = []", 1)[0]
+
+    assert "unmapped = await client.get_unmapped_items()" in portal_section
+    assert "await client.get_excise_items(code)" in portal_section
+    assert "authoritative_by_code" in portal_section
+    assert 'if str(remote.get("mappedItemCode") or "").strip()' in portal_section
+    assert '"mappingPendingSync": True' in portal_section
+    assert "excise_master = await client.get_excise_items()" not in portal_section
 
 
 def test_mapping_workspace_has_hard_timeout_and_targeted_latest_status_probe():
