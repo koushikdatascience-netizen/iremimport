@@ -184,3 +184,27 @@ def test_extension_focuses_mapping_workspace_after_portal_capture():
     assert "result?.mappingStatus?.mappingRequired" in background
     assert "result.mappingNavigation = await focusMappingWorkspace(settings)" in background
     assert "https://integrations.madhushalasoftware.com/*" in manifest
+
+
+def test_mapping_management_entrypoint_and_filters_are_available():
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+    enhancer = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    service = Path("app/services/mapping_service.py").read_text(encoding="utf-8")
+    main = Path("app/main.py").read_text(encoding="utf-8")
+
+    assert 'id="manage-mappings"' in runtime
+    assert 'view=mapping&manage=1' in runtime
+    assert 'id="mapping-management-toolbar"' in runtime
+    assert 'data-mapping-filter="all"' in runtime
+    assert 'data-mapping-filter="unmapped"' in runtime
+    assert 'data-mapping-filter="mapped"' in runtime
+
+    assert 'mappingManagementMode ? "?latestOnly=false&includeMapped=true"' in runtime
+    assert 'mappingManagementMode ? "?latestOnly=false&includeMapped=true"' in enhancer
+    assert 'function filteredManagementRows()' in enhancer
+    assert 'Change / Re-map' in enhancer
+
+    assert 'include_mapped: bool = False' in service
+    assert 'set(remote_by_code) | set(imported_by_code) | set(mapped_by_code)' in service
+    assert '"mappingStatus": "MAPPED" if mapped_code else "UNMAPPED"' in service
+    assert 'includeMapped: bool = False' in main
