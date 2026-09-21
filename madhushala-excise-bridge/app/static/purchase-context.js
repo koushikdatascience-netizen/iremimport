@@ -456,11 +456,10 @@
         ensureValidationStyle();
         [
             ["review", "save-purchase"],
-            ["mapping", "save-purchase-from-mapping"],
         ].forEach(([source, saveId]) => {
             const save = document.getElementById(saveId);
             if (!save) return;
-            const suffix = source === "mapping" ? "mapping" : "review";
+            const suffix = "review";
             if (purchaseReviewMode && source === "review") {
                 // Final Purchase Bill validates automatically in the background
                 // and again at Save time. Do not render a separate Validate button.
