@@ -351,3 +351,18 @@ def test_extension_bridge_supports_embedded_excise_import_and_handshake_retry():
     assert 'type: "DISCOVER"' in runtime
     assert "const found = await discoverExtension();" in runtime
     assert "not available on this page" in runtime
+
+
+def test_mapping_management_item_picker_is_searchable():
+    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    manifest = Path("extension/manifest.json").read_text(encoding="utf-8")
+
+    assert 'class="management-item-search"' in script
+    assert 'list="management-item-options"' in script
+    assert 'placeholder="Search item code or name"' in script
+    assert "function ensureManagementItemDatalist()" in script
+    assert "function managementCodeFromSearchValue(value)" in script
+    assert 'input.addEventListener("change", commit)' in script
+    assert '"version": "1.4.2"' in manifest
+    assert '"all_frames": true' in manifest
+    assert '"match_origin_as_fallback": true' in manifest
