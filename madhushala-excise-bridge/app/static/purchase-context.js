@@ -684,8 +684,7 @@
         if (initialized) return;
         const isDocumentImport = window.location.pathname.endsWith("/document-import");
         const isMappingView = pageParams.get("view") === "mapping";
-        const isDocumentMappingView = isMappingView && Boolean(clean(pageParams.get("jobId")));
-        if (!isDocumentImport && !isDocumentMappingView) return;
+        if (!isDocumentImport || isMappingView) return;
         initialized = true;
 
         ensureSchemeField();
