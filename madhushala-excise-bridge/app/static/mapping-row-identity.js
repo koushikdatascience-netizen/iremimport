@@ -914,7 +914,7 @@
             .management-map-head {
                 position: sticky;
                 top: 0;
-                z-index: 3;
+                z-index: 100;
                 background: #ffd400;
                 color: #171717;
                 font-size: 12px;
