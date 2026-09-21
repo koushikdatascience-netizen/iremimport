@@ -412,6 +412,60 @@ button.secondary:hover {
     color: var(--brand);
 }
 
+.mapping-shell {
+    position: relative;
+}
+
+.mapping-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 35;
+    display: grid;
+    place-items: center;
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(3px);
+}
+
+.mapping-loading-overlay[hidden] {
+    display: none;
+}
+
+.mapping-loading-card {
+    min-width: 190px;
+    display: grid;
+    place-items: center;
+    gap: 12px;
+    padding: 22px 28px;
+    border: 1px solid rgba(224, 168, 0, 0.28);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 18px 48px rgba(63, 48, 0, 0.16);
+    color: #473700;
+    font-weight: 900;
+    letter-spacing: .01em;
+}
+
+.mapping-loading-spinner {
+    width: 42px;
+    height: 42px;
+    border: 4px solid rgba(255, 193, 7, 0.22);
+    border-top-color: #ffc107;
+    border-right-color: #f5a800;
+    border-radius: 50%;
+    animation: mapping-spin .72s linear infinite;
+    filter: drop-shadow(0 4px 8px rgba(255, 193, 7, .22));
+}
+
+.mapping-loading-card small {
+    color: #8a6d00;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+@keyframes mapping-spin {
+    to { transform: rotate(360deg); }
+}
+
 .mapping-layout {
     min-height: 0;
     display: grid;
@@ -3036,6 +3090,13 @@ body.document-viewer-open {
     </main>
 
     <main id="mapping-view" class="mapping-shell" hidden>
+        <div id="mapping-loading-overlay" class="mapping-loading-overlay" hidden aria-live="polite" aria-busy="true">
+            <div class="mapping-loading-card">
+                <span class="mapping-loading-spinner" aria-hidden="true"></span>
+                <strong>Loading item mappings</strong>
+                <small>Preparing Excise and Item Master data…</small>
+            </div>
+        </div>
         <header id="mapping-management-toolbar" class="mapping-management-toolbar" hidden>
             <div>
                 <span class="app-kicker">Excise ↔ Madhushala</span>
@@ -3912,12 +3973,27 @@ function updateSummary() {
     if (submit) submit.disabled = selectedMappings.size === 0;
 }
 
+function setMappingLoading(loading, message = "Loading item mappings") {
+    const overlay = document.getElementById("mapping-loading-overlay");
+    if (!overlay) return;
+    overlay.hidden = !loading;
+    const title = overlay.querySelector("strong");
+    if (title && message) title.textContent = message;
+}
+
 async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
     const normalizedJobId = sanitizeJobId(isEventLike(jobId) ? "" : jobId || currentDocumentJobId);
     const preserveState = options.preserveState !== false;
     const previousSelected = preserveState ? selectedExciseCode : null;
     const search = document.getElementById("madhushala-search");
     const previousSearch = preserveState ? search?.value || "" : "";
+    const showLoading = !options.quiet;
+    if (showLoading) {
+        setMappingLoading(
+            true,
+            mappingManagementMode ? "Loading Item Map Master" : "Loading item mappings",
+        );
+    }
     try {
         const query = normalizedJobId
             ? `?jobId=${encodeURIComponent(normalizedJobId)}`
@@ -3931,6 +4007,8 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
         if (previousSearch) runSearch();
     } catch (error) {
         if (!options.quiet) showToast(error.message || "Could not load mapping", "error");
+    } finally {
+        if (showLoading) setMappingLoading(false);
     }
 }
 
