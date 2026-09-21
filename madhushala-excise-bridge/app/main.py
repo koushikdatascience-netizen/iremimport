@@ -499,7 +499,7 @@ async def portal_bootstrap(request: Request):
     client = MadhushalaClient(
         settings.MADHUSHALA_BASE_URL,
         session["shop_code"],
-        session.get("access_token") or settings.MADHUSHALA_SERVICE_TOKEN,
+        session.get("madhushala_token") or settings.MADHUSHALA_SERVICE_TOKEN,
     )
     try:
         company = await client.get_company_master(session["company_code"])
