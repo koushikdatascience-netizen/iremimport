@@ -4,17 +4,16 @@ This extension moves the Excise portal browser work to the user's own Chrome bro
 
 ## Operator Flow
 
-1. Open the bridge UI and click `Open Excise Portal`.
-2. On first use only, enter the separate BEVCO/WB Excise User ID and password.
-3. Enter CAPTCHA and log in.
-4. Go to Prepare Indent.
-5. Type case quantities in the rows that should be imported.
-6. The extension automatically saves the entered rows after input settles.
-7. If matching is required, the mapping workspace opens automatically.
+1. Open Excise Import from Madhushala CRM and click `Open Excise Portal`.
+2. The bridge loads the current Company Master, including state and Excise credentials.
+3. WB opens the West Bengal Excise login; MP opens eAabgari.
+4. The extension fills the Excise User ID and password automatically. If CAPTCHA is present, complete it manually.
+5. WB capture/import continues with the existing Prepare Indent workflow. MP is login-only in this release.
+6. If WB matching is required, the mapping workspace opens automatically.
 
 The extension captures only rows with a positive case quantity. Checkbox-only rows are ignored. The Madhushala API token is configured on the backend and is not requested from operators.
 
-To replace an incorrect or expired Excise login, open the extension popup and choose `Change Saved Excise Login`; the next portal launch shows the one-time credential prompt again.
+Excise credentials are not entered manually in the extension. Update `exciseUserId` / `excisePassword` in Madhushala Company Master and relaunch the portal.
 
 ## Install for Testing
 
