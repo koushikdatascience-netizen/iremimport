@@ -417,13 +417,13 @@ button.secondary:hover {
 }
 
 .mapping-loading-overlay {
-    position: absolute;
+    position: fixed;
     inset: 0;
-    z-index: 35;
+    z-index: 2147483000;
     display: grid;
     place-items: center;
-    background: rgba(255, 255, 255, 0.72);
-    backdrop-filter: blur(3px);
+    background: rgba(255, 255, 255, 0.84);
+    backdrop-filter: blur(5px);
 }
 
 .mapping-loading-overlay[hidden] {
@@ -431,11 +431,11 @@ button.secondary:hover {
 }
 
 .mapping-loading-card {
-    min-width: 190px;
+    min-width: 240px;
     display: grid;
     place-items: center;
-    gap: 12px;
-    padding: 22px 28px;
+    gap: 14px;
+    padding: 28px 34px;
     border: 1px solid rgba(224, 168, 0, 0.28);
     border-radius: 14px;
     background: rgba(255, 255, 255, 0.96);
@@ -446,8 +446,8 @@ button.secondary:hover {
 }
 
 .mapping-loading-spinner {
-    width: 42px;
-    height: 42px;
+    width: 54px;
+    height: 54px;
     border: 4px solid rgba(255, 193, 7, 0.22);
     border-top-color: #ffc107;
     border-right-color: #f5a800;
@@ -4001,7 +4001,7 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
     const previousSearch = preserveState ? search?.value || "" : "";
     const showLoading = !options.quiet;
     const loadingStartedAt = showLoading ? performance.now() : 0;
-    const minimumLoadingMs = 650;
+    const minimumLoadingMs = 1000;
     if (showLoading) {
         setMappingLoading(
             true,
@@ -4085,11 +4085,18 @@ function initMapping() {
     setHidden(document.getElementById("mapping-view"), false);
     setHidden(document.getElementById("mapping-management-toolbar"), !mappingManagementMode);
     setHidden(document.getElementById("save-purchase-from-mapping"), mappingManagementMode || !sanitizeJobId(currentDocumentJobId));
+    setMappingLoading(
+        true,
+        mappingManagementMode ? "Loading Item Map Master" : "Loading item mappings",
+    );
     if (!sessionToken) {
+        setMappingLoading(false);
         showToast("Invalid or missing CRM session.", "error");
         return;
     }
-    void loadWorkspace(currentDocumentJobId, {preserveState: false});
+    window.setTimeout(() => {
+        void loadWorkspace(currentDocumentJobId, {preserveState: false});
+    }, 0);
     startMappingAutoRefresh();
 }
 

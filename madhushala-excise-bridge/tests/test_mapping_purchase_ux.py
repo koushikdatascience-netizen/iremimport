@@ -151,7 +151,7 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260921-visible-mapping-loader-v15"' in main
+    assert 'STATIC_ASSET_VERSION = "20260921-forced-inline-mapping-v16"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
 
@@ -189,7 +189,11 @@ def test_extension_keeps_mapping_in_existing_bridge_page_after_portal_capture():
     )[0]
     assert "chrome.tabs.create" not in focus
     assert "chrome.tabs.update" not in focus
-    assert '"version": "1.4.4"' in manifest
+    assert "async function closeStandaloneMappingTabs(settings)" in background
+    assert "await chrome.tabs.remove(ids)" in background
+    assert "setTimeout(() => { void closeStandaloneMappingTabs(settings); }, 700);" in background
+    assert "setTimeout(() => { void closeStandaloneMappingTabs(settings); }, 1800);" in background
+    assert '"version": "1.4.5"' in manifest
     assert "https://integrations.madhushalasoftware.com/*" in manifest
 
 
@@ -353,7 +357,7 @@ def test_extension_bridge_supports_embedded_excise_import_and_handshake_retry():
     manifest = Path("extension/manifest.json").read_text(encoding="utf-8")
     runtime = Path("app/static/index.html").read_text(encoding="utf-8")
 
-    assert '"version": "1.4.4"' in manifest
+    assert '"version": "1.4.5"' in manifest
     assert '"all_frames": true' in manifest
     assert "function discoverExtension(timeoutMs = 2500)" in runtime
     assert 'type: "DISCOVER"' in runtime
@@ -372,7 +376,7 @@ def test_mapping_management_item_picker_is_searchable():
     assert "function renderManagementPickerResults(input, results, query = \"\")" in script
     assert 'input.addEventListener("input"' in script
     assert 'data-item-code=' in script
-    assert '"version": "1.4.4"' in manifest
+    assert '"version": "1.4.5"' in manifest
     assert '"all_frames": true' in manifest
     assert '"match_origin_as_fallback": true' in manifest
     assert '"https://report.madhushalasoftware.com/*"' in manifest
@@ -387,8 +391,10 @@ def test_mapping_workspace_shows_modern_loading_overlay():
     assert "function setMappingLoading(loading" in runtime
     assert 'list.className = "list-body mapping-inline-loading"' in runtime
     assert "mapping-inline-loading-card" in runtime
+    assert "position: fixed;" in runtime
+    assert "z-index: 2147483000;" in runtime
     assert "Fetching Excise items and Item Master" in runtime
-    assert "minimumLoadingMs = 650" in runtime
+    assert "minimumLoadingMs = 1000" in runtime
     assert "requestAnimationFrame(() => requestAnimationFrame(resolve))" in runtime
     assert "setMappingLoading(false);" in runtime
     assert "@keyframes mapping-spin" in runtime
