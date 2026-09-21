@@ -268,6 +268,20 @@ class MadhushalaClient:
             headers=headers,
         )
 
+    async def get_excise_items(self, search: str = "") -> list[dict[str, Any]]:
+        """Return the authoritative Excise↔software mapping master for this shop."""
+        params: dict[str, Any] = {"shopCode": self.shop_code}
+        safe_search = str(search or "").strip()
+        if safe_search:
+            params["search"] = safe_search
+        data = await self._request(
+            "GET",
+            "/api/excise-import/excise-items",
+            params=params,
+            headers=self._auth_headers("*/*"),
+        )
+        return [row for row in self._list_payload(data, "items", "exciseItems") if isinstance(row, dict)]
+
     async def get_unmapped_items(self) -> list[dict[str, Any]]:
         return await self._request(
             "GET",
