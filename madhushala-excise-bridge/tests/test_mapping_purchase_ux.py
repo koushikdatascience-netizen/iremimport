@@ -205,6 +205,20 @@ def test_mapping_management_entrypoint_and_filters_are_available():
     assert 'Change / Re-map' in enhancer
 
     assert 'include_mapped: bool = False' in service
-    assert 'set(remote_by_code) | set(imported_by_code) | set(mapped_by_code)' in service
+    assert 'excise_items = await client.get_excise_items()' in service
     assert '"mappingStatus": "MAPPED" if mapped_code else "UNMAPPED"' in service
     assert 'includeMapped: bool = False' in main
+
+
+def test_mapping_management_uses_official_excise_master_and_table_ui():
+    client = Path("app/integrations/madhushala/client.py").read_text(encoding="utf-8")
+    service = Path("app/services/mapping_service.py").read_text(encoding="utf-8")
+    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+
+    assert '"/api/excise-import/excise-items"' in client
+    assert "excise_items = await client.get_excise_items()" in service
+    assert 'remote.get("mappedItemCode")' in service
+    assert 'remote.get("mappedItemName")' in service
+    assert "management-map-head" in script
+    assert "management-item-select" in script
+    assert 'submit.textContent = "Save"' in script
