@@ -266,40 +266,74 @@
         return itemLabel(candidate);
     }
 
-    function ensureManagementItemDatalist() {
-        let datalist = document.getElementById("management-item-options");
-        if (!datalist) {
-            datalist = document.createElement("datalist");
-            datalist.id = "management-item-options";
-            document.body.appendChild(datalist);
-        }
-        if (datalist.dataset.loaded === "1") return datalist;
+    function managementSearchResults(query, limit = 12) {
+        const clean = normalizeSearchText(query);
+        const compact = clean.replace(/\s/g, "");
+        const rows = (workspace.madhushalaItems || []).map((candidate) => {
+            const code = String(candidate.itemCode || "").trim();
+            const name = String(candidate.itemName || "").trim();
+            const label = managementItemSearchValue(candidate);
+            const codeNorm = normalizeSearchText(code);
+            const nameNorm = normalizeSearchText(name);
+            const labelNorm = normalizeSearchText(label);
+            let score = 0;
 
-        datalist.innerHTML = (workspace.madhushalaItems || [])
-            .map((candidate) => {
-                const code = String(candidate.itemCode || "").trim();
-                if (!code) return "";
-                const label = managementItemSearchValue(candidate);
-                return `<option value="${escapeHtml(label)}" data-code="${escapeHtml(code)}"></option>`;
-            })
-            .join("");
-        datalist.dataset.loaded = "1";
-        return datalist;
+            if (!clean) score = 1;
+            else {
+                if (codeNorm === clean) score += 140;
+                if (codeNorm.startsWith(clean)) score += 110;
+                if (nameNorm.startsWith(clean)) score += 100;
+                if (labelNorm.startsWith(clean)) score += 90;
+                if (nameNorm.includes(clean)) score += 65;
+                if (labelNorm.includes(clean)) score += 55;
+                if (compact && nameNorm.replace(/\s/g, "").includes(compact)) score += 45;
+            }
+            return {candidate, score};
+        }).filter((entry) => entry.score > 0);
+
+        rows.sort((left, right) => right.score - left.score
+            || managementItemSearchValue(left.candidate).localeCompare(managementItemSearchValue(right.candidate)));
+        return rows.slice(0, limit).map((entry) => entry.candidate);
     }
 
-    function managementCodeFromSearchValue(value) {
-        const query = String(value || "").trim();
-        if (!query) return "";
-        const direct = findMadhushalaItem(query);
-        if (direct?.itemCode) return String(direct.itemCode);
-
-        const lowered = query.toLowerCase();
-        const exact = (workspace.madhushalaItems || []).find((candidate) => {
-            const code = String(candidate.itemCode || "").trim();
-            const label = managementItemSearchValue(candidate);
-            return code.toLowerCase() === lowered || label.toLowerCase() === lowered;
+    function closeManagementPicker(except = null) {
+        document.querySelectorAll(".management-search-results.open").forEach((results) => {
+            if (results !== except) results.classList.remove("open");
         });
-        return String(exact?.itemCode || "");
+    }
+
+    function renderManagementPickerResults(input, results, query = "") {
+        if (!input || !results) return;
+        const matches = managementSearchResults(query);
+        if (!matches.length) {
+            results.innerHTML = '<div class="management-search-empty">No matching Item Master item</div>';
+            results.classList.add("open");
+            return;
+        }
+
+        results.innerHTML = matches.map((candidate) => {
+            const code = String(candidate.itemCode || "").trim();
+            const name = String(candidate.itemName || "").trim();
+            const ml = candidate.ml ? ` · ${escapeHtml(String(candidate.ml))} ML` : "";
+            return `
+                <button type="button" class="management-search-option" data-item-code="${escapeHtml(code)}">
+                    <strong>${escapeHtml(code)}</strong>
+                    <span>${escapeHtml(name)}${ml}</span>
+                </button>`;
+        }).join("");
+        results.classList.add("open");
+
+        results.querySelectorAll("[data-item-code]").forEach((button) => {
+            button.addEventListener("mousedown", (event) => {
+                event.preventDefault();
+                const code = String(button.dataset.itemCode || "").trim();
+                if (!code) return;
+                input.dataset.chosenCode = code;
+                input.value = managementItemSearchValue(findMadhushalaItem(code) || {itemCode: code, itemName: ""});
+                results.classList.remove("open");
+                input.dispatchEvent(new CustomEvent("mapping-item-selected", {detail: {itemCode: code}}));
+            });
+        });
     }
 
     function renderManagementTable(rows) {
@@ -335,47 +369,71 @@
                             <small>Code: ${escapeHtml(String(item.exciseItemCode ?? ""))}</small>
                         </div>
                         <div class="management-master-cell" role="cell">
-                            <input
-                                class="management-item-search"
-                                data-row-key="${escapeHtml(rowKey)}"
-                                data-current-code="${escapeHtml(effectiveCode)}"
-                                list="management-item-options"
-                                value="${escapeHtml(selectedLabel)}"
-                                placeholder="Search item code or name"
-                                autocomplete="off"
-                                aria-label="Search mapping for ${escapeHtml(item.itemName || "Excise item")}"
-                            >
+                            <div class="management-item-picker">
+                                <input
+                                    class="management-item-search"
+                                    data-row-key="${escapeHtml(rowKey)}"
+                                    data-current-code="${escapeHtml(effectiveCode)}"
+                                    data-chosen-code="${escapeHtml(effectiveCode)}"
+                                    value="${escapeHtml(selectedLabel)}"
+                                    placeholder="Search item code or name"
+                                    autocomplete="off"
+                                    aria-label="Search mapping for ${escapeHtml(item.itemName || "Excise item")}"
+                                >
+                                <div class="management-search-results" role="listbox"></div>
+                            </div>
                             ${changed ? '<span class="management-unsaved">Unsaved change</span>' : ""}
                         </div>
                     </div>`;
             }).join("")}`;
 
-        ensureManagementItemDatalist();
         list.querySelectorAll(".management-item-search").forEach((input) => {
             const rowKey = String(input.dataset.rowKey || "");
             const item = rowForKey(rowKey);
-            if (!item) return;
+            const picker = input.closest(".management-item-picker");
+            const results = picker?.querySelector(".management-search-results");
+            if (!item || !results) return;
 
-            const commit = () => {
-                const itemCode = managementCodeFromSearchValue(input.value);
-                if (!itemCode) {
-                    const currentCode = String(input.dataset.currentCode || "");
-                    const current = currentCode ? (findMadhushalaItem(currentCode) || mappedItemForRow(item)) : null;
-                    input.value = current ? itemLabel(current) : "Not mapped";
-                    return;
-                }
+            const applyCode = (itemCode) => {
+                const code = String(itemCode || "").trim();
+                if (!code) return;
                 selectedExciseCode = rowKey;
-                selectMadhushalaItem(itemCode);
+                input.dataset.chosenCode = code;
+                selectMadhushalaItem(code);
             };
 
-            input.addEventListener("change", commit);
+            input.addEventListener("focus", () => {
+                closeManagementPicker(results);
+                input.select();
+                renderManagementPickerResults(input, results, "");
+            });
+            input.addEventListener("input", () => {
+                input.dataset.chosenCode = "";
+                renderManagementPickerResults(input, results, input.value);
+            });
+            input.addEventListener("mapping-item-selected", (event) => {
+                applyCode(event.detail?.itemCode);
+            });
             input.addEventListener("keydown", (event) => {
+                if (event.key === "Escape") {
+                    results.classList.remove("open");
+                    input.blur();
+                    return;
+                }
                 if (event.key === "Enter") {
                     event.preventDefault();
-                    commit();
+                    const first = results.querySelector("[data-item-code]");
+                    if (first) first.dispatchEvent(new MouseEvent("mousedown", {bubbles: true}));
                 }
             });
-            input.addEventListener("focus", () => input.select());
+            input.addEventListener("blur", () => {
+                window.setTimeout(() => {
+                    results.classList.remove("open");
+                    const currentCode = String(input.dataset.chosenCode || input.dataset.currentCode || "");
+                    const current = currentCode ? (findMadhushalaItem(currentCode) || mappedItemForRow(item)) : null;
+                    input.value = current ? itemLabel(current) : "Not mapped";
+                }, 120);
+            });
         });
 
         const submit = document.getElementById("submit-mappings");
@@ -830,29 +888,95 @@
                 border-bottom: 1px solid #c4a900;
             }
             .management-map-row {
-                min-height: 35px;
+                min-height: 46px;
                 border-bottom: 1px solid #c8c8c8;
                 background: #dedede;
             }
             .management-map-row.changed {
                 background: #fff1ad;
             }
-            .management-excise-cell,
+            .management-excise-cell {
+                min-width: 0;
+                min-height: 46px;
+                padding: 6px 9px;
+                border-right: 1px solid #c8c8c8;
+                background: #fff;
+                color: #111827;
+            }
+            .management-item-picker {
+                position: relative;
+                flex: 1 1 auto;
+                min-width: 0;
+            }
             .management-item-search {
                 width: 100%;
                 min-width: 0;
-                height: 31px;
-                padding: 5px 9px;
-                border: 1px solid #bcc3cc;
+                height: 32px;
+                padding: 5px 30px 5px 9px;
+                border: 1px solid #aeb5be;
                 border-radius: 5px;
                 background: #fff;
                 color: #111827;
-                font: inherit;
-                font-size: 11px;
+                font: 11px Arial, Helvetica, sans-serif;
             }
             .management-item-search:focus {
-                outline: 2px solid rgba(31, 111, 235, .18);
-                border-color: #1f6feb;
+                outline: 2px solid rgba(255, 196, 0, .28);
+                border-color: #e6b400;
+            }
+            .management-item-picker::after {
+                content: "⌄";
+                position: absolute;
+                right: 9px;
+                top: 5px;
+                color: #555;
+                font-size: 16px;
+                pointer-events: none;
+            }
+            .management-search-results {
+                position: absolute;
+                left: 0;
+                right: 0;
+                top: calc(100% + 3px);
+                z-index: 60;
+                display: none;
+                max-height: 260px;
+                overflow: auto;
+                border: 1px solid #c9a900;
+                border-radius: 6px;
+                background: #fff;
+                box-shadow: 0 12px 28px rgba(0, 0, 0, .18);
+            }
+            .management-search-results.open {
+                display: block;
+            }
+            .management-search-option {
+                width: 100%;
+                min-height: 40px;
+                display: grid;
+                grid-template-columns: minmax(90px, 150px) 1fr;
+                gap: 8px;
+                align-items: center;
+                padding: 7px 9px;
+                border: 0;
+                border-bottom: 1px solid #ececec;
+                border-radius: 0;
+                background: #fff;
+                color: #181818;
+                text-align: left;
+            }
+            .management-search-option:hover {
+                background: #fff7c7;
+            }
+            .management-search-option strong,
+            .management-search-option span {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .management-search-empty {
+                padding: 11px;
+                color: #777;
+                font-size: 11px;
             }
             .management-master-cell {
                 min-width: 0;
@@ -863,14 +987,16 @@
                 display: flex;
                 flex-direction: column;
                 justify-content: center;
-                gap: 1px;
+                gap: 2px;
             }
             .management-excise-cell strong {
-                overflow: hidden;
-                font-size: 12px;
-                font-weight: 500;
-                text-overflow: ellipsis;
-                white-space: nowrap;
+                display: block;
+                overflow: visible;
+                font-size: 11px;
+                font-weight: 600;
+                line-height: 1.25;
+                white-space: normal;
+                overflow-wrap: anywhere;
             }
             .management-excise-cell small {
                 color: #676767;
@@ -880,21 +1006,6 @@
                 display: flex;
                 align-items: center;
                 gap: 7px;
-            }
-            .management-item-select {
-                width: 100%;
-                min-width: 0;
-                height: 27px;
-                padding: 0 28px 0 8px;
-                border: 1px solid #aeb2b6;
-                border-radius: 0;
-                background: #f1f1f1;
-                color: #202020;
-                font: 12px Arial, Helvetica, sans-serif;
-            }
-            .management-map-row.changed .management-item-select {
-                background: #fff8d5;
-                border-color: #ca9f00;
             }
             .management-unsaved {
                 flex: 0 0 auto;
