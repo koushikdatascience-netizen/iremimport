@@ -205,7 +205,7 @@
         }
         if (document.querySelector('script[data-mapping-purchase-context="true"]')) return;
         const script = document.createElement("script");
-        script.src = apiUrl("/static/purchase-context.js?v=20260921-deferred-item-master-v19");
+        script.src = apiUrl("/static/purchase-context.js?v=20260922-mapping-loader-v20");
         script.dataset.mappingPurchaseContext = "true";
         script.onload = () => window.__purchaseContext?.initialize?.();
         document.head.appendChild(script);
@@ -591,11 +591,27 @@
         const preserveState = options.preserveState !== false;
         const previousSelected = preserveState ? selectedExciseCode : null;
         const search = document.getElementById("madhushala-search");
+        const showLoading = !options.quiet;
+        const loadingStartedAt = showLoading ? performance.now() : 0;
+        const minimumLoadingMs = 1000;
+        if (showLoading) {
+            setMappingLoading(
+                true,
+                mappingManagementMode ? "Loading Item Map Master" : "Loading item mappings",
+            );
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        }
         try {
             const query = normalizedJobId
                 ? `?jobId=${encodeURIComponent(normalizedJobId)}`
                 : (mappingManagementMode ? "?latestOnly=false&includeMapped=true" : "?latestOnly=true");
-            workspace = await api(`/mapping/workspace${query}`);
+            const controller = new AbortController();
+            const workspaceTimeout = window.setTimeout(() => controller.abort(), 15000);
+            try {
+                workspace = await api(`/mapping/workspace${query}`, {signal: controller.signal});
+            } finally {
+                window.clearTimeout(workspaceTimeout);
+            }
             currentDocumentJobId = normalizedJobId || sanitizeJobId(workspace?.jobId) || currentDocumentJobId;
             const keys = new Set((workspace.unmappedItems || []).map(mappingRowKey));
             selectedExciseCode = previousSelected && keys.has(String(previousSelected)) ? previousSelected : null;
@@ -609,8 +625,30 @@
                 if (search) search.value = liveSearch;
                 runSearch();
             }
+            if (workspace?.itemMasterDeferred) {
+                void loadDeferredMappingItemMaster();
+            }
         } catch (error) {
-            if (!options.quiet) showToast(error.message || "Could not load mapping", "error");
+            if (!options.quiet) {
+                const timedOut = error?.name === "AbortError";
+                const message = timedOut
+                    ? "Mapping took too long to load. Please retry."
+                    : (error.message || "Could not load mapping");
+                showToast(message, "error");
+                const list = document.getElementById("unmapped-items");
+                if (list) {
+                    list.className = "list-body empty";
+                    list.textContent = message;
+                }
+            }
+        } finally {
+            if (showLoading) {
+                const elapsed = performance.now() - loadingStartedAt;
+                if (elapsed < minimumLoadingMs) {
+                    await new Promise((resolve) => window.setTimeout(resolve, minimumLoadingMs - elapsed));
+                }
+                setMappingLoading(false);
+            }
         }
     };
 

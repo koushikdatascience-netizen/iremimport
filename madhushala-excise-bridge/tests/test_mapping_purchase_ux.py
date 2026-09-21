@@ -151,7 +151,7 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260921-deferred-item-master-v19"' in main
+    assert 'STATIC_ASSET_VERSION = "20260922-mapping-loader-v20"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
 
@@ -428,6 +428,23 @@ def test_mapping_workspace_has_hard_timeout_and_targeted_latest_status_probe():
     portal_section = portal_section.split("rows: list[dict[str, Any]] = []", 1)[0]
     assert "excise_master = await client.get_excise_items()" not in portal_section
     assert "mappingPendingSync" in portal_section
+
+
+def test_active_row_identity_workspace_loader_cannot_leave_overlay_stuck():
+    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    loader = script.split(
+        "loadWorkspace = async function loadUniqueDocumentWorkspace", 1
+    )[1].split(
+        "startMappingAutoRefresh = function startStableMappingAutoRefresh", 1
+    )[0]
+
+    assert "new AbortController()" in loader
+    assert "controller.abort(), 15000" in loader
+    assert "{signal: controller.signal}" in loader
+    assert "Mapping took too long to load. Please retry." in loader
+    assert "void loadDeferredMappingItemMaster();" in loader
+    assert "finally" in loader
+    assert "setMappingLoading(false);" in loader
 
 
 def test_portal_mapping_defers_item_master_until_after_left_rows_render():
