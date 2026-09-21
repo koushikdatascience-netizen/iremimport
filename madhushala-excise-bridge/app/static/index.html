@@ -4030,7 +4030,13 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
         const query = normalizedJobId
             ? `?jobId=${encodeURIComponent(normalizedJobId)}`
             : (mappingManagementMode ? "?latestOnly=false&includeMapped=true" : "?latestOnly=true");
-        workspace = await api(`/mapping/workspace${query}`);
+        const controller = new AbortController();
+        const workspaceTimeout = window.setTimeout(() => controller.abort(), 15000);
+        try {
+            workspace = await api(`/mapping/workspace${query}`, {signal: controller.signal});
+        } finally {
+            window.clearTimeout(workspaceTimeout);
+        }
         currentDocumentJobId = normalizedJobId || currentDocumentJobId;
         const codes = new Set((workspace.unmappedItems || []).map((item) => String(item.exciseItemCode)));
         selectedExciseCode = previousSelected && codes.has(String(previousSelected)) ? previousSelected : null;
@@ -4039,11 +4045,15 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
         if (previousSearch) runSearch();
     } catch (error) {
         if (!options.quiet) {
-            showToast(error.message || "Could not load mapping", "error");
+            const timedOut = error?.name === "AbortError";
+            const message = timedOut
+                ? "Mapping took too long to load. Please retry."
+                : (error.message || "Could not load mapping");
+            showToast(message, "error");
             const list = document.getElementById("unmapped-items");
             if (list) {
                 list.className = "list-body empty";
-                list.textContent = error.message || "Could not load mapping";
+                list.textContent = message;
             }
         }
     } finally {
