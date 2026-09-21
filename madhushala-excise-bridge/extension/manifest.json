@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Madhushala Excise Capture",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "State-aware Madhushala Excise portal login and WB Prepare Indent capture.",
   "permissions": [
     "activeTab",
@@ -31,7 +31,8 @@
         "bridge_content.js"
       ],
       "run_at": "document_idle",
-      "all_frames": true
+      "all_frames": true,
+      "match_origin_as_fallback": true
     }
   ],
   "action": {

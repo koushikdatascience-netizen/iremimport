@@ -262,30 +262,44 @@
         if (next) next.disabled = !sanitizeJobId(currentDocumentJobId) || left > 0;
     };
 
-    function populateManagementSelect(select, item) {
-        if (!select || select.dataset.loaded === "1") return;
-        const rowKey = mappingRowKey(item);
-        const currentCode = String(selectedMappings.get(rowKey) || item.selectedItemCode || "");
-        const knownCodes = new Set((workspace.madhushalaItems || []).map((candidate) => String(candidate.itemCode || "")));
-        const options = [];
-        if (!currentCode) {
-            options.push('<option value="" selected disabled>Not mapped</option>');
-        } else if (!knownCodes.has(currentCode)) {
-            const current = mappedItemForRow(item);
-            options.push(
-                `<option value="${escapeHtml(currentCode)}" selected>${escapeHtml(itemLabel(current || {itemCode: currentCode, itemName: "Mapped item"}))}</option>`,
-            );
+    function managementItemSearchValue(candidate) {
+        return itemLabel(candidate);
+    }
+
+    function ensureManagementItemDatalist() {
+        let datalist = document.getElementById("management-item-options");
+        if (!datalist) {
+            datalist = document.createElement("datalist");
+            datalist.id = "management-item-options";
+            document.body.appendChild(datalist);
         }
-        for (const candidate of workspace.madhushalaItems || []) {
+        if (datalist.dataset.loaded === "1") return datalist;
+
+        datalist.innerHTML = (workspace.madhushalaItems || [])
+            .map((candidate) => {
+                const code = String(candidate.itemCode || "").trim();
+                if (!code) return "";
+                const label = managementItemSearchValue(candidate);
+                return `<option value="${escapeHtml(label)}" data-code="${escapeHtml(code)}"></option>`;
+            })
+            .join("");
+        datalist.dataset.loaded = "1";
+        return datalist;
+    }
+
+    function managementCodeFromSearchValue(value) {
+        const query = String(value || "").trim();
+        if (!query) return "";
+        const direct = findMadhushalaItem(query);
+        if (direct?.itemCode) return String(direct.itemCode);
+
+        const lowered = query.toLowerCase();
+        const exact = (workspace.madhushalaItems || []).find((candidate) => {
             const code = String(candidate.itemCode || "").trim();
-            if (!code) continue;
-            options.push(
-                `<option value="${escapeHtml(code)}" ${code === currentCode ? "selected" : ""}>${escapeHtml(itemLabel(candidate))}</option>`,
-            );
-        }
-        select.innerHTML = options.join("");
-        if (currentCode) select.value = currentCode;
-        select.dataset.loaded = "1";
+            const label = managementItemSearchValue(candidate);
+            return code.toLowerCase() === lowered || label.toLowerCase() === lowered;
+        });
+        return String(exact?.itemCode || "");
     }
 
     function renderManagementTable(rows) {
@@ -321,27 +335,47 @@
                             <small>Code: ${escapeHtml(String(item.exciseItemCode ?? ""))}</small>
                         </div>
                         <div class="management-master-cell" role="cell">
-                            <select class="management-item-select" data-row-key="${escapeHtml(rowKey)}" aria-label="Map ${escapeHtml(item.itemName || "Excise item")}">
-                                <option value="${escapeHtml(effectiveCode)}" selected>${escapeHtml(selectedLabel)}</option>
-                            </select>
+                            <input
+                                class="management-item-search"
+                                data-row-key="${escapeHtml(rowKey)}"
+                                data-current-code="${escapeHtml(effectiveCode)}"
+                                list="management-item-options"
+                                value="${escapeHtml(selectedLabel)}"
+                                placeholder="Search item code or name"
+                                autocomplete="off"
+                                aria-label="Search mapping for ${escapeHtml(item.itemName || "Excise item")}"
+                            >
                             ${changed ? '<span class="management-unsaved">Unsaved change</span>' : ""}
                         </div>
                     </div>`;
             }).join("")}`;
 
-        list.querySelectorAll(".management-item-select").forEach((select) => {
-            const rowKey = String(select.dataset.rowKey || "");
+        ensureManagementItemDatalist();
+        list.querySelectorAll(".management-item-search").forEach((input) => {
+            const rowKey = String(input.dataset.rowKey || "");
             const item = rowForKey(rowKey);
             if (!item) return;
-            const prepare = () => populateManagementSelect(select, item);
-            select.addEventListener("pointerdown", prepare, {once: true});
-            select.addEventListener("focus", prepare, {once: true});
-            select.addEventListener("change", () => {
-                const itemCode = String(select.value || "").trim();
-                if (!itemCode) return;
+
+            const commit = () => {
+                const itemCode = managementCodeFromSearchValue(input.value);
+                if (!itemCode) {
+                    const currentCode = String(input.dataset.currentCode || "");
+                    const current = currentCode ? (findMadhushalaItem(currentCode) || mappedItemForRow(item)) : null;
+                    input.value = current ? itemLabel(current) : "Not mapped";
+                    return;
+                }
                 selectedExciseCode = rowKey;
                 selectMadhushalaItem(itemCode);
+            };
+
+            input.addEventListener("change", commit);
+            input.addEventListener("keydown", (event) => {
+                if (event.key === "Enter") {
+                    event.preventDefault();
+                    commit();
+                }
             });
+            input.addEventListener("focus", () => input.select());
         });
 
         const submit = document.getElementById("submit-mappings");
@@ -804,6 +838,22 @@
                 background: #fff1ad;
             }
             .management-excise-cell,
+            .management-item-search {
+                width: 100%;
+                min-width: 0;
+                height: 31px;
+                padding: 5px 9px;
+                border: 1px solid #bcc3cc;
+                border-radius: 5px;
+                background: #fff;
+                color: #111827;
+                font: inherit;
+                font-size: 11px;
+            }
+            .management-item-search:focus {
+                outline: 2px solid rgba(31, 111, 235, .18);
+                border-color: #1f6feb;
+            }
             .management-master-cell {
                 min-width: 0;
                 padding: 4px 7px;
