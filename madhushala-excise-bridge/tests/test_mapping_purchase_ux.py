@@ -37,12 +37,10 @@ def test_document_mapping_search_is_not_overwritten_by_background_refresh():
     assert 'document.activeElement === search' in script
 
 
-def test_purchase_context_runs_on_mapping_page_and_restores_header():
+def test_purchase_context_does_not_run_on_mapping_page():
     script = Path("app/static/purchase-context.js").read_text(encoding="utf-8")
 
-    assert 'pageParams.get("view") === "mapping"' in script
-    assert 'restoreMappingHeader()' in script
-    assert 'window.applyPurchaseHeader(window.loadPurchaseHeader(jobId))' in script
+    assert 'if (!isDocumentImport || isMappingView) return;' in script
     assert 'window.__purchaseContext' in script
 
 
@@ -88,7 +86,7 @@ def test_mapping_normal_flow_uses_real_madhushala_purchase_handoff():
 
     assert 'next.id = "mapping-next-purchase"' in script
     assert 'next.textContent = "Next: Purchase"' in script
-    assert "/purchase/calculate-preview" in script
+    assert "/purchase/handoff" in script
     assert "openPurchaseInMadhushala(purchase)" in script
     assert "/document-import?view=purchase&jobId=" not in script.split(
         "async function continueMappingToPurchase()", 1
@@ -153,7 +151,7 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260921-mapping-footer-cleanup-v11"' in main
+    assert 'STATIC_ASSET_VERSION = "20260921-nonblocking-handoff-v12"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
 
@@ -290,3 +288,18 @@ def test_document_mapping_footer_keeps_only_mapping_and_handoff_actions():
     assert 'mappingSummary.hidden = true' in mapping_script
     assert '["mapping", "save-purchase-from-mapping"]' not in context_script
     assert 'validate-purchase-mapping' not in runtime
+
+
+def test_mapping_handoff_never_requires_purchase_masters_before_redirect():
+    mapping_script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    context_script = Path("app/static/purchase-context.js").read_text(encoding="utf-8")
+
+    start = mapping_script.index("async function buildPurchaseHandoff(jobId)")
+    end = mapping_script.index("async function continueMappingToPurchase()", start)
+    handoff = mapping_script[start:end]
+
+    assert "/purchase/handoff" in handoff
+    assert "/purchase/calculate-preview" not in handoff
+    assert "collectPurchaseHeader" not in handoff
+    assert "__purchaseContext" not in handoff
+    assert 'if (!isDocumentImport || isMappingView) return;' in context_script
