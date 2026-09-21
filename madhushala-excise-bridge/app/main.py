@@ -61,7 +61,7 @@ async def lifespan(_app: FastAPI):
 
 PUBLIC_PREFIX = "/excise-import"
 INDEX_HTML_PATH = Path("app/static/index.html")
-STATIC_ASSET_VERSION = "20260921-mapping-footer-cleanup-v11"
+STATIC_ASSET_VERSION = "20260921-nonblocking-handoff-v12"
 DOCUMENT_IMPORT_SCRIPTS = (
     f'<script src="./static/qr-browser-fallback.js?v={STATIC_ASSET_VERSION}"></script>',
     f'<script src="./static/purchase-context.js?v={STATIC_ASSET_VERSION}"></script>',
@@ -501,37 +501,39 @@ async def portal_bootstrap(request: Request):
             },
         ) from exc
 
-    if not portal:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "EXCISE_STATE_NOT_SUPPORTED",
-                "message": f"Excise login automation is not configured for state '{raw_state or 'UNKNOWN'}'.",
-                "state": raw_state,
-            },
-        )
-
     user_id = str(company.get("exciseUserId") or "").strip()
     password = str(company.get("excisePassword") or "")
-    if not user_id or not password:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "EXCISE_CREDENTIALS_MISSING",
-                "message": "Excise User ID or password is missing in Company Master.",
-                "state": portal["state"],
-            },
-        )
 
-    return {
+    response = {
         "companyCode": str(company.get("companyCode") or session["company_code"]),
         "companyName": str(company.get("companyName") or ""),
-        "state": portal["state"],
-        "exciseLoginUrl": portal["loginUrl"],
-        "loginProfile": portal["loginProfile"],
+        "state": portal["state"] if portal else raw_state,
+        "exciseLoginUrl": portal["loginUrl"] if portal else "",
+        "loginProfile": portal["loginProfile"] if portal else None,
         "exciseUserId": user_id,
         "excisePassword": password,
+        "ready": False,
+        "error": None,
     }
+
+    if not portal:
+        response["error"] = {
+            "code": "EXCISE_STATE_NOT_SUPPORTED",
+            "message": f"Excise login automation is not configured for state '{raw_state or 'UNKNOWN'}'.",
+            "state": raw_state,
+        }
+        return response
+
+    if not user_id or not password:
+        response["error"] = {
+            "code": "EXCISE_CREDENTIALS_MISSING",
+            "message": "Excise User ID or password is missing in Company Master.",
+            "state": portal["state"],
+        }
+        return response
+
+    response["ready"] = True
+    return response
 
 
 @app.post("/extension/capture")

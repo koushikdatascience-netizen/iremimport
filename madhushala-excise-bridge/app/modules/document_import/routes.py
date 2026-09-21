@@ -10,6 +10,7 @@ from app.integrations.madhushala.client import MadhushalaApiError
 from app.modules.document_import.service import DocumentImportService
 from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
 from app.modules.document_import.purchase_context import build_purchase_context, up_supplier_hint
+from app.modules.document_import.purchase_handoff import build_purchase_handoff
 from app.modules.document_import.purchase_preview import calculate_purchase_preview
 from app.modules.document_import.purchase_required import resolve_required_purchase_header
 from app.modules.document_import.qr_decoder import decode_qr_upload
@@ -159,6 +160,17 @@ def create_router(service: DocumentImportService) -> APIRouter:
     async def get_purchase_context(request: Request, supplierName: str = ""):
         session = session_service.from_request(request)
         return await build_purchase_context(session, supplier_name=supplierName)
+
+    @router.get("/jobs/{job_id}/purchase/handoff")
+    async def get_purchase_handoff(job_id: str, request: Request):
+        """Return the mapped document payload for the real Madhushala Purchase UI.
+
+        This endpoint intentionally does not resolve Purchase master fields,
+        calculate financials, or save a Purchase. The Madhushala frontend owns
+        those steps after it receives the prefill payload.
+        """
+        session = session_service.from_request(request)
+        return build_purchase_handoff(service, session, job_id)
 
     @router.get("/jobs/{job_id}/purchase/transaction")
     async def get_purchase_transaction(job_id: str, request: Request):

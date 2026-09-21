@@ -205,7 +205,7 @@
         }
         if (document.querySelector('script[data-mapping-purchase-context="true"]')) return;
         const script = document.createElement("script");
-        script.src = apiUrl("/static/purchase-context.js?v=20260921-mapping-footer-cleanup-v11");
+        script.src = apiUrl("/static/purchase-context.js?v=20260921-nonblocking-handoff-v12");
         script.dataset.mappingPurchaseContext = "true";
         script.onload = () => window.__purchaseContext?.initialize?.();
         document.head.appendChild(script);
@@ -644,30 +644,8 @@
     }
 
     async function buildPurchaseHandoff(jobId) {
-        const hint = loadPurchaseSourceHint(jobId);
-        try {
-            await window.__purchaseContext?.refresh?.(hint.supplierName || "");
-        } catch {
-            // The backend resolver below remains authoritative for required fields.
-        }
-
-        try {
-            applyPurchaseHeader(loadPurchaseHeader(jobId));
-        } catch {
-            // Continue with backend-resolved document/master defaults.
-        }
-
-        persistPurchaseHeader();
-        const header = typeof collectPurchaseHeader === "function"
-            ? collectPurchaseHeader()
-            : loadPurchaseHeader(jobId);
-
         return api(
-            `/api/v1/document-import/jobs/${encodeURIComponent(jobId)}/purchase/calculate-preview`,
-            {
-                method: "POST",
-                body: JSON.stringify({header}),
-            },
+            `/api/v1/document-import/jobs/${encodeURIComponent(jobId)}/purchase/handoff`,
         );
     }
 
@@ -1712,18 +1690,10 @@
     initMapping = function initMappingWithPurchaseDetails() {
         // Do not mount Purchase fields on Mapping in the simplified flow.
         // The function is retained above so the old UI can be restored later.
-        ensurePurchaseContextOnMapping();
         ensureCompactMappingStyles();
         setupMappingNextButton();
         setupMappingManagementControls();
         const result = originalInitMapping();
-        const jobId = sanitizeJobId(currentDocumentJobId || activeJobId || "");
-        if (jobId) {
-            const hint = loadPurchaseSourceHint(jobId);
-            window.setTimeout(() => {
-                void window.__purchaseContext?.refresh?.(hint.supplierName || "");
-            }, 0);
-        }
         const legacySave = document.getElementById("save-purchase-from-mapping");
         if (legacySave) {
             legacySave.hidden = true;
