@@ -178,7 +178,7 @@ async def resolve_required_purchase_header(
     resolved.setdefault("schemeCode", "")
 
     missing = [name for name in _REQUIRED_LABELS if not _text(resolved.get(name))]
-    if missing:
+    if missing and strict:
         labels = ", ".join(_REQUIRED_LABELS[name] for name in missing)
         raise HTTPException(
             status_code=400,
