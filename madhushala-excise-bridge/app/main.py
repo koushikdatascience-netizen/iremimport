@@ -61,7 +61,7 @@ async def lifespan(_app: FastAPI):
 
 PUBLIC_PREFIX = "/excise-import"
 INDEX_HTML_PATH = Path("app/static/index.html")
-STATIC_ASSET_VERSION = "20260921-mapping-footer-cleanup-v11"
+STATIC_ASSET_VERSION = "20260921-nonblocking-handoff-v12"
 DOCUMENT_IMPORT_SCRIPTS = (
     f'<script src="./static/qr-browser-fallback.js?v={STATIC_ASSET_VERSION}"></script>',
     f'<script src="./static/purchase-context.js?v={STATIC_ASSET_VERSION}"></script>',
