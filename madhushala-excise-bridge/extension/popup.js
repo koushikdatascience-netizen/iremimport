@@ -1,7 +1,4 @@
 const status = document.getElementById("status");
-const exciseLoginUrl = document.getElementById("excise-login-url");
-const exciseUser = document.getElementById("excise-user");
-const excisePassword = document.getElementById("excise-password");
 
 function setStatus(message, type = "") {
   status.textContent = message;
@@ -18,30 +15,18 @@ async function send(type, payload = {}) {
   return response.result || {};
 }
 
-async function loadSettings() {
+async function loadStatus() {
   try {
     const settings = await send("GET_SETTINGS");
-    exciseLoginUrl.value = settings.exciseLoginUrl || "";
-    exciseUser.value = settings.exciseUser || "";
-    excisePassword.value = settings.excisePassword || "";
-    setStatus(settings.sessionToken ? "Ready for current CRM session." : "Save portal details, then open import from CRM.", "success");
+    setStatus(
+      settings.sessionToken
+        ? "Ready. State and Excise login are loaded automatically from Madhushala Company Master."
+        : "Open Excise Import from Madhushala CRM first.",
+      settings.sessionToken ? "success" : "",
+    );
   } catch (error) {
-    setStatus(error.message || "Could not load settings.", "error");
+    setStatus(error.message || "Could not load extension status.", "error");
   }
 }
 
-async function saveCredentials() {
-  try {
-    await send("SAVE_SETTINGS", {
-      exciseLoginUrl: exciseLoginUrl.value.trim(),
-      exciseUser: exciseUser.value.trim(),
-      excisePassword: excisePassword.value,
-    });
-    setStatus("Portal details saved in this Chrome profile.", "success");
-  } catch (error) {
-    setStatus(error.message || "Could not save portal details.", "error");
-  }
-}
-
-document.getElementById("save-settings").addEventListener("click", saveCredentials);
-loadSettings();
+loadStatus();
