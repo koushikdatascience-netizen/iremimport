@@ -205,7 +205,7 @@
         }
         if (document.querySelector('script[data-mapping-purchase-context="true"]')) return;
         const script = document.createElement("script");
-        script.src = apiUrl("/static/purchase-context.js?v=20260921-visible-mapping-loader-v15");
+        script.src = apiUrl("/static/purchase-context.js?v=20260921-forced-inline-mapping-v16");
         script.dataset.mappingPurchaseContext = "true";
         script.onload = () => window.__purchaseContext?.initialize?.();
         document.head.appendChild(script);
