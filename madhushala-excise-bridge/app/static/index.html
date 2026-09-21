@@ -4000,11 +4000,14 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
     const search = document.getElementById("madhushala-search");
     const previousSearch = preserveState ? search?.value || "" : "";
     const showLoading = !options.quiet;
+    const loadingStartedAt = showLoading ? performance.now() : 0;
+    const minimumLoadingMs = 650;
     if (showLoading) {
         setMappingLoading(
             true,
             mappingManagementMode ? "Loading Item Map Master" : "Loading item mappings",
         );
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }
     try {
         const query = normalizedJobId
@@ -4027,7 +4030,13 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
             }
         }
     } finally {
-        if (showLoading) setMappingLoading(false);
+        if (showLoading) {
+            const elapsed = performance.now() - loadingStartedAt;
+            if (elapsed < minimumLoadingMs) {
+                await new Promise((resolve) => window.setTimeout(resolve, minimumLoadingMs - elapsed));
+            }
+            setMappingLoading(false);
+        }
     }
 }
 

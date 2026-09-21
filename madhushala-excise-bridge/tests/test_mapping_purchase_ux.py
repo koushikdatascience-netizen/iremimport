@@ -151,7 +151,7 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260921-inline-mapping-picker-v14"' in main
+    assert 'STATIC_ASSET_VERSION = "20260921-visible-mapping-loader-v15"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
 
@@ -388,5 +388,7 @@ def test_mapping_workspace_shows_modern_loading_overlay():
     assert 'list.className = "list-body mapping-inline-loading"' in runtime
     assert "mapping-inline-loading-card" in runtime
     assert "Fetching Excise items and Item Master" in runtime
-    assert "if (showLoading) setMappingLoading(false);" in runtime
+    assert "minimumLoadingMs = 650" in runtime
+    assert "requestAnimationFrame(() => requestAnimationFrame(resolve))" in runtime
+    assert "setMappingLoading(false);" in runtime
     assert "@keyframes mapping-spin" in runtime
