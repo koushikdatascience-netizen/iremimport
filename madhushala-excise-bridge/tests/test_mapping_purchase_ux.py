@@ -227,7 +227,8 @@ def test_mapping_management_uses_official_excise_master_and_table_ui():
     assert 'remote.get("mappedItemCode")' in service
     assert 'remote.get("mappedItemName")' in service
     assert "management-map-head" in script
-    assert "management-item-select" in script
+    assert "management-item-search" in script
+    assert "management-search-results" in script
     assert 'submit.textContent = "Save"' in script
 
 
