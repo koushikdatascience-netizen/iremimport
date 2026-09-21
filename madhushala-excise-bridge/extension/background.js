@@ -207,12 +207,18 @@ async function waitForTabComplete(tabId) {
 async function tryFillExciseLogin(tabId, credentials) {
   try {
     await waitForTabComplete(tabId);
-    const [{result}] = await chrome.scripting.executeScript({
-      target: {tabId},
-      func: fillExciseLogin,
-      args: [credentials],
-    });
-    return result || {};
+    let latest = {};
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const [{result}] = await chrome.scripting.executeScript({
+        target: {tabId},
+        func: fillExciseLogin,
+        args: [credentials],
+      });
+      latest = result || {};
+      if (latest.userFilled && latest.passwordFilled) return latest;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return latest;
   } catch (error) {
     console.warn("Excise login autofill skipped", error);
     return {warning: error?.message || "Excise login autofill skipped"};
