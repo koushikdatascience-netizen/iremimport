@@ -274,6 +274,36 @@ async function focusMappingWorkspace(settings) {
   };
 }
 
+async function closeStandaloneMappingTabs(settings) {
+  const mappingUrl = String(settings?.mappingUrl || "").trim();
+  if (!mappingUrl) return {closed: 0};
+
+  let target;
+  try {
+    target = new URL(mappingUrl);
+  } catch {
+    return {closed: 0};
+  }
+
+  const tabs = await chrome.tabs.query({});
+  const closable = tabs.filter((tab) => {
+    const url = String(tab.url || "");
+    if (!url) return false;
+    try {
+      const parsed = new URL(url);
+      return parsed.origin === target.origin
+        && parsed.pathname === target.pathname
+        && parsed.searchParams.get("view") === "mapping";
+    } catch {
+      return false;
+    }
+  });
+
+  const ids = closable.map((tab) => tab.id).filter((id) => Number.isInteger(id));
+  if (ids.length) await chrome.tabs.remove(ids);
+  return {closed: ids.length};
+}
+
 async function handleAutoCapture(payload = {}) {
   const items = Array.isArray(payload.items) ? payload.items : [];
   if (!items.length) return {status: "ignored", reason: "empty"};
@@ -283,8 +313,13 @@ async function handleAutoCapture(payload = {}) {
     try {
       const settings = await getSettings();
       result.mappingNavigation = await focusMappingWorkspace(settings);
+      result.closedStandaloneMappings = await closeStandaloneMappingTabs(settings);
+      // Legacy builds may race and create a Mapping tab a moment later.
+      // Sweep again twice so Mapping remains only in the original bridge page.
+      setTimeout(() => { void closeStandaloneMappingTabs(settings); }, 700);
+      setTimeout(() => { void closeStandaloneMappingTabs(settings); }, 1800);
     } catch (error) {
-      console.warn("Could not focus Mapping workspace", error);
+      console.warn("Could not keep Mapping inline", error);
       result.mappingNavigation = {opened: false, error: error?.message || "Mapping navigation failed"};
     }
   }
