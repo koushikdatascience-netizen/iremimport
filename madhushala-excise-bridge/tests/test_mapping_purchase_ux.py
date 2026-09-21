@@ -17,7 +17,7 @@ def test_saved_document_mapping_is_presented_as_mapped_and_remappable():
     assert '<span class="eyebrow">Mapped</span>' in script
     assert 'saved Madhushala item for the extracted purchase row' in script
     assert 'Already mapped. Use Change / Re-map only if the saved item is wrong.' in script
-    assert 'Extracted: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left}' in script
+    assert 'mappingSummary.hidden = true' in script
     assert 'Change / Re-map' in script
 
 
@@ -83,13 +83,16 @@ def test_valid_document_import_skips_review_and_auto_confirms_to_mapping():
     assert "renderQrReview(payload)" not in qr
 
 
-def test_mapping_normal_flow_uses_next_purchase_and_keeps_legacy_save_hidden():
+def test_mapping_normal_flow_uses_real_madhushala_purchase_handoff():
     script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
 
     assert 'next.id = "mapping-next-purchase"' in script
-    assert 'next.textContent = "Next: Preview Purchase"' in script
-    assert "/document-import?view=purchase&jobId=" in script
-    assert 'legacySave.style.display = "none"' in script
+    assert 'next.textContent = "Next: Purchase"' in script
+    assert "/purchase/calculate-preview" in script
+    assert "openPurchaseInMadhushala(purchase)" in script
+    assert "/document-import?view=purchase&jobId=" not in script.split(
+        "async function continueMappingToPurchase()", 1
+    )[1].split("function setupMappingNextButton()", 1)[0]
     assert "Do not mount Purchase fields on Mapping in the simplified flow." in script
 
 
@@ -150,7 +153,7 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260921-mapping-management-v7"' in main
+    assert 'STATIC_ASSET_VERSION = "20260921-mapping-footer-cleanup-v11"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
 
@@ -162,7 +165,7 @@ def test_portal_capture_auto_hands_launch_page_to_mapping():
     assert "function checkPortalMappingHandoff" in runtime
     assert 'session?.state === "mapping_required"' in runtime
     assert "window.location.replace(portalMappingUrl())" in runtime
-    assert "Mapping will open here automatically after capture." in runtime
+    assert "Excise items captured. Opening product mapping…" in runtime
 
 
 def test_portal_mapping_is_mapping_only_without_purchase_controls():
