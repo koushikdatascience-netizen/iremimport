@@ -255,19 +255,109 @@
         if (next) next.disabled = !sanitizeJobId(currentDocumentJobId) || left > 0;
     };
 
+    function populateManagementSelect(select, item) {
+        if (!select || select.dataset.loaded === "1") return;
+        const rowKey = mappingRowKey(item);
+        const currentCode = String(selectedMappings.get(rowKey) || item.selectedItemCode || "");
+        const knownCodes = new Set((workspace.madhushalaItems || []).map((candidate) => String(candidate.itemCode || "")));
+        const options = [];
+        if (!currentCode) {
+            options.push('<option value="" selected disabled>Not mapped</option>');
+        } else if (!knownCodes.has(currentCode)) {
+            const current = mappedItemForRow(item);
+            options.push(
+                `<option value="${escapeHtml(currentCode)}" selected>${escapeHtml(itemLabel(current || {itemCode: currentCode, itemName: "Mapped item"}))}</option>`,
+            );
+        }
+        for (const candidate of workspace.madhushalaItems || []) {
+            const code = String(candidate.itemCode || "").trim();
+            if (!code) continue;
+            options.push(
+                `<option value="${escapeHtml(code)}" ${code === currentCode ? "selected" : ""}>${escapeHtml(itemLabel(candidate))}</option>`,
+            );
+        }
+        select.innerHTML = options.join("");
+        if (currentCode) select.value = currentCode;
+        select.dataset.loaded = "1";
+    }
+
+    function renderManagementTable(rows) {
+        const list = document.getElementById("unmapped-items");
+        if (!list) return;
+        list.className = "list-body management-map-grid";
+        setText(document.getElementById("unmapped-count"), `${rows.length}/${(workspace.unmappedItems || []).length}`);
+
+        if (!rows.length) {
+            list.className = "list-body empty";
+            list.textContent = "No items match this filter";
+            updateSummary();
+            return;
+        }
+
+        list.innerHTML = `
+            <div class="management-map-head" role="row">
+                <div role="columnheader">Excise Item</div>
+                <div role="columnheader">Item Master</div>
+            </div>
+            ${rows.map((item) => {
+                const rowKey = mappingRowKey(item);
+                const originalCode = String(item.selectedItemCode || "");
+                const pendingCode = String(selectedMappings.get(rowKey) || "");
+                const effectiveCode = pendingCode || originalCode;
+                const mapped = effectiveCode ? (findMadhushalaItem(effectiveCode) || mappedItemForRow(item)) : null;
+                const changed = Boolean(pendingCode && pendingCode !== originalCode);
+                const selectedLabel = mapped ? itemLabel(mapped) : "Not mapped";
+                return `
+                    <div class="management-map-row ${changed ? "changed" : ""}" role="row" data-management-row="${escapeHtml(rowKey)}">
+                        <div class="management-excise-cell" role="cell">
+                            <strong>${escapeHtml(item.itemName || "Excise item")}</strong>
+                            <small>Code: ${escapeHtml(String(item.exciseItemCode ?? ""))}</small>
+                        </div>
+                        <div class="management-master-cell" role="cell">
+                            <select class="management-item-select" data-row-key="${escapeHtml(rowKey)}" aria-label="Map ${escapeHtml(item.itemName || "Excise item")}">
+                                <option value="${escapeHtml(effectiveCode)}" selected>${escapeHtml(selectedLabel)}</option>
+                            </select>
+                            ${changed ? '<span class="management-unsaved">Unsaved change</span>' : ""}
+                        </div>
+                    </div>`;
+            }).join("")}`;
+
+        list.querySelectorAll(".management-item-select").forEach((select) => {
+            const rowKey = String(select.dataset.rowKey || "");
+            const item = rowForKey(rowKey);
+            if (!item) return;
+            const prepare = () => populateManagementSelect(select, item);
+            select.addEventListener("pointerdown", prepare, {once: true});
+            select.addEventListener("focus", prepare, {once: true});
+            select.addEventListener("change", () => {
+                const itemCode = String(select.value || "").trim();
+                if (!itemCode) return;
+                selectedExciseCode = rowKey;
+                selectMadhushalaItem(itemCode);
+            });
+        });
+
+        const submit = document.getElementById("submit-mappings");
+        if (submit) submit.textContent = "Save";
+        updateSummary();
+    }
+
     renderWorkspace = function renderUniqueDocumentRows() {
         const list = document.getElementById("unmapped-items");
         if (!list) return;
         setDocumentListTitle();
         const rows = mappingManagementMode ? filteredManagementRows() : (workspace.unmappedItems || []);
-        setText(
-            document.getElementById("unmapped-count"),
-            mappingManagementMode ? `${rows.length}/${(workspace.unmappedItems || []).length}` : String(rows.length),
-        );
+
+        if (mappingManagementMode) {
+            renderManagementTable(rows);
+            return;
+        }
+
+        setText(document.getElementById("unmapped-count"), String(rows.length));
 
         if (!rows.length) {
             list.className = "list-body empty";
-            list.textContent = mappingManagementMode ? "No items match this filter" : "No extracted items found for this document";
+            list.textContent = "No extracted items found for this document";
             selectedExciseCode = null;
             renderSelectedExcise(null);
             updateSummary();
@@ -598,6 +688,112 @@
             }
             body.mapping-management-mode #mapping-management-toolbar {
                 flex: 0 0 auto !important;
+            }
+            body.mapping-management-mode #mapping-view .mapping-layout {
+                display: block !important;
+                overflow: hidden !important;
+                border: 1px solid #b8b8b8 !important;
+                background: #dedede !important;
+            }
+            body.mapping-management-mode #mapping-view .unmapped-list {
+                width: 100% !important;
+                height: 100% !important;
+                border: 0 !important;
+                border-radius: 0 !important;
+                background: #dedede !important;
+            }
+            body.mapping-management-mode #mapping-view .unmapped-list .list-title {
+                display: none !important;
+            }
+            body.mapping-management-mode #mapping-view .mapper {
+                display: none !important;
+            }
+            body.mapping-management-mode #mapping-view .management-map-grid {
+                height: 100% !important;
+                overflow: auto !important;
+                background: #dedede !important;
+            }
+            .management-map-head,
+            .management-map-row {
+                display: grid;
+                grid-template-columns: 44% 56%;
+                min-width: 760px;
+            }
+            .management-map-head {
+                position: sticky;
+                top: 0;
+                z-index: 3;
+                background: #ffd400;
+                color: #171717;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            .management-map-head > div {
+                padding: 5px 8px;
+                border-right: 1px solid #d8b900;
+                border-bottom: 1px solid #c4a900;
+            }
+            .management-map-row {
+                min-height: 35px;
+                border-bottom: 1px solid #c8c8c8;
+                background: #dedede;
+            }
+            .management-map-row.changed {
+                background: #fff1ad;
+            }
+            .management-excise-cell,
+            .management-master-cell {
+                min-width: 0;
+                padding: 4px 7px;
+                border-right: 1px solid #c8c8c8;
+            }
+            .management-excise-cell {
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                gap: 1px;
+            }
+            .management-excise-cell strong {
+                overflow: hidden;
+                font-size: 12px;
+                font-weight: 500;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .management-excise-cell small {
+                color: #676767;
+                font-size: 9px;
+            }
+            .management-master-cell {
+                display: flex;
+                align-items: center;
+                gap: 7px;
+            }
+            .management-item-select {
+                width: 100%;
+                min-width: 0;
+                height: 27px;
+                padding: 0 28px 0 8px;
+                border: 1px solid #aeb2b6;
+                border-radius: 0;
+                background: #f1f1f1;
+                color: #202020;
+                font: 12px Arial, Helvetica, sans-serif;
+            }
+            .management-map-row.changed .management-item-select {
+                background: #fff8d5;
+                border-color: #ca9f00;
+            }
+            .management-unsaved {
+                flex: 0 0 auto;
+                color: #7c5f00;
+                font-size: 9px;
+                font-weight: 700;
+                white-space: nowrap;
+            }
+            body.mapping-management-mode #mapping-view .mapping-footer {
+                border: 1px solid #b8b8b8 !important;
+                background: #f1f1f1 !important;
             }
             body.mapping-mode #mapping-view .unmapped-list,
             body.mapping-mode #mapping-view .mapper {
