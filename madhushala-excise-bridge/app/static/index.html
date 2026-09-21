@@ -3768,7 +3768,9 @@ function selectedExciseDetails(item) {
 }
 
 function itemLabel(item) {
-    return `${item.itemCode} - ${item.itemName}`;
+    const name = String(item?.itemName || "Item Master item").trim();
+    const ml = compactValue(item?.ml || item?.measureMl);
+    return ml ? `${name} · ${ml} ML` : name;
 }
 
 function parseNumber(value) {
@@ -3816,7 +3818,8 @@ function mappedItemForRow(item) {
 function mappedItemMarkup(item) {
     const mapped = mappedItemForRow(item);
     if (!mapped) return `<span class="mapped-choice empty">Select item</span>`;
-    return `<span class="mapped-choice done"><strong>${escapeHtml(mapped.itemCode || "")}</strong><span>${escapeHtml(mapped.itemName || "Mapped item")}</span></span>`;
+    const ml = compactValue(mapped.ml || mapped.measureMl);
+    return `<span class="mapped-choice done"><strong>${escapeHtml(ml ? `${ml} ML` : "ML -")}</strong><span>${escapeHtml(mapped.itemName || "Mapped item")}</span></span>`;
 }
 function currentExciseItem() {
     return workspace.unmappedItems.find((item) => String(item.exciseItemCode) === String(selectedExciseCode));
@@ -3895,7 +3898,7 @@ function renderSelectedExcise(item) {
         card.innerHTML = `
             <div>
                 <span class="eyebrow">Best Match</span>
-                <h3>${itemLabel(best.item)}</h3>
+                <h3>${escapeHtml(best.item.itemName || "Item Master item")}</h3>
                 <p>ML ${best.item.ml || "-"} | ${Math.round(best.score)}%</p>
             </div>
             <button type="button" id="confirm-best-match">Correct</button>
@@ -3923,7 +3926,7 @@ function renderCandidates(entries) {
         const score = entry.score ? `<span class="score">${Math.round(entry.score)}%</span>` : "";
         return `
             <button class="candidate" data-code="${item.itemCode}" data-score="${entry.score || 0}" type="button">
-                <span><strong>${itemLabel(item)}</strong><small>ML ${item.ml || "-"} | Pack ${item.packing || "-"}</small></span>
+                <span><strong>${escapeHtml(item.itemName || "Item Master item")}</strong><small>ML ${item.ml || "-"} | Pack ${item.packing || "-"}</small></span>
                 ${score}
             </button>`;
     }).join("");

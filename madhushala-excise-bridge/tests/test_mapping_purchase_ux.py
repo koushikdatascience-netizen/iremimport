@@ -151,7 +151,7 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260922-mapping-loader-v20"' in main
+    assert 'STATIC_ASSET_VERSION = "20260922-item-master-ml-v21"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
 
@@ -370,11 +370,13 @@ def test_mapping_management_item_picker_is_searchable():
 
     assert 'class="management-item-search"' in script
     assert 'class="management-search-results"' in script
-    assert 'placeholder="Search item code or name"' in script
+    assert 'placeholder="Search item name or ML"' in script
     assert "function managementSearchResults(query, limit = 12)" in script
     assert "function renderManagementPickerResults(input, results, query = \"\")" in script
     assert 'input.addEventListener("input"' in script
     assert 'data-item-code=' in script
+    assert '<strong>${escapeHtml(name || "Item Master item")}</strong>' in script
+    assert '<strong>${escapeHtml(code)}</strong>' not in script
     assert '"version": "1.4.6"' in manifest
     assert '"all_frames": true' in manifest
     assert '"match_origin_as_fallback": true' in manifest

@@ -205,7 +205,7 @@
         }
         if (document.querySelector('script[data-mapping-purchase-context="true"]')) return;
         const script = document.createElement("script");
-        script.src = apiUrl("/static/purchase-context.js?v=20260922-mapping-loader-v20");
+        script.src = apiUrl("/static/purchase-context.js?v=20260922-item-master-ml-v21");
         script.dataset.mappingPurchaseContext = "true";
         script.onload = () => window.__purchaseContext?.initialize?.();
         document.head.appendChild(script);
@@ -314,11 +314,11 @@
         results.innerHTML = matches.map((candidate) => {
             const code = String(candidate.itemCode || "").trim();
             const name = String(candidate.itemName || "").trim();
-            const ml = candidate.ml ? ` · ${escapeHtml(String(candidate.ml))} ML` : "";
+            const ml = compactValue(candidate.ml || candidate.measureMl);
             return `
                 <button type="button" class="management-search-option" data-item-code="${escapeHtml(code)}">
-                    <strong>${escapeHtml(code)}</strong>
-                    <span>${escapeHtml(name)}${ml}</span>
+                    <strong>${escapeHtml(name || "Item Master item")}</strong>
+                    <span>${escapeHtml(ml ? `${ml} ML` : "ML -")}</span>
                 </button>`;
         }).join("");
         results.classList.add("open");
@@ -376,7 +376,7 @@
                                     data-current-code="${escapeHtml(effectiveCode)}"
                                     data-chosen-code="${escapeHtml(effectiveCode)}"
                                     value="${escapeHtml(selectedLabel)}"
-                                    placeholder="Search item code or name"
+                                    placeholder="Search item name or ML"
                                     autocomplete="off"
                                     aria-label="Search mapping for ${escapeHtml(item.itemName || "Excise item")}"
                                 >
@@ -521,8 +521,8 @@
                 card.innerHTML = `
                     <div>
                         <span class="eyebrow">Mapped</span>
-                        <h3>${escapeHtml(mapped.itemCode || "")} - ${escapeHtml(mapped.itemName || "Mapped item")}</h3>
-                        <p>This is the saved Madhushala item for the extracted purchase row.</p>
+                        <h3>${escapeHtml(mapped.itemName || "Mapped item")}</h3>
+                        <p>${escapeHtml(compactValue(mapped.ml || mapped.measureMl) ? `${compactValue(mapped.ml || mapped.measureMl)} ML` : "ML -")} | This is the saved Madhushala item for the extracted purchase row.</p>
                     </div>
                     <button type="button" id="change-current-mapping" class="secondary">Change / Re-map</button>`;
                 document.getElementById("change-current-mapping")?.addEventListener("click", () => {
@@ -553,7 +553,7 @@
             card.innerHTML = `
                 <div>
                     <span class="eyebrow">Best Match</span>
-                    <h3>${itemLabel(best.item)}</h3>
+                    <h3>${escapeHtml(best.item.itemName || "Item Master item")}</h3>
                     <p>ML ${best.item.ml || "-"} | ${Math.round(best.score)}%</p>
                 </div>
                 <button type="button" id="confirm-best-match">Correct</button>
