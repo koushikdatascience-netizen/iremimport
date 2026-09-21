@@ -399,12 +399,13 @@ def test_mapping_workspace_shows_modern_loading_overlay():
     assert "@keyframes mapping-spin" in runtime
 
 
-def test_portal_mapping_status_uses_authoritative_excise_master():
+def test_portal_mapping_status_uses_targeted_authoritative_probe():
     service = Path("app/services/mapping_service.py").read_text(encoding="utf-8")
 
-    assert "excise_master = await client.get_excise_items()" in service
-    assert 'if not str(remote.get("mappedItemCode") or "").strip()' in service
-    assert "pending_codes = missing_latest - mapped_master_codes" in service
+    assert "unmapped = await client.get_unmapped_items()" in service
+    assert "await client.get_excise_items(code)" in service
+    assert 'if str(remote.get("mappedItemCode") or "").strip()' not in service
+    assert "authoritative_by_code" in service
     assert '"mappingPendingSync": True' in service
 
 
