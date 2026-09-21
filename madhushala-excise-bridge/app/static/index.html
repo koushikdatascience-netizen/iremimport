@@ -2774,6 +2774,77 @@ body.document-viewer-open {
         min-width: 850px;
     }
 }
+
+.launch-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.mapping-management-toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    background: #fff;
+}
+.mapping-management-toolbar[hidden] {
+    display: none !important;
+}
+.mapping-management-toolbar h1 {
+    margin: 2px 0 4px;
+    font-size: 20px;
+}
+.mapping-management-toolbar p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
+}
+.mapping-management-controls {
+    display: flex;
+    align-items: end;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.mapping-management-controls label {
+    display: grid;
+    gap: 4px;
+    min-width: min(360px, 48vw);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+}
+.mapping-management-controls input {
+    min-height: 36px;
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    font: inherit;
+}
+.mapping-status-filters {
+    display: flex;
+    gap: 6px;
+}
+.mapping-status-filters button.active {
+    border-color: #1f6feb;
+    box-shadow: inset 0 0 0 1px #1f6feb;
+}
+@media (max-width: 800px) {
+    .mapping-management-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+    .mapping-management-controls {
+        align-items: stretch;
+        flex-direction: column;
+    }
+    .mapping-management-controls label {
+        min-width: 0;
+    }
+}
+
 </style>
 </head>
 <body>
@@ -2783,7 +2854,10 @@ body.document-viewer-open {
             <label>User ID<input id="excise-user" autocomplete="username"></label>
             <label>Password<input id="excise-password" type="password" autocomplete="current-password"></label>
         </div>
-        <button id="open-portal" type="button">Open Excise Portal</button>
+        <div class="launch-actions">
+            <button id="open-portal" type="button">Open Excise Portal</button>
+            <button id="manage-mappings" type="button" class="secondary">Manage Item Mapping</button>
+        </div>
         <p id="status-message" class="status-message"></p>
     </main>
 
@@ -2962,6 +3036,24 @@ body.document-viewer-open {
     </main>
 
     <main id="mapping-view" class="mapping-shell" hidden>
+        <header id="mapping-management-toolbar" class="mapping-management-toolbar" hidden>
+            <div>
+                <span class="app-kicker">Excise ↔ Madhushala</span>
+                <h1>Item Mapping Management</h1>
+                <p>Review existing mappings, map pending Excise items, or change an incorrect mapping.</p>
+            </div>
+            <div class="mapping-management-controls">
+                <label>
+                    <span>Find Excise item</span>
+                    <input id="mapping-management-search" type="search" placeholder="Search Excise code or item name" autocomplete="off">
+                </label>
+                <div class="mapping-status-filters" role="group" aria-label="Mapping status">
+                    <button type="button" class="secondary active" data-mapping-filter="all">All</button>
+                    <button type="button" class="secondary" data-mapping-filter="unmapped">Unmapped</button>
+                    <button type="button" class="secondary" data-mapping-filter="mapped">Mapped</button>
+                </div>
+            </div>
+        </header>
         <div class="mapping-layout">
             <aside class="unmapped-list" aria-label="Unmapped excise items">
                 <div class="list-title">
@@ -3034,6 +3126,7 @@ const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, "?"));
 const sessionId = pageParams.get("sessionId") || "";
 const sessionToken = hashParams.get("session") || sessionStorage.getItem("exciseSession") || "";
 const mappingMode = pageParams.get("view") === "mapping";
+const mappingManagementMode = mappingMode && pageParams.get("manage") === "1";
 const documentMode = window.location.pathname.endsWith("/document-import");
 const activeJobId = sanitizeJobId(pageParams.get("jobId")) || "";
 const basePath = window.location.pathname.startsWith("/excise-import/") ? "/excise-import" : "";
@@ -3444,6 +3537,18 @@ function portalMappingUrl() {
     return `${window.location.origin}${basePath}/?view=mapping&sessionId=${encodeURIComponent(sessionId)}#session=${encodeURIComponent(sessionToken)}`;
 }
 
+function managementMappingUrl() {
+    return `${window.location.origin}${basePath}/?view=mapping&manage=1&sessionId=${encodeURIComponent(sessionId)}#session=${encodeURIComponent(sessionToken)}`;
+}
+
+function openMappingManagement() {
+    if (!sessionToken || !sessionId) {
+        setStatus("Open this page from Madhushala CRM before managing mappings.", true);
+        return;
+    }
+    window.location.href = managementMappingUrl();
+}
+
 function stopPortalMappingWatch() {
     if (portalMappingWatchTimer) window.clearInterval(portalMappingWatchTimer);
     portalMappingWatchTimer = null;
@@ -3804,7 +3909,9 @@ async function loadWorkspace(jobId = currentDocumentJobId, options = {}) {
     const search = document.getElementById("madhushala-search");
     const previousSearch = preserveState ? search?.value || "" : "";
     try {
-        const query = normalizedJobId ? `?jobId=${encodeURIComponent(normalizedJobId)}` : "?latestOnly=true";
+        const query = normalizedJobId
+            ? `?jobId=${encodeURIComponent(normalizedJobId)}`
+            : (mappingManagementMode ? "?latestOnly=false&includeMapped=true" : "?latestOnly=true");
         workspace = await api(`/mapping/workspace${query}`);
         currentDocumentJobId = normalizedJobId || currentDocumentJobId;
         const codes = new Set((workspace.unmappedItems || []).map((item) => String(item.exciseItemCode)));
@@ -3859,7 +3966,8 @@ function initMapping() {
     setHidden(document.getElementById("launch-view"), true);
     setHidden(document.getElementById("document-import-view"), true);
     setHidden(document.getElementById("mapping-view"), false);
-    setHidden(document.getElementById("save-purchase-from-mapping"), !sanitizeJobId(currentDocumentJobId));
+    setHidden(document.getElementById("mapping-management-toolbar"), !mappingManagementMode);
+    setHidden(document.getElementById("save-purchase-from-mapping"), mappingManagementMode || !sanitizeJobId(currentDocumentJobId));
     if (!sessionToken) {
         showToast("Invalid or missing CRM session.", "error");
         return;
@@ -4534,6 +4642,7 @@ async function confirmReviewAndContinue() {
 document.getElementById("continue-document-mapping")?.addEventListener("click", () => {
     void confirmReviewAndContinue();
 });
+document.getElementById("manage-mappings")?.addEventListener("click", openMappingManagement);
 document.getElementById("cancel-guardrail")?.addEventListener("click", closeGuardrailModal);
 document.getElementById("confirm-guardrail")?.addEventListener("click", () => {
     const action = pendingGuardrailAction;
