@@ -367,3 +367,14 @@ def test_mapping_management_item_picker_is_searchable():
     assert '"all_frames": true' in manifest
     assert '"match_origin_as_fallback": true' in manifest
     assert '"https://report.madhushalasoftware.com/*"' in manifest
+
+
+def test_mapping_workspace_shows_modern_loading_overlay():
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+
+    assert 'id="mapping-loading-overlay"' in runtime
+    assert 'class="mapping-loading-spinner"' in runtime
+    assert "Loading Item Map Master" in runtime
+    assert "function setMappingLoading(loading" in runtime
+    assert "if (showLoading) setMappingLoading(false);" in runtime
+    assert "@keyframes mapping-spin" in runtime
