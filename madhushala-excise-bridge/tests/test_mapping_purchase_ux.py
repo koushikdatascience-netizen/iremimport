@@ -328,3 +328,26 @@ def test_portal_bootstrap_returns_diagnostics_without_422_loading_lock():
     assert 'if (portal.ready === false)' in runtime
     assert 'url.value = portal.exciseLoginUrl || "Not configured"' in runtime
     assert 'openButton.disabled = portal.ready === false' in runtime
+
+
+def test_excise_portal_bootstrap_uses_company_master_before_state_registry():
+    main = Path("app/main.py").read_text(encoding="utf-8")
+    client = Path("app/integrations/madhushala/client.py").read_text(encoding="utf-8")
+
+    assert 'company = await client.get_company_master(session["company_code"])' in main
+    assert 'raw_state = str(company.get("state") or "").strip()' in main
+    assert 'portal = resolve_excise_portal(raw_state)' in main
+    assert 'f"/api/company-mast/{safe_company_code}"' in client
+    assert 'params={"shopCode": self.shop_code}' in client
+
+
+def test_extension_bridge_supports_embedded_excise_import_and_handshake_retry():
+    manifest = Path("extension/manifest.json").read_text(encoding="utf-8")
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+
+    assert '"version": "1.4.1"' in manifest
+    assert '"all_frames": true' in manifest
+    assert "function discoverExtension(timeoutMs = 2500)" in runtime
+    assert 'type: "DISCOVER"' in runtime
+    assert "const found = await discoverExtension();" in runtime
+    assert "not available on this page" in runtime
