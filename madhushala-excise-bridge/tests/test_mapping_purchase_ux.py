@@ -171,7 +171,7 @@ def test_portal_mapping_is_mapping_only_without_purchase_controls():
 
     assert 'if (!mappingMode || !sanitizeJobId(currentDocumentJobId || activeJobId || "")) return;' in mapping_script
     assert 'if (!mappingMode || !sanitizeJobId(currentDocumentJobId)) return;' in mapping_script
-    assert 'next.textContent = "Next: Preview Purchase"' in mapping_script
+    assert 'next.textContent = "Next: Purchase"' in mapping_script
     assert 'const isDocumentMappingView = isMappingView && Boolean(clean(pageParams.get("jobId")));' in context_script
     assert 'if (!isDocumentImport && !isDocumentMappingView) return;' in context_script
 
@@ -245,3 +245,30 @@ def test_state_aware_excise_login_bootstrap_is_registry_driven():
     assert "profile.passwordSelectors" in extension
     assert '"WEST BENGAL"' in registry
     assert '"MADHYA PRADESH"' in registry
+
+
+
+def test_mapping_hands_calculated_purchase_to_real_madhushala_ui():
+    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+
+    assert 'const MADHUSHALA_PURCHASE_URL = "https://report.madhushalasoftware.com"' in script
+    assert "function openPurchaseInMadhushala(purchase)" in script
+    assert '"/app/purchase#prefill=" + encoded' in script
+    assert "window.top.location.href = url" in script
+    assert "async function buildPurchaseHandoff(jobId)" in script
+    assert "/purchase/calculate-preview" in script
+    assert "const purchase = preview?.purchasePayload;" in script
+    assert "openPurchaseInMadhushala(purchase);" in script
+    assert 'next.textContent = "Next: Purchase"' in script
+
+
+def test_mapping_handoff_does_not_save_purchase_before_crm_redirect():
+    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    start = script.index("async function continueMappingToPurchase()")
+    end = script.index("function setupMappingNextButton()", start)
+    flow = script[start:end]
+
+    assert "/purchase/save" not in flow
+    assert "/document-import?view=purchase" not in flow
+    assert "buildPurchaseHandoff(jobId)" in flow
+    assert "openPurchaseInMadhushala(purchase)" in flow
