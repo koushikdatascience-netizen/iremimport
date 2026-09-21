@@ -712,22 +712,11 @@ class MappingService:
             }
 
         # For portal import this is intentionally AFTER ExciseItemMasterSave.
-        # Use Madhushala's authoritative Excise mapping master first so a newly
-        # submitted row is classified from mappedItemCode rather than relying on
-        # the eventually-consistent unmapped endpoint.
-        excise_master = await client.get_excise_items()
-        if excise_master:
-            unmapped = [
-                {
-                    **remote,
-                    "exciseItemCode": remote.get("exciseItemCode"),
-                    "itemName": remote.get("exciseItemName") or remote.get("itemName") or "",
-                }
-                for remote in excise_master
-                if not str(remote.get("mappedItemCode") or "").strip()
-            ]
-        else:
-            unmapped = await client.get_unmapped_items()
+        # Keep the user-facing workspace fast by using the lightweight unmapped API
+        # first. Only probe the authoritative Excise master for latest captured
+        # codes that are absent from unmapped-items, instead of loading the full
+        # Excise master on every Mapping render.
+        unmapped = await client.get_unmapped_items()
 
         latest_codes: set[str] = set()
 
@@ -777,27 +766,53 @@ class MappingService:
                         if row["excise_item_code"]
                     }
 
-        # If Madhushala has not exposed a just-created Excise item in its
-        # master yet, do not incorrectly report "all mapped". Keep the latest
-        # captured code visible as pending/unmapped until the authoritative
-        # master catches up.
+        authoritative_by_code: dict[str, dict[str, Any]] = {}
         if latest_codes:
-            visible_codes = {
+            visible_unmapped_codes = {
                 str(item.get("exciseItemCode") or "").strip()
-                for item in unmapped
+                for item in (unmapped or [])
                 if str(item.get("exciseItemCode") or "").strip()
             }
-            missing_latest = latest_codes - visible_codes
+            missing_latest = sorted(latest_codes - visible_unmapped_codes)
             if missing_latest:
-                mapped_master_codes = {
-                    str(item.get("exciseItemCode") or "").strip()
-                    for item in (excise_master or [])
-                    if str(item.get("mappedItemCode") or "").strip()
-                }
-                pending_codes = missing_latest - mapped_master_codes
-                if pending_codes:
+                async def _probe_latest_code(code: str) -> tuple[str, list[dict[str, Any]]]:
+                    try:
+                        return code, await client.get_excise_items(code)
+                    except Exception as exc:
+                        logger.warning(
+                            "excise_latest_status_probe_failed shopCode=%s exciseItemCode=%s error=%s",
+                            shop_code,
+                            code,
+                            exc,
+                        )
+                        return code, []
+
+                probe_results = await asyncio.gather(
+                    *(_probe_latest_code(code) for code in missing_latest)
+                )
+                for code, matches in probe_results:
+                    exact = next(
+                        (
+                            row
+                            for row in matches
+                            if str(row.get("exciseItemCode") or "").strip() == code
+                        ),
+                        None,
+                    )
+                    if exact:
+                        authoritative_by_code[code] = exact
+
+                # If the authoritative master has not surfaced a just-created code
+                # yet, keep it pending/unmapped rather than incorrectly saying all
+                # products are mapped.
+                unresolved = [
+                    code
+                    for code in missing_latest
+                    if code not in authoritative_by_code
+                ]
+                if unresolved:
                     with conn() as db:
-                        for code in sorted(pending_codes):
+                        for code in unresolved:
                             imported = db.execute(
                                 "SELECT item_name FROM imports WHERE shop_code=? AND excise_item_code=? ORDER BY updated_at DESC LIMIT 1",
                                 (shop_code, code),
@@ -809,6 +824,22 @@ class MappingService:
                                     "mappingPendingSync": True,
                                 }
                             )
+
+        # Codes confirmed by the authoritative master as mapped must not appear
+        # in the Mapping workspace even if an eventually-consistent unmapped
+        # response still contains them.
+        if authoritative_by_code:
+            mapped_latest_codes = {
+                code
+                for code, remote in authoritative_by_code.items()
+                if str(remote.get("mappedItemCode") or "").strip()
+            }
+            if mapped_latest_codes:
+                unmapped = [
+                    item
+                    for item in (unmapped or [])
+                    if str(item.get("exciseItemCode") or "").strip() not in mapped_latest_codes
+                ]
 
         rows: list[dict[str, Any]] = []
         with conn() as db:
