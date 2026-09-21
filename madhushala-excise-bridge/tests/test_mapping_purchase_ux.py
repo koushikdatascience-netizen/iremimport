@@ -272,3 +272,18 @@ def test_mapping_handoff_does_not_save_purchase_before_crm_redirect():
     assert "/document-import?view=purchase" not in flow
     assert "buildPurchaseHandoff(jobId)" in flow
     assert "openPurchaseInMadhushala(purchase)" in flow
+
+
+
+def test_document_mapping_footer_keeps_only_mapping_and_handoff_actions():
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+    mapping_script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    context_script = Path("app/static/purchase-context.js").read_text(encoding="utf-8")
+
+    assert 'id="submit-mappings"' in runtime
+    assert '>Save Mapping</button>' in runtime
+    assert 'id="save-purchase-from-mapping"' not in runtime
+    assert 'next.textContent = "Next: Purchase"' in mapping_script
+    assert 'mappingSummary.hidden = true' in mapping_script
+    assert '["mapping", "save-purchase-from-mapping"]' not in context_script
+    assert 'validate-purchase-mapping' not in runtime
