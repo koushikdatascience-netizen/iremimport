@@ -345,7 +345,7 @@ def test_extension_bridge_supports_embedded_excise_import_and_handshake_retry():
     manifest = Path("extension/manifest.json").read_text(encoding="utf-8")
     runtime = Path("app/static/index.html").read_text(encoding="utf-8")
 
-    assert '"version": "1.4.1"' in manifest
+    assert '"version": "1.4.3"' in manifest
     assert '"all_frames": true' in manifest
     assert "function discoverExtension(timeoutMs = 2500)" in runtime
     assert 'type: "DISCOVER"' in runtime
@@ -363,6 +363,7 @@ def test_mapping_management_item_picker_is_searchable():
     assert "function ensureManagementItemDatalist()" in script
     assert "function managementCodeFromSearchValue(value)" in script
     assert 'input.addEventListener("change", commit)' in script
-    assert '"version": "1.4.2"' in manifest
+    assert '"version": "1.4.3"' in manifest
     assert '"all_frames": true' in manifest
     assert '"match_origin_as_fallback": true' in manifest
+    assert '"https://report.madhushalasoftware.com/*"' in manifest
