@@ -33,7 +33,7 @@ def test_document_mapping_search_is_not_overwritten_by_background_refresh():
     script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
 
     assert 'const liveSearch = preserveState ? (search?.value || "") : "";' in script
-    assert 'if (sanitizeJobId(currentDocumentJobId)) return;' in script
+    assert 'if (mappingManagementMode || sanitizeJobId(currentDocumentJobId)) return;' in script
     assert 'document.activeElement === search' in script
 
 
