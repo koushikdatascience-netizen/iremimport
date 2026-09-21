@@ -117,7 +117,8 @@ async function postCapture(items, pageUrl, capturedAt) {
 
 function fillExciseLogin(credentials) {
   const host = location.hostname.toLowerCase();
-  if (!ALLOWED_EXCISE_HOSTS.has(host)) {
+  const allowedHosts = new Set(["excise.wb.gov.in", "eaabkari.mp.gov.in"]);
+  if (!allowedHosts.has(host)) {
     return {userFilled: false, passwordFilled: false, submitted: false, blocked: "unexpected_host"};
   }
 
