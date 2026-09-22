@@ -266,10 +266,11 @@
         return itemLabel(candidate);
     }
 
-    function managementSearchResults(query, limit = 12) {
+    function managementSearchResults(query, limit = 12, candidates = null) {
         const clean = normalizeSearchText(query);
         const compact = clean.replace(/\s/g, "");
-        const rows = (workspace.madhushalaItems || []).map((candidate) => {
+        const source = Array.isArray(candidates) ? candidates : (workspace.madhushalaItems || []);
+        const rows = source.map((candidate) => {
             const code = String(candidate.itemCode || "").trim();
             const name = String(candidate.itemName || "").trim();
             const label = managementItemSearchValue(candidate);
@@ -296,6 +297,43 @@
         return rows.slice(0, limit).map((entry) => entry.candidate);
     }
 
+    function mergeLiveItemMasterRows(items) {
+        const merged = new Map();
+        for (const item of (workspace.madhushalaItems || [])) {
+            const code = String(item?.itemCode || "").trim();
+            if (code) merged.set(code, item);
+        }
+        for (const item of (items || [])) {
+            const code = String(item?.itemCode || "").trim();
+            if (code) merged.set(code, item);
+        }
+        workspace.madhushalaItems = Array.from(merged.values());
+    }
+
+    async function searchLiveItemMaster(input, results, query) {
+        const clean = String(query || "").trim();
+        if (clean.length < 2 || !input || !results) return;
+
+        if (input._itemMasterAbortController) input._itemMasterAbortController.abort();
+        const controller = new AbortController();
+        input._itemMasterAbortController = controller;
+
+        results.innerHTML = '<div class="management-search-empty">Searching live Item Master…</div>';
+        results.classList.add("open");
+
+        try {
+            const payload = await api(`/mapping/item-master?search=${encodeURIComponent(clean)}`, {
+                signal: controller.signal,
+            });
+            if (controller.signal.aborted) return;
+            mergeLiveItemMasterRows(Array.isArray(payload?.items) ? payload.items : []);
+            renderManagementPickerResults(input, results, clean);
+        } catch (error) {
+            if (controller.signal.aborted || error?.name === "AbortError") return;
+            renderManagementPickerResults(input, results, clean);
+        }
+    }
+
     function closeManagementPicker(except = null) {
         document.querySelectorAll(".management-search-results.open").forEach((results) => {
             if (results !== except) results.classList.remove("open");
@@ -313,12 +351,11 @@
 
         results.innerHTML = matches.map((candidate) => {
             const code = String(candidate.itemCode || "").trim();
-            const name = String(candidate.itemName || "").trim();
-            const ml = compactValue(candidate.ml || candidate.measureMl);
+            const label = managementItemSearchValue(candidate);
             return `
-                <button type="button" class="management-search-option" data-item-code="${escapeHtml(code)}">
-                    <strong>${escapeHtml(name || "Item Master item")}</strong>
-                    <span>${escapeHtml(ml ? `${ml} ML` : "ML -")}</span>
+                <button type="button" class="management-search-option" data-item-code="${escapeHtml(code)}" title="${escapeHtml(label)}">
+                    <strong>${escapeHtml(label || "Item Master item")}</strong>
+                    <span>${escapeHtml(code ? `Code: ${code}` : "")}</span>
                 </button>`;
         }).join("");
         results.classList.add("open");
@@ -376,6 +413,7 @@
                                     data-current-code="${escapeHtml(effectiveCode)}"
                                     data-chosen-code="${escapeHtml(effectiveCode)}"
                                     value="${escapeHtml(selectedLabel)}"
+                                    title="${escapeHtml(selectedLabel)}"
                                     placeholder="Search item name or ML"
                                     autocomplete="off"
                                     aria-label="Search mapping for ${escapeHtml(item.itemName || "Excise item")}"
@@ -409,7 +447,12 @@
             });
             input.addEventListener("input", () => {
                 input.dataset.chosenCode = "";
-                renderManagementPickerResults(input, results, input.value);
+                const query = input.value;
+                renderManagementPickerResults(input, results, query);
+                window.clearTimeout(input._itemMasterSearchTimer);
+                input._itemMasterSearchTimer = window.setTimeout(() => {
+                    void searchLiveItemMaster(input, results, query);
+                }, 250);
             });
             input.addEventListener("mapping-item-selected", (event) => {
                 applyCode(event.detail?.itemCode);
@@ -989,12 +1032,12 @@
             }
             .management-search-option {
                 width: 100%;
-                min-height: 40px;
+                min-height: 46px;
                 display: grid;
-                grid-template-columns: minmax(90px, 150px) 1fr;
+                grid-template-columns: minmax(0, 1fr) auto;
                 gap: 8px;
-                align-items: center;
-                padding: 7px 9px;
+                align-items: start;
+                padding: 8px 9px;
                 border: 0;
                 border-bottom: 1px solid #ececec;
                 border-radius: 0;
@@ -1005,11 +1048,18 @@
             .management-search-option:hover {
                 background: #fff7c7;
             }
-            .management-search-option strong,
+            .management-search-option strong {
+                overflow: visible;
+                text-overflow: clip;
+                white-space: normal;
+                overflow-wrap: anywhere;
+                line-height: 1.28;
+            }
             .management-search-option span {
-                overflow: hidden;
-                text-overflow: ellipsis;
                 white-space: nowrap;
+                color: #5f6368;
+                font-size: 10px;
+                line-height: 1.35;
             }
             .management-search-empty {
                 padding: 11px;
