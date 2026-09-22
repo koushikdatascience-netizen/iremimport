@@ -375,8 +375,9 @@ def test_mapping_management_item_picker_is_searchable():
     assert "function renderManagementPickerResults(input, results, query = \"\")" in script
     assert 'input.addEventListener("input"' in script
     assert 'data-item-code=' in script
-    assert '<strong>${escapeHtml(name || "Item Master item")}</strong>' in script
-    assert '<strong>${escapeHtml(code)}</strong>' not in script
+    assert 'const label = managementItemSearchValue(candidate);' in script
+    assert '<strong>${escapeHtml(label || "Item Master item")}</strong>' in script
+    assert '<span>${escapeHtml(code ? `Code: ${code}` : "")}</span>' in script
     assert '"version": "1.4.6"' in manifest
     assert '"all_frames": true' in manifest
     assert '"match_origin_as_fallback": true' in manifest
