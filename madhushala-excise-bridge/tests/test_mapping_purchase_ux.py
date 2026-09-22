@@ -371,7 +371,7 @@ def test_mapping_management_item_picker_is_searchable():
     assert 'class="management-item-search"' in script
     assert 'class="management-search-results"' in script
     assert 'placeholder="Search item name or ML"' in script
-    assert "function managementSearchResults(query, limit = 12)" in script
+    assert "function managementSearchResults(query, limit = 12, candidates = null)" in script
     assert "function renderManagementPickerResults(input, results, query = \"\")" in script
     assert 'input.addEventListener("input"' in script
     assert 'data-item-code=' in script
