@@ -53,6 +53,16 @@
     return (row.querySelector(selector)?.value || "").trim();
   }
 
+  function numericTextByIdPart(row, idPart) {
+    const candidates = Array.from(row.querySelectorAll(`[id*="${idPart}"]`));
+    for (const element of candidates) {
+      const raw = ((element.value ?? element.textContent) || "").trim();
+      const normalized = raw.replace(/,/g, "");
+      if (/^-?\d+(?:\.\d+)?$/.test(normalized)) return raw;
+    }
+    return "";
+  }
+
   function selectedRows() {
     return Array.from(document.querySelectorAll('input[id$="_Qty"]'))
       .map((input) => input.closest("tr"))
@@ -64,8 +74,8 @@
         measureMl: text(row, '[id$="_lblmsr"]'),
         packageType: text(row, '[id$="_lblbottle"]'),
         retailerMargin: text(row, '[id$="_lblrm"]'),
-        roundOffGovt: text(row, '[id$="_lbl_Round_Off_Govt3"]'),
-        specialPurposeFee: text(row, '[id$="_lbl_Special_Levy3"]'),
+        roundOffGovt: numericTextByIdPart(row, "_lbl_Round_Off_Govt"),
+        specialPurposeFee: numericTextByIdPart(row, "_lbl_Special_Levy"),
         mrpPerUnit: text(row, '[id$="_Label55"]'),
         bottlesPerCase: text(row, '[id$="_lblnobotpercase"]'),
         mrpPerCase: text(row, '[id$="_lblmrppercase"]'),
