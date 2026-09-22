@@ -419,7 +419,7 @@ jobs:
             REPLICA_HTML="$(dc exec -T "$svc" curl -fsS "http://127.0.0.1:8091/document-import?replica=$svc-$SHORT_SHA" </dev/null)"
             echo "$svc scripts:"
             printf '%s' "$REPLICA_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
-            if ! grep -q 'mapping-row-identity.js?v=20260922-live-item-master-search-v22' <<<"$REPLICA_HTML" \
+            if ! grep -q 'mapping-row-identity.js?v=20260922-fresh-mapping-master-v23' <<<"$REPLICA_HTML" \
               || ! grep -q 'continueExtractedDocumentToMapping' <<<"$REPLICA_HTML"; then
               echo "ERROR: $svc is serving an old/incorrect frontend"
               exit 1
@@ -477,7 +477,7 @@ jobs:
           echo "== Verify freshly deployed frontend at the API gateway =="
           LOCAL_GATEWAY_HTML="$(curl -fsS -H 'Cache-Control: no-cache, no-store' \
             "http://127.0.0.1:8091/document-import?deploy=$SHORT_SHA")"
-          if ! grep -q 'mapping-row-identity.js?v=20260922-live-item-master-search-v22' <<<"$LOCAL_GATEWAY_HTML" \
+          if ! grep -q 'mapping-row-identity.js?v=20260922-fresh-mapping-master-v23' <<<"$LOCAL_GATEWAY_HTML" \
             || ! grep -q 'continueExtractedDocumentToMapping' <<<"$LOCAL_GATEWAY_HTML"; then
             echo "ERROR: 127.0.0.1:8091 is not serving deployment $DEPLOY_SHA"
             printf '%s' "$LOCAL_GATEWAY_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
@@ -489,7 +489,7 @@ jobs:
             --resolve integrations.madhushalasoftware.com:443:127.0.0.1 \
             -H 'Cache-Control: no-cache, no-store' \
             "https://integrations.madhushalasoftware.com/excise-import/document-import?deploy=$SHORT_SHA")"
-          if ! grep -q 'mapping-row-identity.js?v=20260922-live-item-master-search-v22' <<<"$LOCAL_NGINX_HTML" \
+          if ! grep -q 'mapping-row-identity.js?v=20260922-fresh-mapping-master-v23' <<<"$LOCAL_NGINX_HTML" \
             || ! grep -q 'continueExtractedDocumentToMapping' <<<"$LOCAL_NGINX_HTML"; then
             echo "ERROR: local Nginx route for integrations.madhushalasoftware.com is not serving the release gateway"
             echo "Selected enabled config: $NGINX_CONFIG"
@@ -644,7 +644,7 @@ jobs:
             echo "$label"
             HTML="$("$@" 2>/dev/null || true)"
             printf '%s' "$HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
-            if grep -q 'mapping-row-identity.js?v=20260922-live-item-master-search-v22' <<<"$HTML" \
+            if grep -q 'mapping-row-identity.js?v=20260922-fresh-mapping-master-v23' <<<"$HTML" \
               && grep -q 'continueExtractedDocumentToMapping' <<<"$HTML"; then
               echo "$label => CURRENT"
             else
@@ -699,7 +699,7 @@ jobs:
           getent ahostsv6 integrations.madhushalasoftware.com || true
 
           is_current_frontend() {
-            grep -q 'mapping-row-identity.js?v=20260922-live-item-master-search-v22' <<<"$1" \
+            grep -q 'mapping-row-identity.js?v=20260922-fresh-mapping-master-v23' <<<"$1" \
               && grep -q 'continueExtractedDocumentToMapping' <<<"$1"
           }
 
