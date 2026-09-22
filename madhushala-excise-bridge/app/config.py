@@ -87,7 +87,7 @@ class Settings:
     CACHE_USER_TTL_SECONDS: int = int(os.getenv("CACHE_USER_TTL_SECONDS", "900"))
     CACHE_SCHEME_TTL_SECONDS: int = int(os.getenv("CACHE_SCHEME_TTL_SECONDS", "900"))
     CACHE_TAX_TTL_SECONDS: int = int(os.getenv("CACHE_TAX_TTL_SECONDS", "10800"))
-    CACHE_ITEM_TTL_SECONDS: int = int(os.getenv("CACHE_ITEM_TTL_SECONDS", "21600"))
+    CACHE_ITEM_TTL_SECONDS: int = int(os.getenv("CACHE_ITEM_TTL_SECONDS", "60"))
 
     # Purchase orchestration controls. Calculation is now the authoritative
     # Madhushala business-rule boundary. Duplicate checking remains best-effort
