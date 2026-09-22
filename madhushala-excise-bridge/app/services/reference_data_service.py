@@ -184,6 +184,26 @@ class MadhushalaReferenceDataService:
         value = await cache_service.get_or_load(cache_key, settings.CACHE_ITEM_TTL_SECONDS, load)
         return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
+    async def search_catalogue(self, session: dict[str, Any], search: str) -> list[dict[str, Any]]:
+        """Search Madhushala Item Master live, bypassing the long-lived catalogue cache."""
+        query = str(search or "").strip()
+        if not query:
+            return await self.catalogue(session)
+
+        shop, company, bill_type = self._scope(session)
+        client = self.client_for_session(session)
+        rows = await client.get_dropdown_items(company, bill_type, query)
+        rows = [row for row in (rows or []) if isinstance(row, dict)]
+        logger.info(
+            "catalogue_live_search shopCode=%s companyCode=%s billType=%s query=%s rows=%s",
+            shop,
+            company,
+            bill_type,
+            query,
+            len(rows),
+        )
+        return rows
+
     async def fresh_catalogue(self, session: dict[str, Any]) -> list[dict[str, Any]]:
         """Bypass catalogue cache for company-scope validation.
 
