@@ -471,3 +471,25 @@ def test_portal_mapping_defers_item_master_until_after_left_rows_render():
     assert 'await api("/mapping/item-master"' in runtime
     assert "You can already review the Excise items on the left." in runtime
     assert "void loadDeferredMappingItemMaster();" in runtime
+
+
+def test_mapping_management_live_item_master_search_and_full_ml_label():
+    runtime = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    main = Path("app/main.py").read_text(encoding="utf-8")
+    reference = Path("app/services/reference_data_service.py").read_text(encoding="utf-8")
+
+    assert "async def search_catalogue" in reference
+    assert "await client.get_dropdown_items(company, bill_type, query)" in reference
+    assert 'async def get_mapping_item_master(request: Request, search: str = "")' in main
+    assert "await reference_data_service.search_catalogue(session, search)" in main
+
+    assert "/mapping/item-master?search=" in runtime
+    assert "searchLiveItemMaster" in runtime
+    assert "mergeLiveItemMasterRows" in runtime
+    assert "window.setTimeout(() => {" in runtime
+    assert "}, 250);" in runtime
+
+    assert "const label = managementItemSearchValue(candidate);" in runtime
+    assert "<strong>${escapeHtml(label || \"Item Master item\")}</strong>" in runtime
+    assert "text-overflow: clip;" in runtime
+    assert "white-space: normal;" in runtime
