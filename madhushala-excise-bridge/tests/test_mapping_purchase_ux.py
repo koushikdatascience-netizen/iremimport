@@ -151,7 +151,7 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260922-live-item-master-search-v22"' in main
+    assert 'STATIC_ASSET_VERSION = "20260922-fresh-mapping-master-v23"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
 
@@ -377,7 +377,7 @@ def test_mapping_management_item_picker_is_searchable():
     assert 'data-item-code=' in script
     assert 'const label = managementItemSearchValue(candidate);' in script
     assert '<strong>${escapeHtml(label || "Item Master item")}</strong>' in script
-    assert '<span>${escapeHtml(code ? `Code: ${code}` : "")}</span>' in script
+    assert '<span>${escapeHtml(code ? `Code: ${code}` : "")}</span>' not in script
     assert '"version": "1.4.6"' in manifest
     assert '"all_frames": true' in manifest
     assert '"match_origin_as_fallback": true' in manifest
@@ -494,3 +494,17 @@ def test_mapping_management_live_item_master_search_and_full_ml_label():
     assert "<strong>${escapeHtml(label || \"Item Master item\")}</strong>" in runtime
     assert "text-overflow: clip;" in runtime
     assert "white-space: normal;" in runtime
+
+
+def test_mapping_management_refreshes_catalogue_and_keeps_toast_clear_of_footer():
+    service = Path("app/services/mapping_service.py").read_text(encoding="utf-8")
+    runtime = Path("app/static/index.html").read_text(encoding="utf-8")
+    picker = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+
+    assert "await reference_data_service.fresh_catalogue(session)" in service
+    assert "if include_mapped" in service
+    assert "body.mapping-mode .toast" in runtime
+    assert "body.mapping-management-mode .toast" in runtime
+    assert "bottom: 72px;" in runtime
+    assert '<span>${escapeHtml(code ? `Code: ${code}` : "")}</span>' not in picker
+    assert '<strong>${escapeHtml(label || "Item Master item")}</strong>' in picker
