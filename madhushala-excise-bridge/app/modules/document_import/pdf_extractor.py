@@ -276,6 +276,90 @@ def _detect_profile(text: str) -> str:
     return "GENERIC"
 
 
+def _west_bengal_copy_label(page_text: str) -> str:
+    """Classify a Form No. 3 copy from its explicit top-of-page label."""
+    top_lines = [line.strip().upper() for line in (page_text or "").splitlines()[:25] if line.strip()]
+    for label in ("QUADRUPLICATE", "TRIPLICATE", "DUPLICATE", "ORIGINAL"):
+        if any(line == label for line in top_lines):
+            return label
+    return ""
+
+
+def _west_bengal_invoice_number(
+    pages: list[tuple[int, str, list[list[list[str]]]]],
+) -> str | None:
+    """Read the consignment invoice number from the structured A.1 table."""
+    pattern = re.compile(r"20\d{2}-20\d{2}/W/\d{4}/\d{3}/\d{2}/\d{6}", re.IGNORECASE)
+    original_pages = [entry for entry in pages if _west_bengal_copy_label(entry[1]) == "ORIGINAL"]
+    for _page_no, _page_text, page_tables in original_pages or pages[:1]:
+        for rows in page_tables:
+            for row_index, cells in enumerate(rows):
+                invoice_index = next(
+                    (index for index, cell in enumerate(cells) if "invoicenoof" in _key(cell)),
+                    None,
+                )
+                if invoice_index is None or row_index + 1 >= len(rows):
+                    continue
+                value_row = rows[row_index + 1]
+                if invoice_index >= len(value_row):
+                    continue
+                compact = re.sub(r"\s+", "", str(value_row[invoice_index] or ""))
+                match = pattern.search(compact)
+                if match:
+                    return match.group(0)
+    return None
+
+
+def _west_bengal_total_validation(
+    products: list[ExtractedProduct],
+    pages: list[tuple[int, str, list[list[list[str]]]]],
+) -> dict[str, Any]:
+    """Compare parsed rows with the authoritative printed Total row."""
+    original_pages = [entry for entry in pages if _west_bengal_copy_label(entry[1]) == "ORIGINAL"]
+    expected: tuple[int, int, int] | None = None
+    for _page_no, _page_text, page_tables in original_pages or pages[:1]:
+        for rows in page_tables:
+            for cells in rows:
+                if not cells or _clean(cells[0]).casefold() != "total" or len(cells) < 8:
+                    continue
+                case_text = _clean_west_bengal_case(cells[6])
+                expected_cases, expected_loose = resolve_case_loose(case_text, None)
+                expected_bottles = _int(cells[7])
+                expected = (expected_cases, expected_loose, expected_bottles)
+
+    actual_cases = sum(_int(item.box) for item in products)
+    actual_loose = sum(_int(item.loose) for item in products)
+    actual_bottles = 0
+    for item in products:
+        payload = item.model_dump()
+        raw = payload.get("rawPdfRow") if isinstance(payload.get("rawPdfRow"), dict) else {}
+        actual_bottles += _int(raw.get("In Bottles"))
+
+    if expected is None:
+        return {
+            "status": "unavailable",
+            "actualCases": actual_cases,
+            "actualLoose": actual_loose,
+            "actualBottles": actual_bottles,
+        }
+
+    expected_cases, expected_loose, expected_bottles = expected
+    passed = (
+        actual_cases == expected_cases
+        and actual_loose == expected_loose
+        and (expected_bottles <= 0 or actual_bottles == expected_bottles)
+    )
+    return {
+        "status": "passed" if passed else "failed",
+        "expectedCases": expected_cases,
+        "expectedLoose": expected_loose,
+        "expectedBottles": expected_bottles,
+        "actualCases": actual_cases,
+        "actualLoose": actual_loose,
+        "actualBottles": actual_bottles,
+    }
+
+
 def _extract_telangana(
     full_text: str,
     pages: list[tuple[int, str, list[list[list[str]]]]],
@@ -458,16 +542,7 @@ def _extract_west_bengal(
 ) -> tuple[list[ExtractedProduct], str | None, str | None]:
     products: list[ExtractedProduct] = []
 
-    def wb_copy_label(page_text: str) -> str:
-        # ORIGINAL pages can mention "Duplicate copy" later in instructions.
-        # Classify the copy only from the actual top-of-page label.
-        top_lines = [line.strip().upper() for line in (page_text or "").splitlines()[:25] if line.strip()]
-        for label in ("QUADRUPLICATE", "TRIPLICATE", "DUPLICATE", "ORIGINAL"):
-            if any(line == label for line in top_lines):
-                return label
-        return ""
-
-    original_pages = [entry for entry in pages if wb_copy_label(entry[1]) == "ORIGINAL"]
+    original_pages = [entry for entry in pages if _west_bengal_copy_label(entry[1]) == "ORIGINAL"]
     # Form No. 3 ORIGINAL can span multiple pages. Keep them all.
     scan_pages = original_pages or pages[:1]
 
@@ -549,7 +624,9 @@ def _extract_west_bengal(
     invoice_match = re.search(r"(20\d{2}-20\d{2}/W/\d{4}/\d{3}/\d{2}/\d{6})", compact_text, re.IGNORECASE)
     pass_match = re.search(r"Transport\s*Pass\s*No\.?\s*:\s*([^\n\r]+)", full_text, re.IGNORECASE)
     transport_pass_no = _clean(pass_match.group(1)) if pass_match else None
-    invoice_number = invoice_match.group(1) if invoice_match else transport_pass_no
+    invoice_number = _west_bengal_invoice_number(pages)
+    if not invoice_number:
+        invoice_number = invoice_match.group(1) if invoice_match else transport_pass_no
     date_match = re.search(r"\bDate\s*:\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})", full_text, re.IGNORECASE)
     invoice_date = _normalize_date(date_match.group(1)) if date_match else None
     return _dedupe(products), invoice_number, invoice_date
@@ -743,14 +820,7 @@ def _candidate_row_count(
     """
     selected_pages = pages
     if profile == "WEST_BENGAL_FORM3":
-        def copy_label(page_text: str) -> str:
-            top_lines = [line.strip().upper() for line in (page_text or "").splitlines()[:25] if line.strip()]
-            for label in ("QUADRUPLICATE", "TRIPLICATE", "DUPLICATE", "ORIGINAL"):
-                if any(line == label for line in top_lines):
-                    return label
-            return ""
-
-        originals = [entry for entry in pages if copy_label(entry[1]) == "ORIGINAL"]
+        originals = [entry for entry in pages if _west_bengal_copy_label(entry[1]) == "ORIGINAL"]
         selected_pages = originals or pages[:2]
 
         # Independent text-layer completeness count. This does not depend on
@@ -885,11 +955,24 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         full_text = "\n".join(page_texts)
         profile = _detect_profile(full_text)
 
-        # WB uses character-level horizontal-only cell reconstruction to remove
-        # the diagonal portal watermark before any business-field parsing.
+        # WB repeats the same document as ORIGINAL/DUPLICATE/TRIPLICATE/
+        # QUADRUPLICATE. Detect copies from the cheap text pass and perform
+        # expensive table reconstruction only for ORIGINAL pages.
         horizontal_only = profile == "WEST_BENGAL_FORM3"
+        west_bengal_original_pages = {
+            index
+            for index, text in enumerate(page_texts, start=1)
+            if _west_bengal_copy_label(text) == "ORIGINAL"
+        }
+        if horizontal_only and not west_bengal_original_pages and page_texts:
+            west_bengal_original_pages = {1}
         for page_index, page in enumerate(document, start=1):
-            page_tables = _page_tables(page, horizontal_only=horizontal_only)
+            should_extract_tables = not horizontal_only or page_index in west_bengal_original_pages
+            page_tables = (
+                _page_tables(page, horizontal_only=horizontal_only)
+                if should_extract_tables
+                else []
+            )
             table_count += len(page_tables)
             pages.append((page_index, page_texts[page_index - 1], page_tables))
 
@@ -914,12 +997,25 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         products, invoice_number, invoice_date = extractor(full_text, pages)
         candidate_rows = _candidate_row_count(profile, pages)
         product_count = len(products)
+        west_bengal_validation = (
+            _west_bengal_total_validation(products, pages)
+            if profile == "WEST_BENGAL_FORM3"
+            else None
+        )
+        if west_bengal_validation and west_bengal_validation["status"] == "passed":
+            # The printed case/loose and bottle totals independently prove that
+            # every ORIGINAL product row was captured. The broad text-layer
+            # counter can include wrapped header/total lines in Form No. 3.
+            candidate_rows = product_count
         completeness = (
             min(1.0, product_count / candidate_rows)
             if candidate_rows > 0
             else (1.0 if product_count else 0.0)
         )
-        needs_fallback = bool(candidate_rows > product_count)
+        needs_fallback = bool(
+            (west_bengal_validation and west_bengal_validation["status"] == "failed")
+            or candidate_rows > product_count
+        )
 
         if not products:
             return None, {
@@ -958,6 +1054,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
                 "candidateRowCount": candidate_rows,
                 "completeness": completeness,
                 "needsFallback": needs_fallback,
+                "totalValidation": west_bengal_validation,
             },
         )
         return extracted, {
@@ -973,6 +1070,8 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             "candidateRowCount": candidate_rows,
             "completeness": completeness,
             "needsFallback": needs_fallback,
+            "totalValidation": west_bengal_validation,
+            "originalPageNumbers": sorted(west_bengal_original_pages) if horizontal_only else None,
         }
     finally:
         document.close()

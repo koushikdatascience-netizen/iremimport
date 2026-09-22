@@ -647,8 +647,26 @@ class DocumentImportService:
                         "fallbackReason": meta.get("reason") or "no_usable_local_extraction",
                         "pageItemCounts": getattr(extracted, "pageItemCounts", None),
                     }
-                elif meta.get("needsFallback") and meta.get("profile") != "WEST_BENGAL_FORM3":
+                elif meta.get("needsFallback") and (
+                    meta.get("profile") != "WEST_BENGAL_FORM3"
+                    or (meta.get("totalValidation") or {}).get("status") == "failed"
+                ):
                     secondary = await LlamaCloudClient().extract_scanned_pdf_pages(temp_path, filename)
+                    if meta.get("profile") == "WEST_BENGAL_FORM3":
+                        original_pages = {
+                            int(page)
+                            for page in (meta.get("originalPageNumbers") or [])
+                            if str(page).isdigit()
+                        }
+                        secondary_items = list(secondary.items or [])
+                        if original_pages and any(getattr(item, "sourcePage", None) for item in secondary_items):
+                            secondary_payload = secondary.model_dump()
+                            secondary_payload["items"] = [
+                                item.model_dump()
+                                for item in secondary_items
+                                if int(getattr(item, "sourcePage", 0) or 0) in original_pages
+                            ]
+                            secondary = ExtractedDocument.model_validate(secondary_payload)
                     primary_count = len(extracted.items or [])
                     secondary_count = len(secondary.items or [])
                     extracted = self._merge_extracted(extracted, secondary)

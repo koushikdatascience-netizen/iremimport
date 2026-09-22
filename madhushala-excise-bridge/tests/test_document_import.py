@@ -1127,6 +1127,97 @@ def test_west_bengal_form3_keeps_all_six_original_rows_with_distinct_ml():
     ]
 
 
+def test_west_bengal_reads_invoice_from_a1_and_validates_printed_totals():
+    from app.modules.document_import.pdf_extractor import (
+        _extract_west_bengal,
+        _west_bengal_total_validation,
+    )
+
+    a1_rows = [
+        ["Requisition No & Date", "Serial No", "Date", "Consignee", "Consignor", "Make", "Model", "Vehicle", "Invoice No. of the Consignment"],
+        ["REQ", "PASS", "17/08/2026", "SHOP", "DEPOT", "NA", "NA", "WB01", "2026-\n2027/W/2022/007/01/031543\n& Date 17/08/2026"],
+    ]
+    product_rows = [
+        ["Kind", "Category", "Brand Name", "Measure", "Strength", "Batch No. & Date", "Quantity", "", "", "", "Amount"],
+        ["", "", "", "", "", "", "In Cases", "In Bottles", "In B.L", "In LPL", ""],
+        ["IMFL", "Whisky", "ITEM A", "750 Ml.", "25 Under Proof", "B1", "1 - 0", "12", "9", "6", "100"],
+        ["OS", "Whisky", "ITEM B", "200 Ml.", "40 %v/v", "B2", "0 - 6", "6", "1.2", "0.8", "0"],
+        ["Total", "", "", "", "", "", "1 - 6", "18", "10.2", "6.8", "100"],
+    ]
+    pages = [(1, "ORIGINAL\nWest Bengal Excise Foreign Liquor Form No 3", [a1_rows, product_rows])]
+
+    products, invoice_number, _ = _extract_west_bengal(
+        "Transport Pass No. : tFLDR/2026-2027/07015578/P\nDate : 17/08/2026",
+        pages,
+    )
+    validation = _west_bengal_total_validation(products, pages)
+
+    assert invoice_number == "2026-2027/W/2022/007/01/031543"
+    assert [(item.box, item.loose) for item in products] == [(1, 0), (0, 6)]
+    assert validation == {
+        "status": "passed",
+        "expectedCases": 1,
+        "expectedLoose": 6,
+        "expectedBottles": 18,
+        "actualCases": 1,
+        "actualLoose": 6,
+        "actualBottles": 18,
+    }
+
+
+def test_west_bengal_local_pdf_only_reconstructs_original_tables(monkeypatch):
+    from app.modules.document_import import pdf_extractor
+
+    product_rows = [
+        ["Kind", "Category", "Brand Name", "Measure", "Strength", "Batch No. & Date", "Quantity", "", "", "", "Amount"],
+        ["", "", "", "", "", "", "In Cases", "In Bottles", "In B.L", "In LPL", ""],
+        ["IMFL", "Whisky", "ITEM A", "750 Ml.", "25 Under Proof", "B1", "1 - 0", "12", "9", "6", "100"],
+        ["Total", "", "", "", "", "", "1 - 0", "12", "9", "6", "100"],
+    ]
+
+    class FakePage:
+        def __init__(self, number, label):
+            self.number = number
+            self.text = f"{label}\nWest Bengal Excise Foreign Liquor Form No 3\nIMFL Whisky ITEM A 750 Ml.\n" + ("content " * 40)
+
+        def get_text(self, mode):
+            if mode == "text":
+                return self.text
+            if mode == "words":
+                return [(0, 0, 0, 0, "word")] * 40
+            raise AssertionError(mode)
+
+    class FakeDocument(list):
+        def close(self):
+            return None
+
+    document = FakeDocument([
+        FakePage(1, "ORIGINAL"),
+        FakePage(2, "DUPLICATE"),
+        FakePage(3, "TRIPLICATE"),
+        FakePage(4, "QUADRUPLICATE"),
+    ])
+    table_calls = []
+
+    monkeypatch.setattr(pdf_extractor.fitz, "open", lambda _path: document)
+
+    def fake_page_tables(page, *, horizontal_only=False):
+        table_calls.append(page.number)
+        assert horizontal_only is True
+        return [product_rows]
+
+    monkeypatch.setattr(pdf_extractor, "_page_tables", fake_page_tables)
+
+    extracted, meta = pdf_extractor.extract_pdf_locally(Path("wb-form3.pdf"))
+
+    assert table_calls == [1]
+    assert extracted is not None
+    assert len(extracted.items) == 1
+    assert meta["originalPageNumbers"] == [1]
+    assert meta["totalValidation"]["status"] == "passed"
+    assert meta["needsFallback"] is False
+
+
 
 
 
@@ -1564,6 +1655,53 @@ async def test_west_bengal_native_extraction_never_merges_llama_copy_rows(monkey
     assert meta["engine"] == "pymupdf-state-adapter"
     assert meta["needsFallback"] is False
     assert meta["fallbackSuppressed"] == "west_bengal_original_is_authoritative"
+
+
+@pytest.mark.asyncio
+async def test_west_bengal_failed_total_validation_keeps_llama_fallback(monkeypatch):
+    from app.modules.document_import import service as service_module
+    from app.modules.document_import.service import DocumentImportService
+
+    primary = ExtractedDocument(
+        documentType="invoice",
+        items=[ExtractedProduct(itemName="ITEM A", brand="ITEM A", ml=750, box=1, loose=0)],
+        extractionProfile="WEST_BENGAL_FORM3",
+    )
+    secondary = ExtractedDocument(
+        documentType="invoice",
+        items=[
+            ExtractedProduct(itemName="ITEM A", brand="ITEM A", ml=750, box=1, loose=0, sourcePage=1),
+            ExtractedProduct(itemName="ITEM B", brand="ITEM B", ml=180, box=2, loose=0, sourcePage=1),
+            ExtractedProduct(itemName="DUPLICATE ITEM", brand="DUPLICATE ITEM", ml=180, box=2, loose=0, sourcePage=3),
+        ],
+    )
+    called = {"llama": 0}
+
+    def fake_local(_path):
+        return primary, {
+            "engine": "pymupdf-state-adapter",
+            "usable": True,
+            "profile": "WEST_BENGAL_FORM3",
+            "needsFallback": True,
+            "originalPageNumbers": [1],
+            "totalValidation": {"status": "failed"},
+        }
+
+    class FakeLlamaClient:
+        async def extract_scanned_pdf_pages(self, _path, _filename):
+            called["llama"] += 1
+            return secondary
+
+    monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local)
+    monkeypatch.setattr(service_module, "LlamaCloudClient", FakeLlamaClient)
+
+    service = DocumentImportService(object())
+    extracted, meta = await service._extract_upload_part(b"%PDF-1.4 wb-test", "pdf", "wb.pdf", 1)
+
+    assert called["llama"] == 1
+    assert meta["engine"] == "pymupdf+llamaparse"
+    assert [item.itemName for item in extracted.items] == ["ITEM A", "ITEM B"]
+    assert "DUPLICATE ITEM" not in [item.itemName for item in extracted.items]
 
 def test_multi_pdf_batch_merges_same_purchase_into_one_review(client, monkeypatch):
     from app.modules.document_import.service import DocumentImportService
