@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 
@@ -24,31 +23,24 @@ def _normalize_label(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _as_decimal(value: Any) -> Decimal | None:
-    text = str(value or "").replace(",", "").strip()
-    if not text:
-        return None
-    try:
-        return Decimal(text)
-    except (InvalidOperation, ValueError):
-        return None
+def _raw_amount(value: Any) -> str:
+    """Return the captured Excise value unchanged apart from surrounding whitespace.
 
-
-def _case_amount(per_bottle_value: Any, bottles_per_case: Any) -> str:
-    value = _as_decimal(per_bottle_value)
-    packing = _as_decimal(bottles_per_case)
-    if value is None or packing is None or packing <= 0:
+    TaxTag only decides which source field belongs in T1..T4. The bridge must not
+    convert per-bottle values to per-case values because some Excise rows do not
+    expose bottlesPerCase and Madhushala expects the captured value itself.
+    """
+    if value in (None, ""):
         return ""
-    amount = (value * packing).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    return format(amount, ".2f")
+    return str(value).strip()
 
 
 def apply_excise_tax_tags(payload: dict[str, Any], tax_tags: list[dict[str, Any]]) -> dict[str, Any]:
-    """Fill t1..t4 from Madhushala TaxTag labels and WB Excise per-bottle values.
+    """Fill t1..t4 from Madhushala TaxTag labels using raw WB Excise values.
 
     TaxTag defines what each generic T field means (for example T1 = SP FEE).
-    The actual amount comes from the corresponding WB Excise field and is converted
-    to a per-case amount by multiplying it by bottlesPerCase.
+    The corresponding captured Excise field is copied directly. No multiplication
+    by bottlesPerCase or other case-level conversion is performed.
 
     Missing source fields, such as TCS when WB Excise does not expose it, stay blank.
     """
@@ -69,12 +61,11 @@ def apply_excise_tax_tags(payload: dict[str, Any], tax_tags: list[dict[str, Any]
         if current is None or (item_type == "AI" and str(current.get("itemType") or "").strip().upper() != "AI"):
             candidates[code] = row
 
-    bottles_per_case = result.get("bottlesPerCase")
     for code, row in candidates.items():
         label = _normalize_label(row.get("taxLabel"))
         source_field = _LABEL_TO_EXCISE_FIELD.get(label)
         if not source_field:
             continue
-        result[code.casefold()] = _case_amount(result.get(source_field), bottles_per_case)
+        result[code.casefold()] = _raw_amount(result.get(source_field))
 
     return result
