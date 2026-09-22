@@ -19,8 +19,8 @@ def _jwt(payload: dict) -> str:
 
 def test_document_import_loads_purchase_context_script():
     html = document_import_html()
-    assert '<script src="./static/qr-browser-fallback.js?v=20260922-live-item-master-search-v22"></script>' in html
-    assert '<script src="./static/purchase-context.js?v=20260922-live-item-master-search-v22"></script>' in html
+    assert '<script src="./static/qr-browser-fallback.js?v=20260922-fresh-mapping-master-v23"></script>' in html
+    assert '<script src="./static/purchase-context.js?v=20260922-fresh-mapping-master-v23"></script>' in html
 
 
 def test_normalize_purchase_master_options_accepts_madhushala_field_names():
