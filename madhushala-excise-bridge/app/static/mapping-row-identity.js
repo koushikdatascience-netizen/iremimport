@@ -355,7 +355,6 @@
             return `
                 <button type="button" class="management-search-option" data-item-code="${escapeHtml(code)}" title="${escapeHtml(label)}">
                     <strong>${escapeHtml(label || "Item Master item")}</strong>
-                    <span>${escapeHtml(code ? `Code: ${code}` : "")}</span>
                 </button>`;
         }).join("");
         results.classList.add("open");
@@ -1033,10 +1032,7 @@
             .management-search-option {
                 width: 100%;
                 min-height: 46px;
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) auto;
-                gap: 8px;
-                align-items: start;
+                display: block;
                 padding: 8px 9px;
                 border: 0;
                 border-bottom: 1px solid #ececec;
@@ -1054,12 +1050,6 @@
                 white-space: normal;
                 overflow-wrap: anywhere;
                 line-height: 1.28;
-            }
-            .management-search-option span {
-                white-space: nowrap;
-                color: #5f6368;
-                font-size: 10px;
-                line-height: 1.35;
             }
             .management-search-empty {
                 padding: 11px;
