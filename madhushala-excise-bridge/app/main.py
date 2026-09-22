@@ -650,10 +650,14 @@ async def get_mapping_workspace(
 
 
 @app.get("/mapping/item-master")
-async def get_mapping_item_master(request: Request):
+async def get_mapping_item_master(request: Request, search: str = ""):
     session = session_service.from_request(request)
     try:
-        items = await reference_data_service.catalogue(session)
+        items = (
+            await reference_data_service.search_catalogue(session, search)
+            if str(search or "").strip()
+            else await reference_data_service.catalogue(session)
+        )
     except MadhushalaApiError as exc:
         if exc.status_code in (401, 403):
             raise HTTPException(
