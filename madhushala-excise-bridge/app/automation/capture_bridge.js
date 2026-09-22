@@ -15,11 +15,22 @@
 
   function numericTextByIdPart(row, idPart) {
     const candidates = Array.from(row.querySelectorAll(`[id*="${idPart}"]`));
+
+    // Prefer a control whose complete content is numeric.
     for (const element of candidates) {
       const raw = ((element.value ?? element.textContent) || "").trim();
       const normalized = raw.replace(/,/g, "");
-      if (/^-?\d+(?:\.\d+)?$/.test(normalized)) return raw;
+      if (/^-?\d+(?:\.\d+)?$/.test(normalized)) return normalized;
     }
+
+    // Some Excise pages render the numeric value together with a unit/suffix.
+    // Ignore descriptive labels and extract the first standalone numeric value.
+    for (const element of candidates) {
+      const raw = ((element.value ?? element.textContent) || "").trim();
+      const match = raw.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+      if (match) return match[0];
+    }
+
     return "";
   }
 
