@@ -529,7 +529,16 @@ class MappingService:
         # the initial response. Portal Mapping does not: returning its left-side
         # Excise rows must never wait for the full Item Master catalogue.
         if job_id or include_mapped:
-            madhushala_items = await reference_data_service.catalogue(session)
+            # Mapping Management must reflect the authoritative Madhushala
+            # Item Master immediately. A long-lived Redis catalogue can be
+            # stale when items are added/renamed upstream, so refresh it once
+            # when management mode opens. Document Mapping can keep using the
+            # cached catalogue for speed.
+            madhushala_items = (
+                await reference_data_service.fresh_catalogue(session)
+                if include_mapped
+                else await reference_data_service.catalogue(session)
+            )
             match_index = MatchIndex(madhushala_items)
             item_by_code = {
                 str(item.get("itemCode") or "").strip(): item
