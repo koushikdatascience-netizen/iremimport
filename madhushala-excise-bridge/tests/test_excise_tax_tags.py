@@ -48,6 +48,37 @@ def test_tax_tag_order_is_dynamic_not_hard_coded():
     assert result["t2"] == "2.50"
 
 
+def test_verbose_round_off_and_retail_labels_are_recognized():
+    payload = {
+        "roundOffGovt": "0.47",
+        "retailerMargin": "10.94",
+        "specialPurposeFee": "2.37",
+    }
+    tags = [
+        {
+            "taxCode": "T1",
+            "taxLabel": "Special Purpose Fee (SP Fee)",
+            "itemType": "AI",
+        },
+        {
+            "taxCode": "T2",
+            "taxLabel": "Round Off value (to be remitted to Govt.)",
+            "itemType": "AI",
+        },
+        {
+            "taxCode": "T3",
+            "taxLabel": "Retail Margin / Retailer's Margin",
+            "itemType": "AI",
+        },
+    ]
+
+    result = apply_excise_tax_tags(payload, tags)
+
+    assert result["t1"] == "2.37"
+    assert result["t2"] == "0.47"
+    assert result["t3"] == "10.94"
+
+
 def test_missing_excise_value_stays_blank_not_zero():
     payload = {"bottlesPerCase": "12", "specialPurposeFee": "5"}
     tags = [
