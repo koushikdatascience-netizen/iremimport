@@ -49,24 +49,20 @@ Examples:
 Absolut 50 ml loose-only         -> box=0, loose=1, qnty=1
 ```
 
-Commercial values come from Madhushala Item Master:
+For **PDF imports**, commercial rate inputs are forwarded exactly from Madhushala Item Master:
 
 ```text
-boxRate   <- purchaseRateCase
-looseRate <- purchaseRate when non-zero, otherwise purchaseRateCase
-mrp       <- salesRate
+boxRate   <- itemmst.purchaseRateCase
+looseRate <- itemmst.purchaseRate
+mrp       <- itemmst.salesRate
 packing   <- Item Master packing/bottles-per-case
 ```
 
-Local pre-Calculate line amount uses quantity-specific rates:
+The bridge does **not** divide, multiply, derive, or substitute PDF `boxRate`/`looseRate`. In particular, when `purchaseRate=0`, PDF Calculate receives `looseRate=0`; it is not replaced with `purchaseRateCase`.
 
-```text
-case-only:   box * boxRate
-mixed:       (box * boxRate) + (loose * looseRate)
-loose-only:  loose * looseRate
-```
+For PDF imports the bridge also does not calculate a pre-Calculate financial amount. It sends reviewed `box`/`loose` plus the exact Item Master rates to Madhushala `POST /api/purchase/calculate`, which is the financial source of truth for `rate`, `itemAmount`, taxes and totals.
 
-Madhushala `POST /api/purchase/calculate` remains the financial source of truth for the final payload.
+Legacy non-PDF flows retain their previous rate fallback behavior.
 
 ---
 
@@ -547,7 +543,7 @@ The bridge then sends Madhushala Calculate an Item-Master-enriched request. For 
 }
 ```
 
-The numeric commercial values above demonstrate the exact fields and rate semantics. Production values come from the mapped Item Master record.
+The numeric commercial values above demonstrate the exact PDF field mapping. Production values are forwarded directly from the mapped Item Master record: `boxRate=itemmst.purchaseRateCase` and `looseRate=itemmst.purchaseRate`, with no bridge-side conversion or fallback.
 
 Successful bridge response:
 

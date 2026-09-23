@@ -2182,3 +2182,89 @@ def test_item_master_calculation_request_keeps_loose_only_identity_and_rates():
     assert item["packing"] == 48
     assert item["boxRate"] == 4800.0
     assert item["looseRate"] == 100.0
+
+
+def test_pdf_calculate_request_forwards_exact_item_master_purchase_rates():
+    from app.modules.document_import.purchase_contract import build_item_master_calculation_request
+
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "hedu_test",
+            "companyCode": "2",
+            "schemeCode": "",
+            "salesTaxRate": 0,
+            "salesTaxIncludingFree": False,
+        },
+        [
+            {
+                "itemCode": "ABS50",
+                "box": 0,
+                "loose": 1,
+                "qnty": 1,
+                "freeQnty": 0,
+                "_canonicalQuantityVersion": 2,
+            }
+        ],
+        {
+            "ABS50": {
+                "itemCode": "ABS50",
+                "packing": 24,
+                "purchaseRate": 142.3,
+                "purchaseRateCase": 81964.8,
+                "salesRate": 250,
+            }
+        },
+        exact_purchase_rates=True,
+    )
+
+    item = request["items"][0]
+    assert item["box"] == 0
+    assert item["loose"] == 1
+    assert item["boxRate"] == 81964.8
+    assert item["looseRate"] == 142.3
+
+
+def test_pdf_exact_rate_mode_does_not_substitute_case_rate_when_purchase_rate_is_zero():
+    from app.modules.document_import.purchase_contract import build_item_master_calculation_request
+
+    base = {
+        "shopCode": "hedu_test",
+        "companyCode": "2",
+        "schemeCode": "",
+        "salesTaxRate": 0,
+        "salesTaxIncludingFree": False,
+    }
+    items = [{
+        "itemCode": "PDF01",
+        "box": 0,
+        "loose": 1,
+        "qnty": 1,
+        "freeQnty": 0,
+        "_canonicalQuantityVersion": 2,
+    }]
+    master = {
+        "PDF01": {
+            "purchaseRate": 0,
+            "purchaseRateCase": 4800,
+            "packing": 24,
+            "salesRate": 250,
+        }
+    }
+
+    pdf_request = build_item_master_calculation_request(
+        base,
+        items,
+        master,
+        exact_purchase_rates=True,
+    )
+    legacy_request = build_item_master_calculation_request(
+        base,
+        items,
+        master,
+        exact_purchase_rates=False,
+    )
+
+    assert pdf_request["items"][0]["looseRate"] == 0.0
+    assert pdf_request["items"][0]["boxRate"] == 4800.0
+    # Non-PDF behavior remains unchanged.
+    assert legacy_request["items"][0]["looseRate"] == 4800.0
