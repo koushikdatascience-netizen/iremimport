@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import re
 import tempfile
@@ -28,6 +29,9 @@ from app.integrations.madhushala.client import MadhushalaApiError, MadhushalaCli
 
 
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png"}
+logger = logging.getLogger("madhushala-excise-bridge.document-import")
+
+
 MIME_BY_EXT = {
     "pdf": {"application/pdf"},
     "jpg": {"image/jpeg"},
@@ -638,6 +642,15 @@ class DocumentImportService:
 
             if ext == "pdf":
                 extracted, meta = extract_pdf_locally(temp_path)
+                logger.info(
+                    "document_pdf_local_extraction file=%s engine=%s profile=%s usable=%s needsFallback=%s timingsMs=%s",
+                    filename,
+                    meta.get("engine"),
+                    meta.get("profile"),
+                    meta.get("usable"),
+                    meta.get("needsFallback"),
+                    meta.get("timingsMs"),
+                )
                 if extracted is None:
                     extracted = await LlamaCloudClient().extract_scanned_pdf_pages(temp_path, filename)
                     meta = {
