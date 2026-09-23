@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 import re
 import time
 import unicodedata
@@ -214,6 +215,7 @@ def _horizontal_page_chars(page: fitz.Page) -> list[tuple[float, float, float, f
 def _horizontal_cell_text(
     bbox_or_page: Any,
     page_chars_or_bbox: Any,
+    page_char_centres_y: list[float] | None = None,
 ) -> str:
     """Rebuild one table cell while preserving the legacy helper contract.
 
@@ -226,6 +228,7 @@ def _horizontal_cell_text(
     if hasattr(bbox_or_page, "get_text"):
         bbox = page_chars_or_bbox
         page_chars = _horizontal_page_chars(bbox_or_page)
+        page_char_centres_y = None
     else:
         bbox = bbox_or_page
         page_chars = page_chars_or_bbox or []
@@ -235,9 +238,18 @@ def _horizontal_cell_text(
     except Exception:
         return ""
 
+    # Accuracy first: the final inclusion decision remains the exact same
+    # rect.contains(glyph centre) check. The Y index only narrows the candidate
+    # set before that exact geometry test.
+    candidates = page_chars
+    if page_char_centres_y is not None and page_chars:
+        lower = bisect.bisect_left(page_char_centres_y, rect.y0)
+        upper = bisect.bisect_right(page_char_centres_y, rect.y1)
+        candidates = page_chars[lower:upper]
+
     chars = [
         (y, x, text)
-        for y, x, centre_x, centre_y, text in page_chars
+        for y, x, centre_x, centre_y, text in candidates
         if rect.contains(fitz.Point(centre_x, centre_y))
     ]
     if not chars:
@@ -283,9 +295,15 @@ def _page_tables(
 
     output: list[list[list[str]]] = []
     page_chars: list[tuple[float, float, float, float, str]] = []
+    page_char_centres_y: list[float] | None = None
     if horizontal_only and (getattr(found, "tables", []) or []):
         glyph_started = time.perf_counter()
         page_chars = _horizontal_page_chars(page)
+        # Sort once by glyph centre Y and build a parallel key list for binary
+        # search. Cell text is still sorted by original y0/x0 before rebuild,
+        # so this index cannot change output ordering.
+        page_chars.sort(key=lambda item: item[3])
+        page_char_centres_y = [item[3] for item in page_chars]
         if diagnostics is not None:
             diagnostics["horizontalGlyphExtractMs"] = diagnostics.get(
                 "horizontalGlyphExtractMs", 0.0
@@ -301,7 +319,15 @@ def _page_tables(
             for table_row in getattr(table, "rows", []) or []:
                 row_values: list[str] = []
                 for cell in getattr(table_row, "cells", []) or []:
-                    row_values.append(_horizontal_cell_text(cell, page_chars) if cell else "")
+                    row_values.append(
+                        _horizontal_cell_text(
+                            cell,
+                            page_chars,
+                            page_char_centres_y,
+                        )
+                        if cell
+                        else ""
+                    )
                 if any(row_values):
                     clean_rows.append(row_values)
             if clean_rows:
