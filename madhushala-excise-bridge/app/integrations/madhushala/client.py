@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
-from app.observability import get_correlation_id, observe_madhushala_request
+from app.observability import get_correlation_id, observe_madhushala_request, redact_for_logging
 from app.services.excise_tax_tags import apply_excise_tax_tags
 
 
@@ -181,6 +181,21 @@ class MadhushalaClient:
 
         for attempt in range(1, max_attempts + 1):
             started = time.perf_counter()
+            logger.info(
+                "madhushala_flow_request method=%s path=%s attempt=%s",
+                method,
+                path,
+                attempt,
+                extra={
+                    "event": "madhushala_flow_request",
+                    "httpMethod": method,
+                    "upstreamPath": path,
+                    "attempt": attempt,
+                    "shopCode": self.shop_code,
+                    "query": redact_for_logging(params or {}),
+                    "requestPayload": redact_for_logging(json_body),
+                },
+            )
             try:
                 response = await self._send_once(
                     method,
@@ -209,17 +224,87 @@ class MadhushalaClient:
                     },
                 )
                 if method == "GET" and response.status_code in _RETRYABLE_STATUS and attempt < max_attempts:
+                    logger.warning(
+                        "madhushala_flow_response method=%s path=%s status=%s retrying=true",
+                        method,
+                        path,
+                        response.status_code,
+                        extra={
+                            "event": "madhushala_flow_response",
+                            "httpMethod": method,
+                            "upstreamPath": path,
+                            "statusCode": response.status_code,
+                            "durationMs": duration_ms,
+                            "attempt": attempt,
+                            "retrying": True,
+                            "responsePayload": redact_for_logging(
+                                response.json() if response.content and "json" in response.headers.get("content-type", "").casefold()
+                                else response.text
+                            ),
+                        },
+                    )
                     await asyncio.sleep((0.12 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.08))
                     continue
                 response.raise_for_status()
                 if not response.content:
+                    logger.info(
+                        "madhushala_flow_response method=%s path=%s status=%s",
+                        method,
+                        path,
+                        response.status_code,
+                        extra={
+                            "event": "madhushala_flow_response",
+                            "httpMethod": method,
+                            "upstreamPath": path,
+                            "statusCode": response.status_code,
+                            "durationMs": duration_ms,
+                            "attempt": attempt,
+                            "responsePayload": None,
+                        },
+                    )
                     return None
                 try:
-                    return response.json()
+                    response_payload = response.json()
                 except ValueError:
-                    return response.text
+                    response_payload = response.text
+                logger.info(
+                    "madhushala_flow_response method=%s path=%s status=%s",
+                    method,
+                    path,
+                    response.status_code,
+                    extra={
+                        "event": "madhushala_flow_response",
+                        "httpMethod": method,
+                        "upstreamPath": path,
+                        "statusCode": response.status_code,
+                        "durationMs": duration_ms,
+                        "attempt": attempt,
+                        "responsePayload": redact_for_logging(response_payload),
+                    },
+                )
+                return response_payload
             except httpx.HTTPStatusError as exc:
                 message = exc.response.text or exc.response.reason_phrase
+                try:
+                    error_payload = exc.response.json()
+                except ValueError:
+                    error_payload = message
+                logger.error(
+                    "madhushala_flow_error method=%s path=%s status=%s",
+                    method,
+                    path,
+                    exc.response.status_code,
+                    extra={
+                        "event": "madhushala_flow_error",
+                        "httpMethod": method,
+                        "upstreamPath": path,
+                        "statusCode": exc.response.status_code,
+                        "attempt": attempt,
+                        "query": redact_for_logging(params or {}),
+                        "requestPayload": redact_for_logging(json_body),
+                        "responsePayload": redact_for_logging(error_payload),
+                    },
+                )
                 raise MadhushalaApiError(message, exc.response.status_code) from exc
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
                 last_error = exc
