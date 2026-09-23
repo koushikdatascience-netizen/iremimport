@@ -244,6 +244,13 @@ def build_item_master_calculation_request(
             # reviewed/extracted physical quantity shape. A loose-only source
             # row must not carry a case rate, and a case-only source row must
             # not carry a loose rate. Mixed case+loose rows keep both.
+            #
+            # Some Madhushala Item Master rows store only purchaseRateCase.
+            # When the reviewed source has loose quantity, derive the missing
+            # loose purchase rate only when purchaseRate is zero and both
+            # purchaseRateCase and packing are positive.
+            if loose > 0 and loose_rate <= 0 and box_rate > 0 and packing > 0:
+                loose_rate = _money(Decimal(str(box_rate)) / Decimal(str(packing)))
             if box <= 0:
                 box_rate = 0.0
             if loose <= 0:
@@ -320,13 +327,15 @@ def _augment_calculation_response(
             matching = source_by_code.get(code) or []
             source = matching[occurrence] if occurrence < len(matching) else {}
             used_by_code[code] = occurrence + 1
-            loose_rate, box_rate, mrp, _ = _commercial_values(
+            loose_rate, box_rate, mrp, packing = _commercial_values(
                 master,
                 exact_purchase_rates=exact_purchase_rates,
             )
             if exact_purchase_rates:
                 source_box = _int_value(source.get("box"))
                 source_loose = _int_value(source.get("loose"))
+                if source_loose > 0 and loose_rate <= 0 and box_rate > 0 and packing > 0:
+                    loose_rate = _money(Decimal(str(box_rate)) / Decimal(str(packing)))
                 if source_box <= 0:
                     box_rate = 0.0
                 if source_loose <= 0:
