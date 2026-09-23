@@ -2093,3 +2093,92 @@ def test_wb_indexed_lookup_preserves_boundary_geometry_semantics():
     bbox = (0, 0, 10, 10)
 
     assert _horizontal_cell_text(bbox, indexed, centres_y) == _horizontal_cell_text(bbox, chars)
+
+
+def test_source_line_amount_uses_loose_rate_for_loose_only_rows():
+    from app.modules.document_import.purchase_contract import calculate_source_line_amount
+
+    # Regression for WB rows such as Absolut Vodka 50 ml: 0 cases + 1 loose.
+    assert calculate_source_line_amount(
+        box=0,
+        loose=1,
+        box_rate=4800,
+        loose_rate=100,
+        rate=4800,
+        qnty=1,
+    ) == 100.0
+
+
+def test_source_line_amount_preserves_case_and_mixed_calculations():
+    from app.modules.document_import.purchase_contract import calculate_source_line_amount
+
+    assert calculate_source_line_amount(
+        box=2,
+        loose=0,
+        box_rate=1200,
+        loose_rate=100,
+        rate=100,
+        qnty=24,
+    ) == 2400.0
+
+    assert calculate_source_line_amount(
+        box=2,
+        loose=3,
+        box_rate=1200,
+        loose_rate=100,
+        rate=100,
+        qnty=27,
+    ) == 2700.0
+
+
+def test_source_line_amount_keeps_generic_fallback_only_when_specific_rate_unavailable():
+    from app.modules.document_import.purchase_contract import calculate_source_line_amount
+
+    assert calculate_source_line_amount(
+        box=0,
+        loose=1,
+        box_rate=4800,
+        loose_rate=0,
+        rate=125,
+        qnty=1,
+    ) == 125.0
+
+
+def test_item_master_calculation_request_keeps_loose_only_identity_and_rates():
+    from app.modules.document_import.purchase_contract import build_item_master_calculation_request
+
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "hedu_test",
+            "companyCode": "2",
+            "schemeCode": "",
+            "salesTaxRate": 0,
+            "salesTaxIncludingFree": False,
+        },
+        [
+            {
+                "itemCode": "ABS50",
+                "box": 0,
+                "loose": 1,
+                "qnty": 1,
+                "freeQnty": 0,
+                "_canonicalQuantityVersion": 2,
+            }
+        ],
+        {
+            "ABS50": {
+                "itemCode": "ABS50",
+                "packing": 48,
+                "purchaseRate": 100,
+                "purchaseRateCase": 4800,
+                "salesRate": 150,
+            }
+        },
+    )
+
+    item = request["items"][0]
+    assert item["box"] == 0
+    assert item["loose"] == 1
+    assert item["packing"] == 48
+    assert item["boxRate"] == 4800.0
+    assert item["looseRate"] == 100.0
