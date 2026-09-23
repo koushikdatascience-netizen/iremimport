@@ -239,6 +239,15 @@ def build_item_master_calculation_request(
             master,
             exact_purchase_rates=exact_purchase_rates,
         )
+        if exact_purchase_rates:
+            # For PDF imports, only send the rate(s) that correspond to the
+            # reviewed/extracted physical quantity shape. A loose-only source
+            # row must not carry a case rate, and a case-only source row must
+            # not carry a loose rate. Mixed case+loose rows keep both.
+            if box <= 0:
+                box_rate = 0.0
+            if loose <= 0:
+                loose_rate = 0.0
 
         request_items.append(
             {
@@ -315,6 +324,13 @@ def _augment_calculation_response(
                 master,
                 exact_purchase_rates=exact_purchase_rates,
             )
+            if exact_purchase_rates:
+                source_box = _int_value(source.get("box"))
+                source_loose = _int_value(source.get("loose"))
+                if source_box <= 0:
+                    box_rate = 0.0
+                if source_loose <= 0:
+                    loose_rate = 0.0
 
             if _dict_value(row, "quantity", "qnty", "qty") is None:
                 row["quantity"] = _int_value(source.get("qnty"))

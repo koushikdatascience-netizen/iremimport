@@ -123,3 +123,105 @@ def test_calculate_request_preserves_canonical_box_and_loose():
 
     assert request["items"][0]["box"] == 15
     assert request["items"][0]["loose"] == 78
+
+
+
+def test_pdf_calculate_rates_follow_loose_only_quantity():
+    from app.modules.document_import.purchase_contract import build_item_master_calculation_request
+
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "SHOP_A",
+            "companyCode": "2",
+            "schemeCode": "",
+        },
+        [
+            {
+                "itemCode": "A00056",
+                "box": 0,
+                "loose": 1,
+                "_canonicalQuantityVersion": 2,
+            }
+        ],
+        {
+            "A00056": {
+                "purchaseRateCase": 3415.2,
+                "purchaseRate": 142.3,
+                "packing": 24,
+                "salesRate": 250,
+            }
+        },
+        exact_purchase_rates=True,
+    )
+
+    item = request["items"][0]
+    assert item["box"] == 0
+    assert item["loose"] == 1
+    assert item["boxRate"] == 0
+    assert item["looseRate"] == 142.3
+
+
+def test_pdf_calculate_rates_follow_box_only_quantity():
+    from app.modules.document_import.purchase_contract import build_item_master_calculation_request
+
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "SHOP_A",
+            "companyCode": "2",
+            "schemeCode": "",
+        },
+        [
+            {
+                "itemCode": "ITEM1",
+                "box": 1,
+                "loose": 0,
+                "_canonicalQuantityVersion": 2,
+            }
+        ],
+        {
+            "ITEM1": {
+                "purchaseRateCase": 3415.2,
+                "purchaseRate": 142.3,
+                "packing": 24,
+            }
+        },
+        exact_purchase_rates=True,
+    )
+
+    item = request["items"][0]
+    assert item["box"] == 1
+    assert item["loose"] == 0
+    assert item["boxRate"] == 3415.2
+    assert item["looseRate"] == 0
+
+
+def test_pdf_calculate_rates_keep_both_for_mixed_quantity():
+    from app.modules.document_import.purchase_contract import build_item_master_calculation_request
+
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "SHOP_A",
+            "companyCode": "2",
+            "schemeCode": "",
+        },
+        [
+            {
+                "itemCode": "ITEM1",
+                "box": 1,
+                "loose": 3,
+                "_canonicalQuantityVersion": 2,
+            }
+        ],
+        {
+            "ITEM1": {
+                "purchaseRateCase": 3415.2,
+                "purchaseRate": 142.3,
+                "packing": 24,
+            }
+        },
+        exact_purchase_rates=True,
+    )
+
+    item = request["items"][0]
+    assert item["boxRate"] == 3415.2
+    assert item["looseRate"] == 142.3
