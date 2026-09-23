@@ -2049,3 +2049,47 @@ def test_wb_cell_reconstruction_keeps_original_glyph_selection_semantics():
     ]
 
     assert _horizontal_cell_text((0, 0, 20, 20), chars) == "AB"
+
+
+def test_wb_indexed_cell_lookup_matches_full_scan_exactly():
+    from app.modules.document_import.pdf_extractor import _horizontal_cell_text
+
+    # Deliberately unsorted input with glyphs both inside and outside the cells.
+    original = [
+        (30.0, 10.0, 12.0, 32.0, "Z"),
+        (5.0, 10.0, 12.0, 7.0, "B"),
+        (15.0, 4.0, 6.0, 17.0, "C"),
+        (5.0, 4.0, 6.0, 7.0, "A"),
+        (15.0, 10.0, 12.0, 17.0, "D"),
+        (50.0, 4.0, 6.0, 52.0, "Q"),
+    ]
+    indexed = sorted(original, key=lambda item: item[3])
+    centres_y = [item[3] for item in indexed]
+
+    for bbox in [
+        (0, 0, 20, 20),
+        (0, 10, 20, 40),
+        (0, 0, 20, 60),
+        (0, 6.9, 20, 17.1),
+        (100, 100, 120, 120),
+    ]:
+        expected = _horizontal_cell_text(bbox, original)
+        actual = _horizontal_cell_text(bbox, indexed, centres_y)
+        assert actual == expected
+
+
+def test_wb_indexed_lookup_preserves_boundary_geometry_semantics():
+    from app.modules.document_import.pdf_extractor import _horizontal_cell_text
+
+    chars = [
+        (1.0, 1.0, 0.0, 0.0, "A"),
+        (1.0, 2.0, 10.0, 0.0, "B"),
+        (9.0, 1.0, 0.0, 10.0, "C"),
+        (9.0, 2.0, 10.0, 10.0, "D"),
+        (5.0, 5.0, 5.0, 5.0, "M"),
+    ]
+    indexed = sorted(chars, key=lambda item: item[3])
+    centres_y = [item[3] for item in indexed]
+    bbox = (0, 0, 10, 10)
+
+    assert _horizontal_cell_text(bbox, indexed, centres_y) == _horizontal_cell_text(bbox, chars)
