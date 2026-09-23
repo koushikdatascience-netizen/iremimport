@@ -1,5 +1,7 @@
 # Excise Import Frontend Handoff: QR/PDF -> Mapping -> Purchase
 
+> Full request/response/header contract: see [DOCUMENT_IMPORT_API.md](DOCUMENT_IMPORT_API.md). That document is the canonical integration reference for payloads, headers, source-quantity semantics, Calculate Preview, and Purchase Save.
+
 ## Scope
 
 This change is frontend-only. Do not change the current extraction, mapping, Item Master, Calculate, duplicate-check, Purchase Save, database, session, or document-processing pipelines.
@@ -237,6 +239,33 @@ The following are calculation/helper fields only and are removed before the fina
 `packing`, `boxRate`, `looseRate`, `t1Rate`, `t2Rate`, `t3Rate`, `t4Rate`, `_canonicalQuantityVersion`.
 
 For `ITEMWISE`, `taxes` is an empty array. For `BILLWISE`, the existing backend creates the bill-wise taxes and applies the existing item-tax rules. The frontend must not reproduce this logic.
+
+## Case / loose financial semantics
+
+Reviewed quantities must stay separate through mapping and Calculate:
+
+```text
+box   = source cases/cartons
+loose = source single bottles/units
+qnty  = (box * Item Master packing) + loose
+```
+
+Rate ownership:
+
+```text
+boxRate   = Item Master purchaseRateCase
+looseRate = Item Master purchaseRate when non-zero, otherwise purchaseRateCase
+```
+
+Local pre-Calculate amount behavior is quantity-specific:
+
+```text
+case-only  -> box * boxRate
+mixed      -> (box * boxRate) + (loose * looseRate)
+loose-only -> loose * looseRate
+```
+
+A loose-only row such as `box=0, loose=1` must never use the case/general rate while a valid `looseRate` is available. Madhushala Calculate remains authoritative for final `rate`, `itemAmount`, taxes and totals.
 
 ## Date format note
 
