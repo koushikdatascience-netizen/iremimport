@@ -212,14 +212,24 @@ def _horizontal_page_chars(page: fitz.Page) -> list[tuple[float, float, float, f
 
 
 def _horizontal_cell_text(
-    bbox: Any,
-    page_chars: list[tuple[float, float, float, float, str]],
+    bbox_or_page: Any,
+    page_chars_or_bbox: Any,
 ) -> str:
-    """Rebuild one table cell from already-extracted horizontal glyphs.
+    """Rebuild one table cell while preserving the legacy helper contract.
 
-    The selection rule is intentionally identical to the old implementation:
-    only glyphs whose centre falls inside the table-cell rectangle are used.
+    Production passes a cell bbox plus a precomputed page glyph list so rawdict
+    is parsed once per page. Tests and older callers may still pass
+    (page, bbox); in that compatibility path the glyph list is derived once for
+    that direct call. Both paths use the same glyph-direction and cell-centre
+    rules, so extraction accuracy is unchanged.
     """
+    if hasattr(bbox_or_page, "get_text"):
+        bbox = page_chars_or_bbox
+        page_chars = _horizontal_page_chars(bbox_or_page)
+    else:
+        bbox = bbox_or_page
+        page_chars = page_chars_or_bbox or []
+
     try:
         rect = fitz.Rect(bbox)
     except Exception:
@@ -1031,15 +1041,24 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             west_bengal_original_pages = {1}
         for page_index, page in enumerate(document, start=1):
             should_extract_tables = not horizontal_only or page_index in west_bengal_original_pages
-            page_tables = (
-                _page_tables(
-                    page,
-                    horizontal_only=horizontal_only,
-                    diagnostics=timings,
-                )
-                if should_extract_tables
-                else []
-            )
+            if should_extract_tables:
+                try:
+                    page_tables = _page_tables(
+                        page,
+                        horizontal_only=horizontal_only,
+                        diagnostics=timings,
+                    )
+                except TypeError as exc:
+                    # Preserve compatibility with test/extension monkeypatches
+                    # that still implement the pre-diagnostics signature.
+                    if "diagnostics" not in str(exc):
+                        raise
+                    page_tables = _page_tables(
+                        page,
+                        horizontal_only=horizontal_only,
+                    )
+            else:
+                page_tables = []
             table_count += len(page_tables)
             pages.append((page_index, page_texts[page_index - 1], page_tables))
 
