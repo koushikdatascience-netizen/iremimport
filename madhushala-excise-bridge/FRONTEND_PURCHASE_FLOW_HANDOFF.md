@@ -250,22 +250,16 @@ loose = source single bottles/units
 qnty  = (box * Item Master packing) + loose
 ```
 
-Rate ownership:
+For **PDF imports**, rate ownership is exact:
 
 ```text
 boxRate   = Item Master purchaseRateCase
-looseRate = Item Master purchaseRate when non-zero, otherwise purchaseRateCase
+looseRate = Item Master purchaseRate
 ```
 
-Local pre-Calculate amount behavior is quantity-specific:
+Do not derive, divide, multiply, or substitute one PDF rate from the other. A zero Item Master rate must remain zero in the Calculate request. PDF financial values are not calculated locally before Calculate; Madhushala Calculate is authoritative for final `rate`, `itemAmount`, taxes and totals.
 
-```text
-case-only  -> box * boxRate
-mixed      -> (box * boxRate) + (loose * looseRate)
-loose-only -> loose * looseRate
-```
-
-A loose-only row such as `box=0, loose=1` must never use the case/general rate while a valid `looseRate` is available. Madhushala Calculate remains authoritative for final `rate`, `itemAmount`, taxes and totals.
+Legacy non-PDF flows retain their existing behavior.
 
 ## Date format note
 
