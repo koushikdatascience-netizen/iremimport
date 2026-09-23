@@ -2224,7 +2224,7 @@ def test_pdf_calculate_request_forwards_exact_item_master_purchase_rates():
     assert item["looseRate"] == 142.3
 
 
-def test_pdf_exact_rate_mode_does_not_substitute_case_rate_when_purchase_rate_is_zero():
+def test_pdf_exact_rate_mode_derives_loose_rate_from_case_rate_when_purchase_rate_is_zero():
     from app.modules.document_import.purchase_contract import build_item_master_calculation_request
 
     base = {
@@ -2264,7 +2264,7 @@ def test_pdf_exact_rate_mode_does_not_substitute_case_rate_when_purchase_rate_is
         exact_purchase_rates=False,
     )
 
-    assert pdf_request["items"][0]["looseRate"] == 0.0
+    assert pdf_request["items"][0]["looseRate"] == 200.0
     assert pdf_request["items"][0]["boxRate"] == 0.0
     # Non-PDF behavior remains unchanged.
     assert legacy_request["items"][0]["looseRate"] == 4800.0
