@@ -237,10 +237,7 @@ class MadhushalaClient:
                             "durationMs": duration_ms,
                             "attempt": attempt,
                             "retrying": True,
-                            "responsePayload": redact_for_logging(
-                                response.json() if response.content and "json" in response.headers.get("content-type", "").casefold()
-                                else response.text
-                            ),
+                            "responsePayload": redact_for_logging(response.text),
                         },
                     )
                     await asyncio.sleep((0.12 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.08))
