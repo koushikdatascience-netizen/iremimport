@@ -22,6 +22,7 @@ from app.modules.document_import.llama_client import LlamaCloudClient, LlamaClou
 from app.modules.document_import.normalizer import normalize_extracted_document
 from app.modules.document_import.pdf_extractor import extract_pdf_locally
 from app.modules.document_import.purchase_context import build_purchase_context
+from app.modules.document_import.purchase_contract import calculate_source_line_amount
 from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct, NormalizedImportItem
 from app.services.mapping_service import MappingService
 from app.services.normalizer import normalize_brand
@@ -1222,10 +1223,14 @@ class DocumentImportService:
                 box_rate = raw_money("boxRate", "caseRate", fallback=rate or catalogue_rate)
                 loose_rate = raw_money("looseRate", "bottleRate", fallback=self._catalogue_money(catalogue_item, "looseRate", "bottleRate"))
                 if not amount:
-                    if box_rate and box:
-                        amount = _money((box_rate * box) + (loose_rate * loose))
-                    elif rate and qnty:
-                        amount = _money(rate * qnty)
+                    amount = calculate_source_line_amount(
+                        box=box,
+                        loose=loose,
+                        box_rate=box_rate,
+                        loose_rate=loose_rate,
+                        rate=rate,
+                        qnty=qnty,
+                    )
 
                 item = {
                     "itemCode": mapped,

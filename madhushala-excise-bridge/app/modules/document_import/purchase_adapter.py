@@ -9,7 +9,11 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.db import conn, now_iso
-from app.modules.document_import.purchase_contract import ItemMasterCalculateClient, load_item_master_details
+from app.modules.document_import.purchase_contract import (
+    ItemMasterCalculateClient,
+    calculate_source_line_amount,
+    load_item_master_details,
+)
 from app.modules.document_import.quantity import resolve_document_quantity
 from app.services.purchase_orchestrator import purchase_orchestrator
 from app.services.reference_data_service import reference_data_service
@@ -225,11 +229,14 @@ class DocumentPurchaseAdapter:
             rate = loose_rate or box_rate
             mrp = _money(_dict_value(master, "salesRate", "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
 
-            amount = 0.0
-            if box_rate and (box or loose):
-                amount = _money((box_rate * box) + (loose_rate * loose))
-            elif rate and qnty:
-                amount = _money(rate * qnty)
+            amount = calculate_source_line_amount(
+                box=box,
+                loose=loose,
+                box_rate=box_rate,
+                loose_rate=loose_rate,
+                rate=rate,
+                qnty=qnty,
+            )
 
             extracted_name = str(
                 row["raw_name"]
