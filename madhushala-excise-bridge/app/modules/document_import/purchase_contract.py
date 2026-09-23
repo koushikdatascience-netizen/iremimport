@@ -98,17 +98,22 @@ def _response_container(response: Any) -> dict[str, Any] | None:
     return response
 
 
-def _commercial_values(master: dict[str, Any]) -> tuple[float, float, float, int]:
-    # Match the real Madhushala Purchase screen contract.
+def _commercial_values(
+    master: dict[str, Any],
+    *,
+    exact_purchase_rates: bool = False,
+) -> tuple[float, float, float, int]:
+    # Madhushala PDF Purchase Calculate contract:
+    #   boxRate   <- itemmst.purchaseRateCase
+    #   looseRate <- itemmst.purchaseRate
+    # with NO bridge-side fallback or rate conversion.
     #
-    # boxRate   <- itemmst.purchaseRateCase
-    # looseRate <- itemmst.purchaseRate when non-zero; otherwise use
-    #              itemmst.purchaseRateCase exactly as supplied.
-    # mrp       <- itemmst.salesRate (legacy aliases retained for compatibility)
+    # Legacy non-PDF flows retain the historical purchaseRateCase fallback when
+    # purchaseRate is zero, so this PDF fix does not change QR/other behavior.
     packing = _int_value(_dict_value(master, "packing", "bottlePerCase", "bottlesPerCase", "caseQty"))
     purchase_rate = _money(_dict_value(master, "purchaseRate"))
     box_rate = _money(_dict_value(master, "purchaseRateCase"))
-    loose_rate = purchase_rate if purchase_rate else box_rate
+    loose_rate = purchase_rate if exact_purchase_rates else (purchase_rate if purchase_rate else box_rate)
     mrp = _money(_dict_value(master, "salesRate", "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
     return loose_rate, box_rate, mrp, packing
 
@@ -210,6 +215,8 @@ def build_item_master_calculation_request(
     base_request: dict[str, Any],
     purchase_items: list[dict[str, Any]],
     item_master: dict[str, dict[str, Any]],
+    *,
+    exact_purchase_rates: bool = False,
 ) -> dict[str, Any]:
     """Build Calculate request with reviewed box/loose; all commercial values come from Item Master."""
     request_items: list[dict[str, Any]] = []
@@ -228,7 +235,10 @@ def build_item_master_calculation_request(
                 if item.get("qnty") not in (None, "")
                 else item.get("loose") if item.get("loose") not in (None, "") else item.get("quantity")
             )
-        loose_rate, box_rate, mrp, packing = _commercial_values(master)
+        loose_rate, box_rate, mrp, packing = _commercial_values(
+            master,
+            exact_purchase_rates=exact_purchase_rates,
+        )
 
         request_items.append(
             {
@@ -272,6 +282,8 @@ def _augment_calculation_response(
     response: Any,
     purchase_items: list[dict[str, Any]],
     item_master: dict[str, dict[str, Any]],
+    *,
+    exact_purchase_rates: bool = False,
 ) -> Any:
     """Keep Calculate authoritative while preserving exact Item Master values it omits."""
     if not isinstance(response, dict):
@@ -299,7 +311,10 @@ def _augment_calculation_response(
             matching = source_by_code.get(code) or []
             source = matching[occurrence] if occurrence < len(matching) else {}
             used_by_code[code] = occurrence + 1
-            loose_rate, box_rate, mrp, _ = _commercial_values(master)
+            loose_rate, box_rate, mrp, _ = _commercial_values(
+                master,
+                exact_purchase_rates=exact_purchase_rates,
+            )
 
             if _dict_value(row, "quantity", "qnty", "qty") is None:
                 row["quantity"] = _int_value(source.get("qnty"))
@@ -326,17 +341,30 @@ class ItemMasterCalculateClient:
         inner: Any,
         purchase_items: list[dict[str, Any]],
         item_master: dict[str, dict[str, Any]],
+        *,
+        exact_purchase_rates: bool = False,
     ) -> None:
         self._inner = inner
         self._purchase_items = purchase_items
         self._item_master = item_master
+        self._exact_purchase_rates = exact_purchase_rates
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
     async def calculate_purchase(self, payload: dict[str, Any]) -> Any:
-        actual_request = build_item_master_calculation_request(payload, self._purchase_items, self._item_master)
+        actual_request = build_item_master_calculation_request(
+            payload,
+            self._purchase_items,
+            self._item_master,
+            exact_purchase_rates=self._exact_purchase_rates,
+        )
         payload.clear()
         payload.update(actual_request)
         response = await self._inner.calculate_purchase(payload)
-        return _augment_calculation_response(response, self._purchase_items, self._item_master)
+        return _augment_calculation_response(
+            response,
+            self._purchase_items,
+            self._item_master,
+            exact_purchase_rates=self._exact_purchase_rates,
+        )
