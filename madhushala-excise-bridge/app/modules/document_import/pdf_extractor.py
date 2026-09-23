@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -166,21 +167,19 @@ def _product(
     )
 
 
-def _horizontal_cell_text(page: fitz.Page, bbox: Any) -> str:
-    """Rebuild one table cell from horizontal glyphs only.
+def _horizontal_page_chars(page: fitz.Page) -> list[tuple[float, float, float, float, str]]:
+    """Extract horizontal glyph geometry once for a page.
 
     WB Form No. 3 contains a large diagonal www.wbexcise.gov.in watermark.
-    PyMuPDF table.extract() can splice pieces of that rotated text into normal
-    cells. Character-level reconstruction lets us keep only horizontal text
-    whose glyph centre actually falls inside the cell rectangle.
+    Keep the same horizontal-direction filter used by the previous per-cell
+    implementation, but parse PyMuPDF rawdict only once per page.
     """
     try:
-        rect = fitz.Rect(bbox)
         payload = page.get_text("rawdict") or {}
     except Exception:
-        return ""
+        return []
 
-    chars: list[tuple[float, float, str]] = []
+    chars: list[tuple[float, float, float, float, str]] = []
     for block in payload.get("blocks", []) or []:
         for line in block.get("lines", []) or []:
             direction = line.get("dir") or (1.0, 0.0)
@@ -188,7 +187,7 @@ def _horizontal_cell_text(page: fitz.Page, bbox: Any) -> str:
                 dx, dy = float(direction[0]), float(direction[1])
             except Exception:
                 dx, dy = 1.0, 0.0
-            # Keep ordinary horizontal left-to-right table text only.
+            # Preserve the exact watermark-suppression rule used before.
             if dx < 0.95 or abs(dy) > 0.08:
                 continue
             for span in line.get("spans", []) or []:
@@ -200,13 +199,37 @@ def _horizontal_cell_text(page: fitz.Page, bbox: Any) -> str:
                         char_rect = fitz.Rect(char.get("bbox"))
                     except Exception:
                         continue
-                    centre = fitz.Point(
-                        (char_rect.x0 + char_rect.x1) / 2,
-                        (char_rect.y0 + char_rect.y1) / 2,
+                    chars.append(
+                        (
+                            char_rect.y0,
+                            char_rect.x0,
+                            (char_rect.x0 + char_rect.x1) / 2,
+                            (char_rect.y0 + char_rect.y1) / 2,
+                            text,
+                        )
                     )
-                    if rect.contains(centre):
-                        chars.append((char_rect.y0, char_rect.x0, text))
+    return chars
 
+
+def _horizontal_cell_text(
+    bbox: Any,
+    page_chars: list[tuple[float, float, float, float, str]],
+) -> str:
+    """Rebuild one table cell from already-extracted horizontal glyphs.
+
+    The selection rule is intentionally identical to the old implementation:
+    only glyphs whose centre falls inside the table-cell rectangle are used.
+    """
+    try:
+        rect = fitz.Rect(bbox)
+    except Exception:
+        return ""
+
+    chars = [
+        (y, x, text)
+        for y, x, centre_x, centre_y, text in page_chars
+        if rect.contains(fitz.Point(centre_x, centre_y))
+    ]
     if not chars:
         return ""
 
@@ -227,23 +250,48 @@ def _horizontal_cell_text(page: fitz.Page, bbox: Any) -> str:
     return "\n".join(rebuilt)
 
 
-def _page_tables(page: fitz.Page, *, horizontal_only: bool = False) -> list[list[list[str]]]:
+def _page_tables(
+    page: fitz.Page,
+    *,
+    horizontal_only: bool = False,
+    diagnostics: dict[str, float] | None = None,
+) -> list[list[list[str]]]:
     finder = getattr(page, "find_tables", None)
     if not callable(finder):
         return []
+
+    find_started = time.perf_counter()
     try:
         found = finder()
     except Exception:
         return []
+    finally:
+        if diagnostics is not None:
+            diagnostics["findTablesMs"] = diagnostics.get("findTablesMs", 0.0) + (
+                time.perf_counter() - find_started
+            ) * 1000
 
     output: list[list[list[str]]] = []
+    page_chars: list[tuple[float, float, float, float, str]] = []
+    if horizontal_only and (getattr(found, "tables", []) or []):
+        glyph_started = time.perf_counter()
+        page_chars = _horizontal_page_chars(page)
+        if diagnostics is not None:
+            diagnostics["horizontalGlyphExtractMs"] = diagnostics.get(
+                "horizontalGlyphExtractMs", 0.0
+            ) + (time.perf_counter() - glyph_started) * 1000
+            diagnostics["horizontalGlyphCount"] = diagnostics.get(
+                "horizontalGlyphCount", 0.0
+            ) + float(len(page_chars))
+
+    rebuild_started = time.perf_counter()
     for table in getattr(found, "tables", []) or []:
         if horizontal_only:
             clean_rows: list[list[str]] = []
             for table_row in getattr(table, "rows", []) or []:
                 row_values: list[str] = []
                 for cell in getattr(table_row, "cells", []) or []:
-                    row_values.append(_horizontal_cell_text(page, cell) if cell else "")
+                    row_values.append(_horizontal_cell_text(cell, page_chars) if cell else "")
                 if any(row_values):
                     clean_rows.append(row_values)
             if clean_rows:
@@ -260,6 +308,11 @@ def _page_tables(page: fitz.Page, *, horizontal_only: bool = False) -> list[list
         ]
         if clean_rows:
             output.append(clean_rows)
+
+    if diagnostics is not None:
+        diagnostics["cellRebuildMs"] = diagnostics.get("cellRebuildMs", 0.0) + (
+            time.perf_counter() - rebuild_started
+        ) * 1000
     return output
 
 
@@ -937,6 +990,14 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         return None, {"engine": "pymupdf", "usable": False, "reason": f"open_failed:{exc}"}
 
     try:
+        extraction_started = time.perf_counter()
+        timings: dict[str, float] = {
+            "textLayerMs": 0.0,
+            "findTablesMs": 0.0,
+            "horizontalGlyphExtractMs": 0.0,
+            "cellRebuildMs": 0.0,
+            "parseValidateMs": 0.0,
+        }
         pages: list[tuple[int, str, list[list[list[str]]]]] = []
         page_texts: list[str] = []
         word_count = 0
@@ -944,6 +1005,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
 
         # First inspect the text layer so state/profile-specific table handling
         # can be selected before extracting cells.
+        text_layer_started = time.perf_counter()
         for page in document:
             text = page.get_text("text") or ""
             page_texts.append(text)
@@ -951,6 +1013,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
                 word_count += len(page.get_text("words") or [])
             except Exception:
                 pass
+        timings["textLayerMs"] = (time.perf_counter() - text_layer_started) * 1000
 
         full_text = "\n".join(page_texts)
         profile = _detect_profile(full_text)
@@ -969,7 +1032,11 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         for page_index, page in enumerate(document, start=1):
             should_extract_tables = not horizontal_only or page_index in west_bengal_original_pages
             page_tables = (
-                _page_tables(page, horizontal_only=horizontal_only)
+                _page_tables(
+                    page,
+                    horizontal_only=horizontal_only,
+                    diagnostics=timings,
+                )
                 if should_extract_tables
                 else []
             )
@@ -987,6 +1054,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
                 "pageCount": len(document),
             }
 
+        parse_started = time.perf_counter()
         extractor = {
             "TELANGANA_ICDC": _extract_telangana,
             "WEST_BENGAL_FORM3": _extract_west_bengal,
@@ -1016,6 +1084,8 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             (west_bengal_validation and west_bengal_validation["status"] == "failed")
             or candidate_rows > product_count
         )
+        timings["parseValidateMs"] = (time.perf_counter() - parse_started) * 1000
+        timings["totalMs"] = (time.perf_counter() - extraction_started) * 1000
 
         if not products:
             return None, {
@@ -1027,6 +1097,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
                 "wordCount": word_count,
                 "pageCount": len(document),
                 "tableCount": table_count,
+                "timingsMs": {key: round(value, 2) for key, value in timings.items()},
             }
 
         state = {
@@ -1055,6 +1126,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
                 "completeness": completeness,
                 "needsFallback": needs_fallback,
                 "totalValidation": west_bengal_validation,
+                "timingsMs": {key: round(value, 2) for key, value in timings.items()},
             },
         )
         return extracted, {
@@ -1072,6 +1144,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             "needsFallback": needs_fallback,
             "totalValidation": west_bengal_validation,
             "originalPageNumbers": sorted(west_bengal_original_pages) if horizontal_only else None,
+            "timingsMs": {key: round(value, 2) for key, value in timings.items()},
         }
     finally:
         document.close()
