@@ -26,6 +26,44 @@ def _int_value(value: Any) -> int:
         return 0
 
 
+def calculate_source_line_amount(
+    *,
+    box: Any,
+    loose: Any,
+    box_rate: Any,
+    loose_rate: Any,
+    rate: Any = 0,
+    qnty: Any = 0,
+) -> float:
+    """Calculate a local pre-Calculate line amount without mixing case and loose rates.
+
+    This value is only a bridge-side preview/fallback. Madhushala Calculate remains
+    authoritative for the final financial values. Quantity identity is preserved:
+    cases use boxRate, loose bottles use looseRate, and a loose-only row must never
+    fall through to a case/general rate while looseRate is available.
+    """
+    box_value = _int_value(box)
+    loose_value = _int_value(loose)
+    box_rate_value = _money(box_rate)
+    loose_rate_value = _money(loose_rate)
+    rate_value = _money(rate)
+    qnty_value = _int_value(qnty)
+
+    if box_value > 0 and box_rate_value > 0:
+        return _money(
+            (box_rate_value * box_value)
+            + (loose_rate_value * loose_value)
+        )
+
+    if box_value == 0 and loose_value > 0 and loose_rate_value > 0:
+        return _money(loose_rate_value * loose_value)
+
+    if rate_value > 0 and qnty_value > 0:
+        return _money(rate_value * qnty_value)
+
+    return 0.0
+
+
 def _dict_value(row: dict[str, Any] | None, *aliases: str) -> Any:
     if not isinstance(row, dict):
         return None
