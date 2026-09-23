@@ -82,6 +82,15 @@ MADHUSHALA_TOKEN=your_token_here
 7. When mapping is required, the mapping workspace opens automatically.
 8. Review the best suggestion or search for the correct item, then submit mappings in one batch.
 
+## Document Import / Purchase API Documentation
+
+The complete document-import contract, including required headers, concrete request/response examples, review and mapping payloads, Purchase Context, Calculate Preview, final Save payload, error shapes, and case/loose rate semantics is maintained in:
+
+- [DOCUMENT_IMPORT_API.md](DOCUMENT_IMPORT_API.md)
+- [FRONTEND_PURCHASE_FLOW_HANDOFF.md](FRONTEND_PURCHASE_FLOW_HANDOFF.md)
+
+For canonical document quantities, `box` means cases/cartons and `loose` means individual bottles. A loose-only line uses `looseRate`; it must not fall through to a case/general rate while a valid loose rate exists.
+
 ## API
 
 - `GET /health`
