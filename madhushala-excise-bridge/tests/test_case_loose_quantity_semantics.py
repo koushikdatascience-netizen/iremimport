@@ -146,7 +146,7 @@ def test_pdf_calculate_rates_follow_loose_only_quantity():
         {
             "A00056": {
                 "purchaseRateCase": 3415.2,
-                "purchaseRate": 142.3,
+                "purchaseRate": 0,
                 "packing": 24,
                 "salesRate": 250,
             }
