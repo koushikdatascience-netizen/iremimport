@@ -1967,3 +1967,84 @@ async def test_confirm_review_omitted_batch_does_not_erase_extracted_batch(monke
     ).fetchone()
     raw = json.loads(row["raw_data_json"])
     assert raw["batchNo"] == "220-4& July,2026"
+
+
+def test_wb_horizontal_reconstruction_reads_rawdict_once_per_page():
+    from app.modules.document_import.pdf_extractor import _page_tables
+
+    class FakeRow:
+        cells = [
+            (0, 0, 50, 20),
+            (50, 0, 100, 20),
+        ]
+
+    class FakeTable:
+        rows = [FakeRow()]
+
+    class FakeFound:
+        tables = [FakeTable()]
+
+    class FakePage:
+        def __init__(self):
+            self.rawdict_calls = 0
+
+        def find_tables(self):
+            return FakeFound()
+
+        def get_text(self, mode):
+            assert mode == "rawdict"
+            self.rawdict_calls += 1
+            return {
+                "blocks": [
+                    {
+                        "lines": [
+                            {
+                                "dir": (1.0, 0.0),
+                                "spans": [
+                                    {
+                                        "chars": [
+                                            {"c": "A", "bbox": (5, 5, 10, 10)},
+                                            {"c": "B", "bbox": (55, 5, 60, 10)},
+                                        ]
+                                    }
+                                ],
+                            },
+                            {
+                                # Rotated watermark text must still be excluded.
+                                "dir": (0.7, 0.7),
+                                "spans": [
+                                    {
+                                        "chars": [
+                                            {"c": "W", "bbox": (15, 5, 20, 10)},
+                                            {"c": "X", "bbox": (65, 5, 70, 10)},
+                                        ]
+                                    }
+                                ],
+                            },
+                        ]
+                    }
+                ]
+            }
+
+    page = FakePage()
+    diagnostics = {}
+    tables = _page_tables(page, horizontal_only=True, diagnostics=diagnostics)
+
+    assert tables == [[["A", "B"]]]
+    assert page.rawdict_calls == 1
+    assert diagnostics["horizontalGlyphCount"] == 2
+    assert diagnostics["horizontalGlyphExtractMs"] >= 0
+    assert diagnostics["cellRebuildMs"] >= 0
+
+
+def test_wb_cell_reconstruction_keeps_original_glyph_selection_semantics():
+    from app.modules.document_import.pdf_extractor import _horizontal_cell_text
+
+    # y, x, centre_x, centre_y, text
+    chars = [
+        (5.0, 4.0, 6.0, 7.0, "A"),
+        (5.0, 10.0, 12.0, 7.0, "B"),
+        (30.0, 4.0, 6.0, 32.0, "Z"),
+    ]
+
+    assert _horizontal_cell_text((0, 0, 20, 20), chars) == "AB"
