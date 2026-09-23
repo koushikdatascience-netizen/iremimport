@@ -64,6 +64,7 @@ class DocumentPurchaseAdapter:
     def __init__(self, document_service: Any):
         self.document_service = document_service
         self.item_master_snapshot: dict[str, dict[str, Any]] = {}
+        self.exact_pdf_purchase_rates = False
 
     def _mapped_code(self, db: Any, session: dict[str, Any], row: Any) -> str:
         mapped = str(row["mapped_item_code"] or "").strip()
@@ -90,7 +91,9 @@ class DocumentPurchaseAdapter:
         job = self.document_service.get_job(session, job_id)
         source_type = str(job.get("source_type") or "").upper()
         is_qr = source_type == "QR_HTML"
+        is_pdf_import = source_type == "DOCUMENT_PDF"
         is_document_upload = source_type in {"DOCUMENT_PDF", "DOCUMENT_IMAGE"}
+        self.exact_pdf_purchase_rates = is_pdf_import
         is_canonical_import = source_type in {"DOCUMENT_PDF", "DOCUMENT_IMAGE", "QR_HTML"}
         with conn() as db:
             rows = db.execute(
@@ -217,19 +220,26 @@ class DocumentPurchaseAdapter:
                     loose = document_qnty
                 qnty = document_qnty or ((box * packing + loose) if packing else (box + loose))
 
-            # Mirror the exact Madhushala Calculate contract used below:
+            # PDF import forwards Item Master purchase rates exactly to
+            # Madhushala Calculate. Do not derive, divide, multiply, or substitute
+            # one rate for the other:
             #   boxRate   <- itemmst.purchaseRateCase
-            #   looseRate <- itemmst.purchaseRate when non-zero, otherwise
-            #                itemmst.purchaseRateCase directly (no division).
-            #   mrp       <- itemmst.salesRate
+            #   looseRate <- itemmst.purchaseRate
+            #
+            # Legacy non-PDF flows retain their historical fallback behavior.
             purchase_rate = _money(_dict_value(master, "purchaseRate"))
             purchase_case_rate = _money(_dict_value(master, "purchaseRateCase"))
-            loose_rate = purchase_rate if purchase_rate else purchase_case_rate
+            loose_rate = purchase_rate if is_pdf_import else (
+                purchase_rate if purchase_rate else purchase_case_rate
+            )
             box_rate = purchase_case_rate
             rate = loose_rate or box_rate
             mrp = _money(_dict_value(master, "salesRate", "mrp", "itemMrp", "mrpPerUnit", "saleRate"))
 
-            amount = calculate_source_line_amount(
+            # PDF financial values are owned entirely by Madhushala Calculate.
+            # Keep the bridge-side pre-Calculate amount at zero rather than
+            # performing a local case/loose calculation.
+            amount = 0.0 if is_pdf_import else calculate_source_line_amount(
                 box=box,
                 loose=loose,
                 box_rate=box_rate,
@@ -318,6 +328,7 @@ class DocumentPurchaseAdapter:
             reference_data_service.client_for_session(session),
             items,
             self.item_master_snapshot,
+            exact_purchase_rates=self.exact_pdf_purchase_rates,
         )
 
     async def save_purchase(self, session: dict[str, Any], job_id: str, header: dict[str, Any]) -> dict[str, Any]:
