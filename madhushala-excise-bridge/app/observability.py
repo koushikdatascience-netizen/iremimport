@@ -75,6 +75,64 @@ def _safe_json_value(value: Any) -> Any:
         return str(value)
 
 
+_SENSITIVE_LOG_KEYS = {
+    "authorization",
+    "token",
+    "accesstoken",
+    "refreshtoken",
+    "sessiontoken",
+    "password",
+    "passwd",
+    "secret",
+    "apikey",
+    "api_key",
+    "cookie",
+    "setcookie",
+}
+
+
+def _normalized_log_key(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").casefold() if ch.isalnum() or ch == "_")
+
+
+def redact_for_logging(value: Any, *, max_depth: int = 8, max_list_items: int = 200) -> Any:
+    """Return a JSON-safe observability copy with credentials removed.
+
+    Business payload values stay visible for debugging. Very large arrays are
+    capped to keep a single Loki line bounded; the original item count is
+    retained in a synthetic marker.
+    """
+    def clean(current: Any, depth: int) -> Any:
+        if depth > max_depth:
+            return "[MAX_DEPTH]"
+        if isinstance(current, dict):
+            output: dict[str, Any] = {}
+            for key, item in current.items():
+                normalized = _normalized_log_key(key)
+                if (
+                    normalized in _SENSITIVE_LOG_KEYS
+                    or "password" in normalized
+                    or "secret" in normalized
+                    or normalized.endswith("token")
+                    or normalized.endswith("apikey")
+                ):
+                    output[str(key)] = "[REDACTED]"
+                else:
+                    output[str(key)] = clean(item, depth + 1)
+            return output
+        if isinstance(current, (list, tuple)):
+            items = list(current)
+            cleaned = [clean(item, depth + 1) for item in items[:max_list_items]]
+            if len(items) > max_list_items:
+                cleaned.append({"_truncated": True, "_totalItems": len(items)})
+            return cleaned
+        if current is None or isinstance(current, (str, int, float, bool)):
+            return current
+        return str(current)
+
+    return clean(value, 0)
+
+
 class JsonFormatter(logging.Formatter):
     """One JSON object per line for production-friendly log ingestion."""
 

@@ -1,0 +1,78 @@
+logging {
+  level = "info"
+}
+
+discovery.docker "madhushala" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "madhushala" {
+  targets = discovery.docker.madhushala.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "madhushala-automation-platform"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "(api1|api2|web)"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "container_service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    replacement   = "$1"
+    target_label  = "container"
+  }
+
+  rule {
+    target_label = "service"
+    replacement  = "madhushala-excise-bridge"
+  }
+}
+
+loki.source.docker "madhushala" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.madhushala.output
+  forward_to = [loki.process.madhushala.receiver]
+}
+
+loki.process "madhushala" {
+  stage.json {
+    expressions = {
+      timestamp      = "timestamp",
+      level          = "level",
+      logger         = "logger",
+      event          = "event",
+      correlation_id = "correlationId",
+      upstream_path  = "upstreamPath",
+      http_method    = "httpMethod",
+      status_code    = "statusCode",
+    }
+  }
+
+  stage.labels {
+    values = {
+      level          = "",
+      event          = "",
+      container      = "",
+      container_service = "",
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

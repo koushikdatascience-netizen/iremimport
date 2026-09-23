@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from contextlib import contextmanager
 
 from app.errors import error_payload, normalize_http_detail
-from app.observability import JsonFormatter, PURCHASE_SAVE_DURATION_SECONDS, observe_purchase_save, reset_correlation_id, set_correlation_id
+from app.observability import JsonFormatter, PURCHASE_SAVE_DURATION_SECONDS, observe_purchase_save, redact_for_logging, reset_correlation_id, set_correlation_id
 
 
 def test_standard_error_envelope_contains_correlation_id():
@@ -130,3 +130,42 @@ def test_purchase_save_latency_metric_records_status():
     after = PURCHASE_SAVE_DURATION_SECONDS.labels(status="ok")._sum.get()
 
     assert after >= before + 0.25
+
+
+def test_redact_for_logging_keeps_business_values_and_removes_credentials():
+    payload = redact_for_logging(
+        {
+            "Authorization": "Bearer real-secret",
+            "sessionToken": "session-secret",
+            "password": "secret-password",
+            "itemCode": "ABS50",
+            "box": 0,
+            "loose": 1,
+            "boxRate": 3415.2,
+            "looseRate": 0,
+            "nested": {
+                "apiKey": "api-secret",
+                "purchaseRateCase": 3415.2,
+                "purchaseRate": 0,
+            },
+        }
+    )
+
+    assert payload["Authorization"] == "[REDACTED]"
+    assert payload["sessionToken"] == "[REDACTED]"
+    assert payload["password"] == "[REDACTED]"
+    assert payload["nested"]["apiKey"] == "[REDACTED]"
+    assert payload["itemCode"] == "ABS50"
+    assert payload["boxRate"] == 3415.2
+    assert payload["nested"]["purchaseRate"] == 0
+
+
+def test_redact_for_logging_bounds_large_arrays():
+    payload = redact_for_logging(
+        {"items": [{"itemCode": str(index)} for index in range(205)]},
+        max_list_items=2,
+    )
+
+    assert payload["items"][0]["itemCode"] == "0"
+    assert payload["items"][1]["itemCode"] == "1"
+    assert payload["items"][2] == {"_truncated": True, "_totalItems": 205}
