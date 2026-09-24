@@ -120,70 +120,32 @@ def _commercial_values(
 
 
 async def load_item_master_details(reference_service: Any, session: dict[str, Any], item_codes: list[str]) -> dict[str, dict[str, Any]]:
-    """Load mapped purchase items without changing the integration company scope."""
+    """Load a fresh Purchase dropdown snapshot for Calculate/Save commercial values.
+
+    Madhushala Purchase commercial fields are owned by
+    /api/purchase/dropdown/items. Calculate and Save must use the same live
+    company-scoped snapshot that mapping/validation sees; falling back to the
+    long-lived catalogue cache here can send stale purchaseRateCase/purchaseRate
+    values even after the live Purchase dropdown has changed.
+    """
     codes = list(dict.fromkeys(str(code or "").strip() for code in item_codes if str(code or "").strip()))
     if not codes:
         return {}
 
     company_before = str(session.get("company_code") or "").strip()
 
+    fresh_loader = getattr(reference_service, "fresh_catalogue", None)
     catalogue_loader = getattr(reference_service, "catalogue", None)
-    if company_before and callable(catalogue_loader):
-        try:
-            catalogue = await catalogue_loader(session)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Could not verify Madhushala Item Master for company {company_before or '[blank]'}: {exc}",
-            ) from exc
-
-        available_codes = {
-            str(_dict_value(row, "itemCode", "code", "value", "id") or "").strip()
-            for row in (catalogue or [])
-            if isinstance(row, dict)
-        }
-        invalid_codes = [code for code in codes if code not in available_codes]
-
-        if invalid_codes:
-            # Mapping selection is validated against Madhushala's live purchase
-            # dropdown. A cached catalogue can lag behind that live result and
-            # falsely report a company mismatch. Re-check the exact same live
-            # company-scoped source once before rejecting the mapping.
-            fresh_loader = getattr(reference_service, "fresh_catalogue", None)
-            if callable(fresh_loader):
-                try:
-                    fresh_catalogue = await fresh_loader(session)
-                except Exception:
-                    fresh_catalogue = []
-                fresh_codes = {
-                    str(_dict_value(row, "itemCode", "code", "value", "id") or "").strip()
-                    for row in (fresh_catalogue or [])
-                    if isinstance(row, dict)
-                }
-                invalid_codes = [code for code in codes if code not in fresh_codes]
-
-        if invalid_codes:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Mapped Madhushala item(s) {', '.join(invalid_codes)} are not available "
-                    f"in company {company_before or '[blank]'} after a fresh Item Master check. "
-                    "Refresh and remap those rows for the current company before saving."
-                ),
-            )
-
-    items_loader = getattr(reference_service, "items", None)
-    if not callable(items_loader):
-        raise HTTPException(status_code=500, detail="Madhushala Item Master loader is not available")
+    loader = fresh_loader if callable(fresh_loader) else catalogue_loader
+    if not callable(loader):
+        raise HTTPException(status_code=500, detail="Madhushala Purchase Item Master loader is not available")
 
     try:
-        loaded = await items_loader(session, codes)
-    except HTTPException:
-        raise
+        catalogue = await loader(session)
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Could not load Madhushala Item Master for company {company_before or '[blank]'}: {exc}",
+            detail=f"Could not load Madhushala Purchase Item Master for company {company_before or '[blank]'}: {exc}",
         ) from exc
 
     company_after = str(session.get("company_code") or "").strip()
@@ -193,22 +155,26 @@ async def load_item_master_details(reference_service: Any, session: dict[str, An
             detail="Purchase company scope changed while loading Item Master; request was blocked.",
         )
 
-    result: dict[str, dict[str, Any]] = {}
-    missing: list[str] = []
-    for code in codes:
-        detail = _unwrap_item((loaded or {}).get(code) if isinstance(loaded, dict) else None)
-        if detail:
-            result[code] = detail
-        else:
-            missing.append(code)
+    by_code: dict[str, dict[str, Any]] = {}
+    for row in catalogue or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(_dict_value(row, "itemCode", "code", "value", "id") or "").strip()
+        if code and code not in by_code:
+            by_code[code] = dict(row)
 
+    missing = [code for code in codes if code not in by_code]
     if missing:
         raise HTTPException(
-            status_code=502,
-            detail=f"Madhushala Item Master returned no detail for item(s): {', '.join(missing)}",
+            status_code=409,
+            detail=(
+                f"Mapped Madhushala item(s) {', '.join(missing)} are not available "
+                f"in company {company_before or '[blank]'} after a fresh Item Master check. "
+                "Refresh and remap those rows for the current company before saving."
+            ),
         )
 
-    return result
+    return {code: by_code[code] for code in codes}
 
 
 def build_item_master_calculation_request(
