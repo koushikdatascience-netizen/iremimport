@@ -136,13 +136,16 @@ async def load_item_master_details(reference_service: Any, session: dict[str, An
 
     fresh_loader = getattr(reference_service, "fresh_catalogue", None)
     catalogue_loader = getattr(reference_service, "catalogue", None)
-    loader = fresh_loader if callable(fresh_loader) else catalogue_loader
+    items_loader = getattr(reference_service, "items", None)
+
+    # Production Purchase sessions are company-scoped. Lightweight unit/legacy
+    # flows can intentionally omit company_code and monkeypatch items(); never
+    # force those fixtures through the authenticated live dropdown.
+    loader = (fresh_loader if callable(fresh_loader) else catalogue_loader) if company_before else None
     if not callable(loader):
-        # Backward-compatible fallback for lightweight test/legacy reference
-        # service doubles that expose only items(). The production
-        # MadhushalaReferenceDataService always provides fresh_catalogue(), so
-        # live Purchase Calculate/Save still use the fresh Purchase dropdown.
-        items_loader = getattr(reference_service, "items", None)
+        # Backward-compatible fallback for blank-company test/legacy flows or
+        # lightweight reference-service doubles that expose only items().
+        # Real production company-scoped requests still use fresh_catalogue().
         if not callable(items_loader):
             raise HTTPException(status_code=500, detail="Madhushala Purchase Item Master loader is not available")
         try:
