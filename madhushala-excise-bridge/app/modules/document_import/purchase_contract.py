@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import copy
+import logging
 import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from fastapi import HTTPException
+
+
+logger = logging.getLogger("madhushala-excise-bridge.purchase-contract")
 
 
 def _key(value: Any) -> str:
@@ -204,6 +208,18 @@ async def load_item_master_details(reference_service: Any, session: dict[str, An
         if code and code not in by_code:
             by_code[code] = dict(row)
 
+    for requested_code in codes:
+        traced = by_code.get(requested_code) or {}
+        logger.info(
+            "purchase_master_snapshot itemCode=%s companyCode=%s purchaseRate=%s purchaseRateCase=%s salesRate=%s packing=%s",
+            requested_code,
+            company_before,
+            _dict_value(traced, "purchaseRate"),
+            _dict_value(traced, "purchaseRateCase"),
+            _dict_value(traced, "salesRate", "mrp"),
+            _dict_value(traced, "packing"),
+        )
+
     missing = [code for code in codes if code not in by_code]
     if missing:
         raise HTTPException(
@@ -252,6 +268,16 @@ def build_item_master_calculation_request(
         #   boxRate   <- purchaseRateCase
         #   looseRate <- purchaseRate
         # Box/loose determine quantity only; they must not zero the other rate.
+
+        logger.info(
+            "purchase_calculate_rate itemCode=%s exactPurchaseRates=%s masterPurchaseRate=%s masterPurchaseRateCase=%s outgoingLooseRate=%s outgoingBoxRate=%s",
+            code,
+            exact_purchase_rates,
+            _dict_value(master, "purchaseRate"),
+            _dict_value(master, "purchaseRateCase"),
+            loose_rate,
+            box_rate,
+        )
 
         request_items.append(
             {
