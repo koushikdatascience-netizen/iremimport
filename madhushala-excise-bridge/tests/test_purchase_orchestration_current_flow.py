@@ -1216,3 +1216,98 @@ def test_batch_persistence_result_detects_upstream_missing_batch():
     assert result["missing"] == [
         {"itemCode": "M001", "batchNo": "220-4& July,2026"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_document_purchase_loads_item_master_with_ai_bill_type(monkeypatch):
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript(
+        """
+        CREATE TABLE import_items (
+          id TEXT, job_id TEXT, raw_name TEXT, normalized_name TEXT,
+          packing INTEGER, quantity REAL, box INTEGER, loose INTEGER,
+          rate REAL, mrp REAL, amount REAL,
+          mapped_item_code TEXT, excise_item_code TEXT, raw_data_json TEXT,
+          created_at TEXT
+        );
+        CREATE TABLE mappings_v2 (
+          shop_code TEXT, company_code TEXT, excise_item_code TEXT, madhushala_item_code TEXT
+        );
+        """
+    )
+    db.execute(
+        "INSERT INTO import_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "row-a00056","job-a00056","Absolut Vodka","absolut vodka",
+            24,1,0,1,0,250,0,"A00056","1702",
+            json.dumps({"canonicalBox":0,"canonicalLoose":1,"canonicalQuantityVersion":2}),
+            "2026-09-24",
+        ),
+    )
+    db.commit()
+
+    @contextmanager
+    def fake_conn():
+        try:
+            yield db
+            db.commit()
+        finally:
+            pass
+
+    monkeypatch.setattr(adapter_module, "conn", fake_conn)
+
+    async def fake_fresh_catalogue(session):
+        assert session["company_code"] == "2"
+        assert session["bill_type"] == "AI"
+        return [{
+            "itemCode":"A00056",
+            "itemName":"ABSOLUT 50",
+            "packing":24,
+            "purchaseRate":0,
+            "purchaseRateCase":3145,
+            "salesRate":250,
+            "vat":60,
+            "tcs":2284.08,
+            "tp":0,
+            "others":0,
+            "etd":0,
+            "t1Rate":0,
+            "t2Rate":0,
+            "t3Rate":2,
+            "t4Rate":0,
+        }]
+
+    monkeypatch.setattr(reference_data_service, "fresh_catalogue", fake_fresh_catalogue)
+
+    class FakeDocumentService:
+        def get_job(self, _session, _job_id):
+            return {"source_type":"DOCUMENT_PDF"}
+
+    adapter = DocumentPurchaseAdapter(FakeDocumentService())
+    items = await adapter.purchase_items(
+        {"shop_code":"WBTEST","company_code":"2","bill_type":"SOME_OTHER_TYPE"},
+        "job-a00056",
+    )
+    client = adapter.calculation_client(
+        {"shop_code":"WBTEST","company_code":"2","bill_type":"SOME_OTHER_TYPE","madhushala_token":"x"},
+        items,
+    )
+
+    class Inner:
+        async def calculate_purchase(self, payload):
+            return {"items":[{"itemCode":"A00056","quantity":1}]}
+
+    client._inner = Inner()
+    payload = {
+        "shopCode":"WBTEST",
+        "companyCode":"2",
+        "schemeCode":"",
+        "salesTaxRate":0,
+        "salesTaxIncludingFree":False,
+        "items":[{"itemCode":"A00056","box":0,"loose":1,"qnty":1,"_canonicalQuantityVersion":2,"freeQnty":0}],
+    }
+    await client.calculate_purchase(payload)
+
+    assert payload["items"][0]["boxRate"] == 3145.0
+    assert payload["items"][0]["looseRate"] == 0.0
