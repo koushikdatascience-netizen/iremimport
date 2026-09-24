@@ -138,7 +138,45 @@ async def load_item_master_details(reference_service: Any, session: dict[str, An
     catalogue_loader = getattr(reference_service, "catalogue", None)
     loader = fresh_loader if callable(fresh_loader) else catalogue_loader
     if not callable(loader):
-        raise HTTPException(status_code=500, detail="Madhushala Purchase Item Master loader is not available")
+        # Backward-compatible fallback for lightweight test/legacy reference
+        # service doubles that expose only items(). The production
+        # MadhushalaReferenceDataService always provides fresh_catalogue(), so
+        # live Purchase Calculate/Save still use the fresh Purchase dropdown.
+        items_loader = getattr(reference_service, "items", None)
+        if not callable(items_loader):
+            raise HTTPException(status_code=500, detail="Madhushala Purchase Item Master loader is not available")
+        try:
+            loaded = await items_loader(session, codes)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not load Madhushala Item Master for company {company_before or '[blank]'}: {exc}",
+            ) from exc
+
+        company_after = str(session.get("company_code") or "").strip()
+        if company_after != company_before:
+            raise HTTPException(
+                status_code=500,
+                detail="Purchase company scope changed while loading Item Master; request was blocked.",
+            )
+
+        result: dict[str, dict[str, Any]] = {}
+        missing: list[str] = []
+        for code in codes:
+            detail = _unwrap_item((loaded or {}).get(code) if isinstance(loaded, dict) else None)
+            if detail:
+                result[code] = detail
+            else:
+                missing.append(code)
+
+        if missing:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Madhushala Item Master returned no detail for item(s): {', '.join(missing)}",
+            )
+        return result
 
     try:
         catalogue = await loader(session)
