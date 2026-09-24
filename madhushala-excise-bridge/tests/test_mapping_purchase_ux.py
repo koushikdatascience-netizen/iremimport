@@ -14,7 +14,7 @@ def test_mapping_keeps_purchase_details_visible_and_persisted():
 def test_saved_document_mapping_is_presented_as_mapped_and_remappable():
     script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
 
-    assert '<span class="eyebrow">Mapped</span>' in script
+    assert 'invalid ? "Remap required" : "Mapped"' in script
     assert 'saved Madhushala item for the extracted purchase row' in script
     assert 'Already mapped. Use Change / Re-map only if the saved item is wrong.' in script
     assert 'Valid: ${counts.valid} | Remap: ${counts.invalid} | Unmapped: ${counts.unmapped}' in script
