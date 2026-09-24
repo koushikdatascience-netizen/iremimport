@@ -62,7 +62,7 @@ async def lifespan(_app: FastAPI):
 
 PUBLIC_PREFIX = "/excise-import"
 INDEX_HTML_PATH = Path("app/static/index.html")
-STATIC_ASSET_VERSION = "20260922-fresh-mapping-master-v23"
+STATIC_ASSET_VERSION = "20260924-inline-invalid-mapping-v24"
 DOCUMENT_IMPORT_SCRIPTS = (
     f'<script src="./static/qr-browser-fallback.js?v={STATIC_ASSET_VERSION}"></script>',
     f'<script src="./static/purchase-context.js?v={STATIC_ASSET_VERSION}"></script>',
@@ -285,6 +285,13 @@ def _apply_document_row_mapping_state(
             continue
         mapped_code = str(state["mapped_item_code"] or "").strip()
         row["selectedItemCode"] = mapped_code or None
+        if str(row.get("mappingStatus") or "").upper() == "INVALID_MAPPING":
+            row["selectedItem"] = row.get("selectedItem") or (
+                {"itemCode": mapped_code, "itemName": "Previously mapped item"}
+                if mapped_code
+                else None
+            )
+            continue
         row["selectedItem"] = dropdown.get(mapped_code) if mapped_code else None
         row["mappingStatus"] = "MAPPED" if mapped_code else (state["mapping_status"] or "PENDING")
     return workspace

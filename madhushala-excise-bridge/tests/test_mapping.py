@@ -296,12 +296,12 @@ def test_excise_reuse_never_falls_back_to_name_when_ml_differs():
     ) is None
 
 
-def test_company_item_codes_uses_shared_reference_catalogue(monkeypatch):
+def test_company_item_codes_uses_fresh_company_catalogue(monkeypatch):
     from app.services import mapping_service as mapping_module
 
     calls = {"count": 0}
 
-    async def fake_catalogue(session):
+    async def fake_fresh_catalogue(session):
         calls["count"] += 1
         assert session["company_code"] == "2"
         return [
@@ -309,7 +309,7 @@ def test_company_item_codes_uses_shared_reference_catalogue(monkeypatch):
             {"itemCode": "M00002", "itemName": "TWO"},
         ]
 
-    monkeypatch.setattr(mapping_module.reference_data_service, "catalogue", fake_catalogue)
+    monkeypatch.setattr(mapping_module.reference_data_service, "fresh_catalogue", fake_fresh_catalogue)
 
     service = MappingService()
     codes = asyncio.run(

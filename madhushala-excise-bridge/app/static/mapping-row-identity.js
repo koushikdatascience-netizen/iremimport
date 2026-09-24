@@ -15,10 +15,29 @@
         return (workspace?.unmappedItems || []).find((item) => mappingRowKey(item) === String(key));
     }
 
+    function mappingRowStatus(item) {
+        const pendingCode = String(selectedMappings.get(mappingRowKey(item)) || "").trim();
+        if (pendingCode) return "valid";
+        if (String(item?.mappingStatus || "").toUpperCase() === "INVALID_MAPPING") {
+            return "invalid_mapping";
+        }
+        return String(item?.selectedItemCode || "").trim() ? "valid" : "unmapped";
+    }
+
+    function mappingStatusCounts() {
+        const counts = {valid: 0, invalid: 0, unmapped: 0};
+        for (const item of (workspace?.unmappedItems || [])) {
+            const status = mappingRowStatus(item);
+            if (status === "valid") counts.valid += 1;
+            else if (status === "invalid_mapping") counts.invalid += 1;
+            else counts.unmapped += 1;
+        }
+        return counts;
+    }
+
     function mappingRowsLeft() {
-        return (workspace?.unmappedItems || []).filter(
-            (item) => !selectedMappings.get(mappingRowKey(item)) && !item.selectedItemCode,
-        ).length;
+        const counts = mappingStatusCounts();
+        return counts.invalid + counts.unmapped;
     }
 
     let managementStatusFilter = "all";
@@ -236,25 +255,21 @@
 
     updateSummary = function updateUniqueRowSummary() {
         const rows = workspace.unmappedItems || [];
-        const left = rows.filter(
-            (item) => !selectedMappings.get(mappingRowKey(item)) && !item.selectedItemCode,
-        ).length;
-        const mapped = Math.max(0, rows.length - left);
+        const counts = mappingStatusCounts();
+        const left = counts.invalid + counts.unmapped;
+        const mapped = counts.valid;
         const visible = mappingManagementMode ? filteredManagementRows().length : rows.length;
         const mappingSummary = document.getElementById("mapping-summary");
         if (mappingSummary) {
-            if (isDocumentWorkspace() && !mappingManagementMode) {
-                mappingSummary.hidden = true;
-                mappingSummary.textContent = "";
-            } else {
-                mappingSummary.hidden = false;
-                setText(
-                    mappingSummary,
-                    mappingManagementMode
-                        ? `All: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left} | Showing: ${visible}`
+            mappingSummary.hidden = false;
+            setText(
+                mappingSummary,
+                mappingManagementMode
+                    ? `All: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left} | Showing: ${visible}`
+                    : isDocumentWorkspace()
+                        ? `Valid: ${counts.valid} | Remap: ${counts.invalid} | Unmapped: ${counts.unmapped}`
                         : `Selected: ${selectedMappings.size} | Left: ${left}`,
-                );
-            }
+            );
         }
         const submit = document.getElementById("submit-mappings");
         if (submit) submit.disabled = selectedMappings.size === 0;
@@ -516,12 +531,19 @@
             const rowKey = mappingRowKey(item);
             const selected = rowKey === String(selectedExciseCode);
             const mapped = selectedMappings.get(rowKey) || item.selectedItemCode;
+            const rowStatus = mappingRowStatus(item);
             if (documentModeRows) {
+                const invalid = rowStatus === "invalid_mapping";
+                const companyCode = String(workspace?.companyCode || "").trim();
+                const warning = invalid
+                    ? `<span class="mapping-row-warning"><strong>Remap required</strong><span>${escapeHtml(item.mappingValidationMessage || `Mapped item ${item.selectedItemCode || ""} is not available in company ${companyCode || "current company"}.`)}</span></span>`
+                    : "";
                 return `
-                    <button class="unmapped-item document-map-row ${selected ? "selected" : ""}" data-row-key="${escapeHtml(rowKey)}" type="button">
+                    <button class="unmapped-item document-map-row mapping-${rowStatus} ${selected ? "selected" : ""}" data-row-key="${escapeHtml(rowKey)}" type="button">
                         <span class="doc-extracted"><small>${escapeHtml(code || "New")}</small><strong>${escapeHtml(item.itemName)}</strong>${selectedExciseDetails(item)}</span>
                         <span class="doc-arrow" aria-hidden="true">→</span>
                         ${mappedItemMarkup(item)}
+                        ${warning}
                     </button>`;
             }
             return `
@@ -556,29 +578,43 @@
         }
 
         const mapped = mappedItemForRow(item);
+        const rowStatus = mappingRowStatus(item);
         if (mapped) {
+            const invalid = rowStatus === "invalid_mapping";
             if (card) {
-                card.className = "best-match-card current-mapping-card";
+                card.className = invalid
+                    ? "best-match-card invalid-mapping-card"
+                    : "best-match-card current-mapping-card";
                 card.hidden = false;
                 card.innerHTML = `
                     <div>
-                        <span class="eyebrow">Mapped</span>
+                        <span class="eyebrow">${invalid ? "Remap required" : "Mapped"}</span>
                         <h3>${escapeHtml(mapped.itemName || "Mapped item")}</h3>
-                        <p>${escapeHtml(compactValue(mapped.ml || mapped.measureMl) ? `${compactValue(mapped.ml || mapped.measureMl)} ML` : "ML -")} | This is the saved Madhushala item for the extracted purchase row.</p>
+                        <p>${invalid
+                            ? escapeHtml(item.mappingValidationMessage || "This saved mapping is not available for the current company.")
+                            : escapeHtml(compactValue(mapped.ml || mapped.measureMl) ? `${compactValue(mapped.ml || mapped.measureMl)} ML | This is the saved Madhushala item for the extracted purchase row.` : "ML - | This is the saved Madhushala item for the extracted purchase row.")}</p>
                     </div>
-                    <button type="button" id="change-current-mapping" class="secondary">Change / Re-map</button>`;
+                    <button type="button" id="change-current-mapping" class="secondary">${invalid ? "Select valid item" : "Change / Re-map"}</button>`;
                 document.getElementById("change-current-mapping")?.addEventListener("click", () => {
                     if (search) search.value = "";
                     renderCandidates(item.suggestions || []);
                     search?.focus();
                 });
             }
-            if (search) search.placeholder = "Search only if you want to change this mapping";
+            if (search) {
+                search.placeholder = invalid
+                    ? "Search a valid current-company item"
+                    : "Search only if you want to change this mapping";
+            }
             if (!search?.value?.trim()) {
                 const container = document.getElementById("suggestions");
                 if (container) {
-                    container.className = "candidate-list empty";
-                    container.textContent = "Already mapped. Use Change / Re-map only if the saved item is wrong.";
+                    if (invalid) {
+                        renderCandidates(item.suggestions || []);
+                    } else {
+                        container.className = "candidate-list empty";
+                        container.textContent = "Already mapped. Use Change / Re-map only if the saved item is wrong.";
+                    }
                 }
             } else {
                 runSearch();
@@ -843,10 +879,14 @@
                 await loadWorkspace(jobId, {preserveState: true});
             }
 
-            const left = mappingRowsLeft();
+            const counts = mappingStatusCounts();
+            const left = counts.invalid + counts.unmapped;
             if (left > 0) {
+                const parts = [];
+                if (counts.invalid) parts.push(`${counts.invalid} need remapping`);
+                if (counts.unmapped) parts.push(`${counts.unmapped} unmapped`);
                 showToast(
-                    `Map all extracted items before continuing. ${left} item${left === 1 ? "" : "s"} still unmapped.`,
+                    `Complete item mapping before Purchase: ${parts.join(" and ")}.`,
                     "error",
                 );
                 updateSummary();
@@ -1131,6 +1171,132 @@
             body.mapping-mode #mapping-summary {
                 margin-right: auto !important;
                 font-size: 11px !important;
+            }
+            body.mapping-mode .document-map-row.mapping-invalid_mapping {
+                border-color: #f0a33a !important;
+                background: #fff8e8 !important;
+            }
+            body.mapping-mode .mapping-row-warning {
+                grid-column: 1 / -1;
+                display: flex;
+                align-items: flex-start;
+                gap: 7px;
+                width: 100%;
+                padding: 7px 9px;
+                border: 1px solid #f3c56f;
+                border-radius: 5px;
+                background: #fff4d8;
+                color: #8a4b00;
+                text-align: left;
+                font-size: 10px;
+                line-height: 1.35;
+            }
+            body.mapping-mode .mapping-row-warning strong {
+                flex: 0 0 auto;
+                color: #8a4b00;
+                font-size: 10px;
+            }
+            body.mapping-mode .mapping-row-warning span {
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+            body.mapping-mode .invalid-mapping-card {
+                border-color: #f0a33a !important;
+                background: #fff4d8 !important;
+            }
+            body.mapping-mode .invalid-mapping-card .eyebrow,
+            body.mapping-mode .invalid-mapping-card p {
+                color: #8a4b00 !important;
+            }
+            @media (max-width: 760px) {
+                body.mapping-mode {
+                    min-height: 100dvh !important;
+                    height: auto !important;
+                    overflow: auto !important;
+                }
+                body.mapping-mode #mapping-view {
+                    min-height: 100dvh !important;
+                    height: auto !important;
+                    padding: 6px !important;
+                    overflow: visible !important;
+                }
+                body.mapping-mode #mapping-view .mapping-layout {
+                    display: grid !important;
+                    grid-template-columns: 1fr !important;
+                    height: auto !important;
+                    min-height: 0 !important;
+                    overflow: visible !important;
+                    gap: 8px !important;
+                }
+                body.mapping-mode #mapping-view .unmapped-list,
+                body.mapping-mode #mapping-view .mapper {
+                    width: 100% !important;
+                    height: auto !important;
+                    min-height: 0 !important;
+                    max-height: none !important;
+                }
+                body.mapping-mode #mapping-view .list-body {
+                    max-height: 54dvh !important;
+                    padding: 6px !important;
+                }
+                body.mapping-mode #mapping-view .candidate-list {
+                    max-height: 42dvh !important;
+                }
+                body.mapping-mode .document-map-row {
+                    grid-template-columns: 1fr !important;
+                    align-items: stretch !important;
+                    gap: 6px !important;
+                    padding: 9px !important;
+                }
+                body.mapping-mode .document-map-row .doc-arrow {
+                    display: none !important;
+                }
+                body.mapping-mode .document-map-row > * {
+                    min-width: 0 !important;
+                    width: 100% !important;
+                }
+                body.mapping-mode .mapping-row-warning {
+                    grid-column: 1 !important;
+                    flex-direction: column;
+                    gap: 2px;
+                    font-size: 11px;
+                }
+                body.mapping-mode #mapping-view .mapping-footer {
+                    position: sticky !important;
+                    bottom: 0 !important;
+                    z-index: 120 !important;
+                    flex: 0 0 auto !important;
+                    min-height: 0 !important;
+                    height: auto !important;
+                    display: grid !important;
+                    grid-template-columns: 1fr 1fr !important;
+                    padding: 8px !important;
+                    border-top: 1px solid #d8d8d8 !important;
+                    background: rgba(255, 255, 255, .97) !important;
+                    box-shadow: 0 -8px 20px rgba(0, 0, 0, .08);
+                }
+                body.mapping-mode #mapping-summary {
+                    grid-column: 1 / -1;
+                    width: 100%;
+                    margin: 0 !important;
+                    font-size: 10px !important;
+                    text-align: center;
+                }
+                body.mapping-mode #mapping-view .mapping-footer button {
+                    width: 100% !important;
+                    min-height: 42px !important;
+                    height: 42px !important;
+                    font-size: 12px !important;
+                }
+                body.mapping-mode .toast {
+                    left: 10px !important;
+                    right: 10px !important;
+                    bottom: 88px !important;
+                    max-width: none !important;
+                    padding: 10px 12px !important;
+                    font-size: 12px !important;
+                    line-height: 1.35 !important;
+                }
             }
         `;
         document.head.appendChild(style);
