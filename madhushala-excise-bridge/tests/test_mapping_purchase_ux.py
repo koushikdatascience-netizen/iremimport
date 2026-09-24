@@ -300,11 +300,10 @@ def test_document_mapping_footer_keeps_only_mapping_and_handoff_actions():
     assert 'validate-purchase-mapping' not in runtime
 
 
-def test_mapping_handoff_calculates_without_blocking_on_purchase_masters():
+def test_mapping_handoff_is_frontend_calculation_owned():
     mapping_script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
     context_script = Path("app/static/purchase-context.js").read_text(encoding="utf-8")
     routes = Path("app/modules/document_import/routes.py").read_text(encoding="utf-8")
-    preview = Path("app/modules/document_import/purchase_preview.py").read_text(encoding="utf-8")
     required = Path("app/modules/document_import/purchase_required.py").read_text(encoding="utf-8")
 
     start = mapping_script.index("async function buildPurchaseHandoff(jobId)")
@@ -317,12 +316,17 @@ def test_mapping_handoff_calculates_without_blocking_on_purchase_masters():
     assert "__purchaseContext" not in handoff
     assert 'if (!isDocumentImport || isMappingView) return;' in context_script
 
-    assert 'strict=False' in routes
-    assert 'calculate_purchase_preview(' in routes
-    assert 'require_complete_header=False' in routes
-    assert 'calculated["handoffCalculated"] = True' in routes
-    assert 'require_complete_header: bool = True' in preview
-    assert 'if require_complete_header:' in preview
+    route_start = routes.index('@router.get("/jobs/{job_id}/purchase/handoff")')
+    route_end = routes.index('@router.get("/jobs/{job_id}/purchase/transaction")', route_start)
+    route_handoff = routes[route_start:route_end]
+
+    assert 'strict=False' in route_handoff
+    assert 'purchase_adapter.purchase_items(session, job_id)' in route_handoff
+    assert 'calculate_purchase_preview(' not in route_handoff
+    assert '"handoffReady": True' in route_handoff
+    assert '"calculationRequired": True' in route_handoff
+    assert '"calculateUrl": "/api/purchase/calculate"' in route_handoff
+    assert '"boxRate"' not in route_handoff  # Rates come from enriched adapter items, not local recomputation.
     assert 'strict: bool = True' in required
     assert 'if missing and strict:' in required
 
