@@ -2268,3 +2268,45 @@ def test_pdf_exact_rate_mode_does_not_substitute_case_rate_when_purchase_rate_is
     assert pdf_request["items"][0]["boxRate"] == 0.0
     # Non-PDF behavior remains unchanged.
     assert legacy_request["items"][0]["looseRate"] == 4800.0
+
+
+def test_purchase_item_source_uses_purchase_dropdown_without_generic_item_override(monkeypatch):
+    import asyncio
+
+    from app.services.reference_data_service import MadhushalaReferenceDataService
+    from app.services import reference_data_service as reference_module
+
+    service = MadhushalaReferenceDataService()
+    dropdown_row = {
+        "itemCode": "A00056",
+        "itemName": "ABSOLUT 50",
+        "packing": 24,
+        "purchaseRate": 0,
+        "purchaseRateCase": 3415.2,
+        "salesRate": 250,
+        "vat": 60,
+        "tcs": 2284.08,
+    }
+
+    async def fake_set_json(*args, **kwargs):
+        return None
+
+    def fail_if_generic_item_client_is_requested(*args, **kwargs):
+        raise AssertionError("/api/items/{itemCode} must not be used for Purchase item values")
+
+    monkeypatch.setattr(reference_module.cache_service, "set_json", fake_set_json)
+    monkeypatch.setattr(service, "client_for_session", fail_if_generic_item_client_is_requested)
+
+    item = asyncio.run(
+        service.item(
+            {"shop_code": "SHOP_A", "company_code": "2", "bill_type": "PURCHASE"},
+            "A00056",
+            [dropdown_row],
+        )
+    )
+
+    assert item == dropdown_row
+    assert item["purchaseRate"] == 0
+    assert item["purchaseRateCase"] == 3415.2
+    assert item["vat"] == 60
+    assert item["tcs"] == 2284.08

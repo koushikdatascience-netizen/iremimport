@@ -234,44 +234,35 @@ class MadhushalaReferenceDataService:
             return {}
         cache_key = f"item:{shop}:{company}:{code}"
 
-        # Purchase Calculate must use the full Item Master record. Do not return
-        # a cached/dropdown summary here because it may contain packing/tax tags
-        # while purchaseRate/MRP are absent or zero.
+        # Purchase Calculate/Save must use the same purchase-specific item row
+        # that the Madhushala Purchase UI exposes through
+        # /api/purchase/dropdown/items. Do not call /api/items/{itemCode} here:
+        # that generic item endpoint can contain different commercial values and
+        # must not overwrite the authoritative Purchase dropdown values.
         source_catalogue = catalogue if catalogue is not None else await self.catalogue(session)
-        dropdown_item: dict[str, Any] = {}
         for row in source_catalogue:
             row_code = _dict_value(row, "itemCode", "code", "value", "id")
             if str(row_code or "").strip() == code:
-                dropdown_item = row
-                break
+                purchase_item = dict(row)
+                await cache_service.set_json(cache_key, purchase_item, settings.CACHE_ITEM_TTL_SECONDS)
+                logger.info(
+                    "purchase_item_from_dropdown itemCode=%s shopCode=%s companyCode=%s",
+                    code,
+                    shop,
+                    company,
+                )
+                return purchase_item
 
-        client = self.client_for_session(session)
-        try:
-            detail = _unwrap_dict(await client.get_item(code, company))
-        except MadhushalaApiError as exc:
-            if dropdown_item:
-                logger.warning("item_detail_fallback itemCode=%s error=%s", code, exc)
-                detail = dropdown_item
-            else:
-                raise
-
-        merged = dict(dropdown_item)
-        merged.update(detail)
-        if merged:
-            await cache_service.set_json(cache_key, merged, settings.CACHE_ITEM_TTL_SECONDS)
-        return merged
+        return {}
 
     async def items(self, session: dict[str, Any], item_codes: list[str]) -> dict[str, dict[str, Any]]:
         catalogue = await self.catalogue(session)
         unique_codes = list(dict.fromkeys(str(code or "").strip() for code in item_codes if str(code or "").strip()))
-        semaphore = asyncio.Semaphore(max(1, settings.MADHUSHALA_ITEM_FETCH_CONCURRENCY))
-
-        async def load(code: str) -> tuple[str, dict[str, Any]]:
-            async with semaphore:
-                return code, await self.item(session, code, catalogue)
-
-        pairs = await asyncio.gather(*(load(code) for code in unique_codes))
-        return {code: item for code, item in pairs}
+        return {
+            code: item
+            for code in unique_codes
+            if (item := await self.item(session, code, catalogue))
+        }
 
     async def tax_mode(self, session: dict[str, Any]) -> str:
         shop, company, _ = self._scope(session)
