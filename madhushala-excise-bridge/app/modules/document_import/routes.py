@@ -163,12 +163,12 @@ def create_router(service: DocumentImportService) -> APIRouter:
 
     @router.get("/jobs/{job_id}/purchase/handoff")
     async def get_purchase_handoff(job_id: str, request: Request):
-        """Calculate the mapped document and hand the resulting payload to Madhushala.
+        """Return authoritative Purchase inputs without calling Calculate.
 
-        Purchase masters are resolved when available but are not required merely
-        to open the real Madhushala Purchase UI. Calculate runs first so rates,
-        taxes, gross and net values are already populated. The Madhushala
-        frontend remains authoritative for later edits/recalculation and Save.
+        The bridge owns document extraction, reviewed box/loose quantities,
+        mapping, and Purchase Item Master enrichment. The Madhushala frontend
+        owns /api/purchase/calculate, display of calculated financial values,
+        user edits/recalculation, and final Purchase Save.
         """
         session = session_service.from_request(request)
         base_handoff = build_purchase_handoff(service, session, job_id)
@@ -179,23 +179,52 @@ def create_router(service: DocumentImportService) -> APIRouter:
             {},
             strict=False,
         )
-        calculated = await calculate_purchase_preview(
-            service,
-            session,
-            job_id,
-            header,
-            require_complete_header=False,
-            preserve_commercial_rates=True,
-        )
-        purchase = calculated.get("purchasePayload") if isinstance(calculated, dict) else None
-        if isinstance(purchase, dict):
-            base = base_handoff.get("purchasePayload") if isinstance(base_handoff, dict) else {}
-            if isinstance(base, dict):
-                purchase.setdefault("jobId", base.get("jobId") or job_id)
-                purchase.setdefault("sourceType", base.get("sourceType") or "")
-                purchase.setdefault("supplierName", base.get("supplierName") or "")
-        calculated["handoffCalculated"] = True
-        return calculated
+        items = await purchase_adapter.purchase_items(session, job_id)
+
+        # Give the frontend the exact inputs needed to build
+        # /api/purchase/calculate. Do not calculate or merge financial output
+        # in the bridge handoff.
+        handoff_items: list[dict[str, Any]] = []
+        for source in items:
+            item = dict(source)
+            item.pop("_canonicalQuantityVersion", None)
+            item["quantity"] = item.get("qnty", 0)
+            item["free"] = item.get("freeQnty", 0)
+            handoff_items.append(item)
+
+        base = base_handoff.get("purchasePayload") if isinstance(base_handoff, dict) else {}
+        job = service.get_job(session, job_id)
+        purchase = {
+            "shopCode": str(session.get("shop_code") or "").strip(),
+            "companyCode": str(session.get("company_code") or "").strip(),
+            "yearCode": str(header.get("yearCode") or "").strip(),
+            "trnDate": str(header.get("trnDate") or "").strip(),
+            "docDate": str(header.get("docDate") or job.get("invoice_date") or "").strip(),
+            "docNo": str(header.get("docNo") or job.get("invoice_number") or "").strip(),
+            "tpPassNo": str(header.get("tpPassNo") or "").strip(),
+            "supplierCode": str(header.get("supplierCode") or "").strip(),
+            "storeCode": str(header.get("storeCode") or "").strip(),
+            "schemeCode": str(header.get("schemeCode") or "").strip(),
+            "purchaseAccCode": str(header.get("purchaseAccCode") or "").strip(),
+            "narration": str(header.get("narration") or "").strip(),
+            "userCode": str(header.get("userCode") or "").strip(),
+            "billType": "AI",
+            "pType": "purchase",
+            "jobId": job_id,
+            "sourceType": str((base or {}).get("sourceType") or job.get("source_type") or "").strip(),
+            "supplierName": str((base or {}).get("supplierName") or job.get("supplier_name") or "").strip(),
+            "salesTaxRate": 0.0,
+            "salesTaxIncludingFree": False,
+            "items": handoff_items,
+        }
+        return {
+            "success": True,
+            "jobId": job_id,
+            "handoffReady": True,
+            "calculationRequired": True,
+            "calculateUrl": "/api/purchase/calculate",
+            "purchasePayload": purchase,
+        }
 
     @router.get("/jobs/{job_id}/purchase/transaction")
     async def get_purchase_transaction(job_id: str, request: Request):
