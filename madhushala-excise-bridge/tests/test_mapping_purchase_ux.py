@@ -17,7 +17,7 @@ def test_saved_document_mapping_is_presented_as_mapped_and_remappable():
     assert '<span class="eyebrow">Mapped</span>' in script
     assert 'saved Madhushala item for the extracted purchase row' in script
     assert 'Already mapped. Use Change / Re-map only if the saved item is wrong.' in script
-    assert 'mappingSummary.hidden = true' in script
+    assert 'Valid: ${counts.valid} | Remap: ${counts.invalid} | Unmapped: ${counts.unmapped}' in script
     assert 'Change / Re-map' in script
 
 
@@ -151,7 +151,7 @@ def test_successful_import_never_renders_legacy_preview_before_mapping():
 def test_frontend_static_assets_are_cache_busted():
     main = Path("app/main.py").read_text(encoding="utf-8")
 
-    assert 'STATIC_ASSET_VERSION = "20260922-fresh-mapping-master-v23"' in main
+    assert 'STATIC_ASSET_VERSION = "20260924-inline-invalid-mapping-v24"' in main
     assert 'mapping-row-identity.js?v={STATIC_ASSET_VERSION}' in main
     assert 'purchase-context.js?v={STATIC_ASSET_VERSION}' in main
 
@@ -295,9 +295,32 @@ def test_document_mapping_footer_keeps_only_mapping_and_handoff_actions():
     assert '>Save Mapping</button>' in runtime
     assert 'id="save-purchase-from-mapping"' not in runtime
     assert 'next.textContent = "Next: Purchase"' in mapping_script
-    assert 'mappingSummary.hidden = true' in mapping_script
+    assert 'mappingSummary.hidden = false' in mapping_script
     assert '["mapping", "save-purchase-from-mapping"]' not in context_script
     assert 'validate-purchase-mapping' not in runtime
+
+
+def test_document_mapping_marks_stale_company_mappings_inline_and_mobile_responsive():
+    service = Path("app/services/mapping_service.py").read_text(encoding="utf-8")
+    main = Path("app/main.py").read_text(encoding="utf-8")
+    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+
+    assert "await reference_data_service.fresh_catalogue(session)" in service
+    assert '"INVALID_MAPPING"' in service
+    assert '"mappingValidationMessage"' in service
+    assert "stale_company_mapping_detected" in service
+    assert "stale_company_mapping_cleared" not in service
+    assert 'if str(row.get("mappingStatus") or "").upper() == "INVALID_MAPPING":' in main
+
+    assert 'function mappingRowStatus(item)' in script
+    assert 'function mappingStatusCounts()' in script
+    assert 'mapping-invalid_mapping' in script
+    assert 'mapping-row-warning' in script
+    assert 'invalid-mapping-card' in script
+    assert 'Complete item mapping before Purchase:' in script
+    assert '@media (max-width: 760px)' in script
+    assert 'grid-template-columns: 1fr !important;' in script
+    assert 'position: sticky !important;' in script
 
 
 def test_mapping_handoff_is_frontend_calculation_owned():
