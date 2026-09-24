@@ -501,8 +501,8 @@ class MappingService:
         return {"preparedCount": len(prepared), "latestUnmappedExciseCodes": latest_codes, "items": prepared}
 
     async def company_item_codes(self, session: dict[str, Any]) -> set[str]:
-        """Return valid Madhushala item codes for the active company scope."""
-        rows = await reference_data_service.catalogue(session)
+        """Return fresh valid Madhushala item codes for the active company scope."""
+        rows = await reference_data_service.fresh_catalogue(session)
         return {
             str(item.get("itemCode") or "").strip()
             for item in (rows or [])
@@ -525,20 +525,12 @@ class MappingService:
         item_by_code: dict[str, dict[str, Any]] = {}
         valid_item_codes: set[str] = set()
 
-        # Document Mapping and Mapping Management need the complete catalogue in
-        # the initial response. Portal Mapping does not: returning its left-side
-        # Excise rows must never wait for the full Item Master catalogue.
+        # Document Mapping and Mapping Management both need the authoritative
+        # current-company Item Master. Handoff also validates against a fresh
+        # Purchase catalogue, so using a cached catalogue here can make stale
+        # mappings look valid until the user presses Next: Purchase.
         if job_id or include_mapped:
-            # Mapping Management must reflect the authoritative Madhushala
-            # Item Master immediately. A long-lived Redis catalogue can be
-            # stale when items are added/renamed upstream, so refresh it once
-            # when management mode opens. Document Mapping can keep using the
-            # cached catalogue for speed.
-            madhushala_items = (
-                await reference_data_service.fresh_catalogue(session)
-                if include_mapped
-                else await reference_data_service.catalogue(session)
-            )
+            madhushala_items = await reference_data_service.fresh_catalogue(session)
             match_index = MatchIndex(madhushala_items)
             item_by_code = {
                 str(item.get("itemCode") or "").strip(): item
@@ -633,24 +625,21 @@ class MappingService:
                             (shop_code, company_code, excise_code),
                         ).fetchone()
                         mapped_code = str(mapped["madhushala_item_code"] if mapped else "").strip()
-                    if mapped_code and mapped_code not in valid_item_codes:
+                    invalid_mapping = bool(mapped_code and mapped_code not in valid_item_codes)
+                    if invalid_mapping:
                         logger.warning(
-                            "stale_company_mapping_cleared shopCode=%s companyCode=%s itemCode=%s jobItemId=%s",
+                            "stale_company_mapping_detected shopCode=%s companyCode=%s itemCode=%s jobItemId=%s",
                             shop_code,
                             company_code,
                             mapped_code,
                             job_item["id"],
                         )
-                        db.execute(
-                            """
-                            UPDATE import_items
-                            SET mapped_item_code=NULL, mapping_status='UNMAPPED', updated_at=?
-                            WHERE id=?
-                            """,
-                            (datetime.now(timezone.utc).isoformat(), job_item["id"]),
-                        )
-                        mapped_code = ""
                     mapped_item = item_by_code.get(mapped_code)
+                    if invalid_mapping and mapped_code:
+                        mapped_item = {
+                            "itemCode": mapped_code,
+                            "itemName": "Previously mapped item",
+                        }
                     rows.append(
                         {
                             "jobItemId": job_item["id"],
@@ -660,7 +649,16 @@ class MappingService:
                             "suggestions": suggest_matches(context, madhushala_items, index=match_index),
                             "selectedItemCode": mapped_code or None,
                             "selectedItem": mapped_item,
-                            "mappingStatus": "MAPPED" if mapped_code else (job_item["mapping_status"] or "PENDING"),
+                            "mappingStatus": (
+                                "INVALID_MAPPING"
+                                if invalid_mapping
+                                else ("MAPPED" if mapped_code else (job_item["mapping_status"] or "PENDING"))
+                            ),
+                            "mappingValidationMessage": (
+                                f"Mapped item {mapped_code} is not available in company {company_code}. Remap this row."
+                                if invalid_mapping
+                                else ""
+                            ),
                             "documentRow": True,
                         }
                     )
