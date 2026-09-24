@@ -397,15 +397,9 @@ async def test_pdf_header_uses_extracted_document_number_and_date_not_browser_de
 @pytest.mark.asyncio
 async def test_item_master_preflight_rejects_code_missing_from_current_company():
     class ReferenceService:
-        items_called = False
-
-        async def catalogue(self, session):
+        async def fresh_catalogue(self, session):
             assert session["company_code"] == "3"
             return [{"itemCode": "A00001", "itemName": "AVAILABLE ITEM"}]
-
-        async def items(self, session, codes):
-            self.items_called = True
-            return {}
 
     service = ReferenceService()
     with pytest.raises(Exception) as exc_info:
@@ -418,7 +412,6 @@ async def test_item_master_preflight_rejects_code_missing_from_current_company()
     assert getattr(exc_info.value, "status_code", None) == 409
     assert "G0004Z" in str(exc_info.value.detail)
     assert "company 3" in str(exc_info.value.detail)
-    assert service.items_called is False
 
 
 @pytest.mark.asyncio
@@ -427,26 +420,25 @@ async def test_item_master_company_validation_rechecks_live_catalogue_when_cache
 
     class FakeReferenceService:
         async def catalogue(self, session):
-            # Simulate stale cached company catalogue.
-            return [{"itemCode": "OLD001"}]
+            # Simulate stale cached Purchase dropdown with an old case rate.
+            return [{
+                "itemCode": "100010",
+                "packing": 12,
+                "purchaseRate": 0,
+                "purchaseRateCase": 0,
+                "salesRate": 1880,
+            }]
 
         async def fresh_catalogue(self, session):
-            # Same live company dropdown used by mapping contains the selected item.
-            return [{"itemCode": "100010"}]
-
-        async def items(self, session, codes):
-            assert session["company_code"] == "2"
-            assert codes == ["100010"]
-            return {
-                "100010": {
-                    "itemCode": "100010",
-                    "itemName": "100 PIPER 750 N",
-                    "packing": 12,
-                    "purchaseRate": 0,
-                    "purchaseRateCase": 200,
-                    "salesRate": 1880,
-                }
-            }
+            # Live Purchase dropdown is authoritative for Calculate/Save.
+            return [{
+                "itemCode": "100010",
+                "itemName": "100 PIPER 750 N",
+                "packing": 12,
+                "purchaseRate": 0,
+                "purchaseRateCase": 200,
+                "salesRate": 1880,
+            }]
 
     session = {
         "shop_code": "hedu_test2",
@@ -457,7 +449,64 @@ async def test_item_master_company_validation_rechecks_live_catalogue_when_cache
     result = await load_item_master_details(FakeReferenceService(), session, ["100010"])
 
     assert result["100010"]["itemCode"] == "100010"
+    assert result["100010"]["purchaseRateCase"] == 200
     assert session["company_code"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_item_master_details_use_fresh_purchase_rates_for_absolut_style_item():
+    class FakeReferenceService:
+        async def catalogue(self, session):
+            return [{
+                "itemCode": "A00056",
+                "packing": 24,
+                "purchaseRate": 0,
+                "purchaseRateCase": 0,
+                "salesRate": 250,
+            }]
+
+        async def fresh_catalogue(self, session):
+            return [{
+                "itemCode": "A00056",
+                "packing": 24,
+                "purchaseRate": 0,
+                "purchaseRateCase": 3415.2,
+                "salesRate": 250,
+                "vat": 60,
+                "tcs": 2284.08,
+                "t3Rate": 2,
+            }]
+
+    session = {"shop_code": "WBTEST", "company_code": "2", "bill_type": "AI"}
+    master = await load_item_master_details(FakeReferenceService(), session, ["A00056"])
+
+    request = build_item_master_calculation_request(
+        {
+            "shopCode": "WBTEST",
+            "companyCode": "2",
+            "schemeCode": "",
+            "salesTaxRate": 0,
+            "salesTaxIncludingFree": False,
+        },
+        [{
+            "itemCode": "A00056",
+            "box": 0,
+            "loose": 1,
+            "qnty": 1,
+            "_canonicalQuantityVersion": 2,
+            "freeQnty": 0,
+        }],
+        master,
+        exact_purchase_rates=True,
+    )
+
+    item = request["items"][0]
+    assert item["box"] == 0
+    assert item["loose"] == 1
+    assert item["boxRate"] == 3415.2
+    assert item["looseRate"] == 0.0
+    assert item["packing"] == 24
+    assert item["mrp"] == 250.0
 
 
 @pytest.mark.asyncio
@@ -466,14 +515,8 @@ async def test_item_master_company_validation_still_rejects_after_fresh_check():
     from app.modules.document_import.purchase_contract import load_item_master_details
 
     class FakeReferenceService:
-        async def catalogue(self, session):
-            return []
-
         async def fresh_catalogue(self, session):
             return [{"itemCode": "DIFFERENT"}]
-
-        async def items(self, session, codes):
-            raise AssertionError("Item detail must not load after confirmed company mismatch")
 
     session = {
         "shop_code": "hedu_test2",
