@@ -121,9 +121,16 @@ class DocumentPurchaseAdapter:
         # Do not rely on the Purchase dropdown summary here. Calculate requires
         # the full Item Master record for each mapped item, so call /api/items/{id}
         # first and retain that exact snapshot for the Calculate client facade.
+        # Document Purchase/Calculate is always sent as billType=AI.
+        # Load the Purchase dropdown under that exact same scope; using the
+        # session's original bill_type here can return different commercial
+        # values (for example purchaseRateCase) than the subsequent AI
+        # Calculate request.
+        purchase_master_session = dict(session)
+        purchase_master_session["bill_type"] = "AI"
         item_master = await load_item_master_details(
             reference_data_service,
-            session,
+            purchase_master_session,
             [code for _, code in row_codes],
         )
         self.item_master_snapshot = item_master
