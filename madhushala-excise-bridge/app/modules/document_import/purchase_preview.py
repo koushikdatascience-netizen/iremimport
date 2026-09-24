@@ -91,6 +91,7 @@ async def calculate_purchase_preview(
     header: dict[str, Any],
     *,
     require_complete_header: bool = True,
+    preserve_commercial_rates: bool = False,
 ) -> dict[str, Any]:
     """Run the live Madhushala Calculate step without saving a purchase.
 
@@ -165,6 +166,8 @@ async def calculate_purchase_preview(
 
     for item in payload["items"]:
         for helper_key in _CALCULATION_HELPER_KEYS:
+            if preserve_commercial_rates and helper_key in {"boxRate", "looseRate"}:
+                continue
             item.pop(helper_key, None)
 
     if require_complete_header:
