@@ -233,3 +233,69 @@ async def test_calculate_preview_blocks_partial_item_response(monkeypatch, purch
     assert exc_info.value.detail["stage"] == "CALCULATE_NORMALIZE"
     assert exc_info.value.detail["expectedItemCount"] == 2
     assert exc_info.value.detail["calculatedItemCount"] == 1
+
+
+@pytest.mark.asyncio
+async def test_handoff_preview_preserves_box_and_loose_rates(monkeypatch, purchase_items):
+    async def fake_purchase_items(self, _session, _job_id):
+        item = dict(purchase_items[0])
+        item.update({
+            "itemCode": "A00056",
+            "box": 0,
+            "loose": 1,
+            "qnty": 1,
+            "boxRate": 3145.0,
+            "looseRate": 0.0,
+            "rate": 0.0,
+            "mrp": 250.0,
+            "_canonicalQuantityVersion": 2,
+        })
+        return [item]
+
+    monkeypatch.setattr(DocumentPurchaseAdapter, "purchase_items", fake_purchase_items)
+
+    async def fake_tax_mode(_session):
+        return "ITEMWISE"
+
+    monkeypatch.setattr(reference_data_service, "tax_mode", fake_tax_mode)
+
+    class FakeClient:
+        async def calculate_purchase(self, payload):
+            return {
+                "items": [{
+                    "itemCode": "A00056",
+                    "quantity": 1,
+                    "boxRate": 3145.0,
+                    "looseRate": 0.0,
+                    "mrp": 250.0,
+                    "amount": 0.0,
+                    "t1Amount": 2.5,
+                    "t2Amount": 95.17,
+                    "t3Amount": 1.95,
+                    "totalAmount": 99.62,
+                }],
+                "grossAmount": 99.62,
+                "netAmount": 100.0,
+            }
+
+    monkeypatch.setattr(reference_data_service, "client_for_session", lambda _session: FakeClient())
+
+    result = await calculate_purchase_preview(
+        FakeDocumentService(),
+        {"shop_code": "WBTEST", "company_code": "2"},
+        "job-preview-1",
+        {
+            "trnDate": "2026-09-24",
+            "docDate": "2026-09-24",
+            "docNo": "INV-A00056",
+            "supplierCode": "J00001",
+            "storeCode": "S00001",
+            "purchaseAccCode": "P00002",
+            "userCode": "A00001",
+        },
+        preserve_commercial_rates=True,
+    )
+
+    item = result["purchasePayload"]["items"][0]
+    assert item["boxRate"] == 3145.0
+    assert item["looseRate"] == 0.0
