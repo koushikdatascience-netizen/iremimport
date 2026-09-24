@@ -6,7 +6,7 @@ from app.services.reference_data_service import MadhushalaReferenceDataService
 
 
 @pytest.mark.asyncio
-async def test_purchase_item_lookup_prefers_full_item_master_over_dropdown_summary(monkeypatch):
+async def test_purchase_item_lookup_uses_purchase_dropdown_as_source_of_truth(monkeypatch):
     service = MadhushalaReferenceDataService()
     session = {
         "shop_code": "hedu_test2",
@@ -19,26 +19,11 @@ async def test_purchase_item_lookup_prefers_full_item_master_over_dropdown_summa
         "itemCode": "100003",
         "packing": 48,
         "purchaseRate": 0,
-        "purchaseRateCase": 0,
-        "mrp": 0,
-        "etd": 11955.6,
-    }
-    detail = {
-        "itemCode": "100003",
-        "packing": 48,
-        "purchaseRate": 10.42,
         "purchaseRateCase": 500,
-        "mrp": 280,
+        "salesRate": 280,
         "etd": 11955.6,
     }
 
-    class Client:
-        async def get_item(self, item_code, company_code):
-            assert item_code == "100003"
-            assert company_code == "2"
-            return detail
-
-    monkeypatch.setattr(service, "client_for_session", lambda _session: Client())
     async def _set_json(*args, **kwargs):
         return None
 
@@ -47,9 +32,15 @@ async def test_purchase_item_lookup_prefers_full_item_master_over_dropdown_summa
         _set_json,
     )
 
+    def _fail_if_generic_item_client_is_requested(*args, **kwargs):
+        raise AssertionError("/api/items/{itemCode} must not be used for Purchase values")
+
+    monkeypatch.setattr(service, "client_for_session", _fail_if_generic_item_client_is_requested)
+
     result = await service.item(session, "100003", [dropdown])
 
-    assert result["purchaseRate"] == 10.42
+    assert result == dropdown
+    assert result["purchaseRate"] == 0
     assert result["purchaseRateCase"] == 500
-    assert result["mrp"] == 280
+    assert result["salesRate"] == 280
     assert result["packing"] == 48

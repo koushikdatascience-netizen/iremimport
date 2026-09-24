@@ -157,7 +157,7 @@ def test_pdf_calculate_rates_follow_loose_only_quantity():
     item = request["items"][0]
     assert item["box"] == 0
     assert item["loose"] == 1
-    assert item["boxRate"] == 0
+    assert item["boxRate"] == 3415.2
     assert item["looseRate"] == 142.3
 
 
@@ -192,7 +192,7 @@ def test_pdf_calculate_rates_follow_box_only_quantity():
     assert item["box"] == 1
     assert item["loose"] == 0
     assert item["boxRate"] == 3415.2
-    assert item["looseRate"] == 0
+    assert item["looseRate"] == 142.3
 
 
 def test_pdf_calculate_rates_keep_both_for_mixed_quantity():

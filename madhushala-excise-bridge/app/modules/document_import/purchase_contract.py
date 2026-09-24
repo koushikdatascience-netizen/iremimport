@@ -239,15 +239,12 @@ def build_item_master_calculation_request(
             master,
             exact_purchase_rates=exact_purchase_rates,
         )
-        if exact_purchase_rates:
-            # For PDF imports, only send the rate(s) that correspond to the
-            # reviewed/extracted physical quantity shape. A loose-only source
-            # row must not carry a case rate, and a case-only source row must
-            # not carry a loose rate. Mixed case+loose rows keep both.
-            if box <= 0:
-                box_rate = 0.0
-            if loose <= 0:
-                loose_rate = 0.0
+        # Quantity identity and Item Master rates are independent in the
+        # Madhushala Calculate contract. Always send both commercial rate
+        # fields exactly from the Purchase Item Master:
+        #   boxRate   <- purchaseRateCase
+        #   looseRate <- purchaseRate
+        # Box/loose determine quantity only; they must not zero the other rate.
 
         request_items.append(
             {
@@ -324,13 +321,8 @@ def _augment_calculation_response(
                 master,
                 exact_purchase_rates=exact_purchase_rates,
             )
-            if exact_purchase_rates:
-                source_box = _int_value(source.get("box"))
-                source_loose = _int_value(source.get("loose"))
-                if source_box <= 0:
-                    box_rate = 0.0
-                if source_loose <= 0:
-                    loose_rate = 0.0
+            # Preserve both Item Master rates if Madhushala omits either one
+            # from the Calculate response. Do not zero rates based on quantity.
 
             if _dict_value(row, "quantity", "qnty", "qty") is None:
                 row["quantity"] = _int_value(source.get("qnty"))
