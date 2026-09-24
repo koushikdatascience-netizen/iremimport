@@ -185,6 +185,7 @@ def create_router(service: DocumentImportService) -> APIRouter:
             job_id,
             header,
             require_complete_header=False,
+            preserve_commercial_rates=True,
         )
         purchase = calculated.get("purchasePayload") if isinstance(calculated, dict) else None
         if isinstance(purchase, dict):
