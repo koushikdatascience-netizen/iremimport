@@ -667,7 +667,7 @@ class DocumentImportService:
         # Strip only these known bracketed packaging descriptors, never
         # meaningful product words or unbracketed brand terms.
         text = re.sub(
-            r"\\[\\s*(?:pet\\s+bottle|glass\\s+bottle)\\s*\\]",
+            r"\[\s*(?:pet\s+bottle|glass\s+bottle)\s*\]",
             " ",
             text,
             flags=re.IGNORECASE,
