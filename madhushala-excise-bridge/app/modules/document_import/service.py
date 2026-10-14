@@ -662,6 +662,16 @@ class DocumentImportService:
         suffix are ignored, but words are never fuzzy-substituted.
         """
         text = normalize_brand(str(value or ""))
+        # TP passes often append a packaging annotation that the BEVCO
+        # invoice omits (e.g. TOP 10 PREMIUM WHISKY [Pet Bottle]).
+        # Strip only these known bracketed packaging descriptors, never
+        # meaningful product words or unbracketed brand terms.
+        text = re.sub(
+            r"\\[\\s*(?:pet\\s+bottle|glass\\s+bottle)\\s*\\]",
+            " ",
+            text,
+            flags=re.IGNORECASE,
+        )
         text = re.sub(r"\b\d{2,5}\s*m\.?l\.?\b", " ", text, flags=re.IGNORECASE)
         text = re.sub(r"[^a-z0-9]+", " ", text)
         return " ".join(text.split())
