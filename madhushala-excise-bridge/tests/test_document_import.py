@@ -1116,6 +1116,112 @@ def test_batch_tp_plus_wb_invoice_enriches_tp_row_without_duplicate_item(client,
     assert normalized["rawData"]["invoiceFinancials"]["totalAmount"] == 15467.08
 
 
+
+def test_invoice_enriched_review_rejects_identity_or_quantity_change(client, monkeypatch):
+    from app.main import document_import_service
+    from app.modules.document_import import service as service_module
+
+    financials = {
+        "taxes": {
+            "specialPurposeFee": 0.0,
+            "roundOffValueToGovt": 0.0,
+            "tcs": 0.0,
+        },
+        "roundedOff": 0.0,
+        "totalAmount": 100.0,
+        "totalNet": 100.0,
+        "itemSubtotal": 100.0,
+        "reconciled": True,
+    }
+
+    def fake_local_extract(path):
+        payload = Path(path).read_bytes()
+        if b"INVOICE" in payload:
+            return (
+                ExtractedDocument(
+                    documentType="invoice",
+                    invoiceNumber="INV-1",
+                    invoiceDate="21/09/2026",
+                    documentRole="financial_enrichment",
+                    invoiceFinancials=financials,
+                    items=[
+                        ExtractedProduct(
+                            itemName="TEST WHISKY 750 ML",
+                            ml=750,
+                            box=1,
+                            loose=0,
+                            amount=100.0,
+                            invoiceAmount=100.0,
+                        )
+                    ],
+                ),
+                {
+                    "engine": "pymupdf-state-adapter",
+                    "usable": True,
+                    "profile": "WEST_BENGAL_BEVCO_INVOICE",
+                    "documentRole": "financial_enrichment",
+                    "invoiceFinancials": financials,
+                    "needsFallback": False,
+                },
+            )
+        return (
+            ExtractedDocument(
+                documentType="invoice",
+                invoiceNumber="TP-1",
+                invoiceDate="21/09/2026",
+                items=[
+                    ExtractedProduct(
+                        itemName="TEST WHISKY",
+                        brand="TEST WHISKY",
+                        ml=750,
+                        box=1,
+                        loose=0,
+                    )
+                ],
+            ),
+            {
+                "engine": "pymupdf-state-adapter",
+                "usable": True,
+                "profile": "WEST_BENGAL_FORM3",
+                "documentRole": "primary",
+                "needsFallback": False,
+                "totalValidation": {"status": "passed"},
+            },
+        )
+
+    monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local_extract)
+    session = create_session(client)
+    uploaded = client.post(
+        "/api/v1/document-import/upload/batch/pdf",
+        headers=auth(session),
+        files=[
+            ("files", ("tp.pdf", b"%PDF-1.4 TP", "application/pdf")),
+            ("files", ("invoice.pdf", b"%PDF-1.4 INVOICE", "application/pdf")),
+        ],
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    row = uploaded.json()["reviewItems"][0]
+
+    changed = client.post(
+        f"/api/v1/document-import/jobs/{uploaded.json()['job']['id']}/review/confirm",
+        headers=auth(session),
+        json={
+            "items": [
+                {
+                    "id": row["id"],
+                    "name": "TEST WHISKY",
+                    "brand": "TEST WHISKY",
+                    "ml": 750,
+                    "box": 2,
+                    "loose": 0,
+                }
+            ]
+        },
+    )
+    assert changed.status_code == 422
+    assert "linked to a WB invoice amount" in changed.text
+
+
 def test_wb_invoice_enrichment_refuses_quantity_mismatch():
     from app.modules.document_import.service import DocumentImportService
 
