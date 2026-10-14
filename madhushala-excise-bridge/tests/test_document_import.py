@@ -934,6 +934,366 @@ def test_review_confirm_persists_edits_then_starts_mapping(client, monkeypatch):
     assert raw["box"] == 1
 
 
+
+def test_wb_bevco_invoice_adapter_extracts_first_copy_amounts_and_totals():
+    from app.modules.document_import.pdf_extractor import (
+        _detect_profile,
+        _extract_west_bengal_bevco_invoice,
+        _west_bengal_bevco_financials,
+    )
+
+    page_text = """
+    Office Copy
+    INVOICE
+    West Bengal State Beverages Corporation Limited
+    Invoice No 2026-2027/W/2024/015/01/008033 Dated 21/09/2026
+    Description of Goods
+    Special Purpose Fee :
+    Round Off value (to be remitted to Govt.)
+    """
+    assert _detect_profile(page_text) == "WEST_BENGAL_BEVCO_INVOICE"
+
+    rows = [
+        [
+            "Description of Goods",
+            "MRP/ Bot. (Rs.)",
+            "MRP Value (Rs.)",
+            "Quantity (Case - Bot.)",
+            "Alt Quantity (Bot.)",
+            "Amount (Rs.)",
+        ],
+        [
+            "TOP 10 PREMIUM WHISKY , 750 Ml.",
+            "270.00",
+            "16200.00",
+            "5-0",
+            "60",
+            "14804.40",
+        ],
+        ["", None, None, None, None, "14804.40"],
+        ["Less Rebate :", None, None, None, None, None],
+        ["Special Purpose Fee :", None, None, None, None, "0.00"],
+        ["Round Off value (to be remitted to Govt.)", None, None, None, None, "359.40"],
+        ["T.C.S.", None, None, "2", "%", "303.28"],
+        ["15467.08", None, None, None, None, None],
+        ["Rounded Off", None, None, None, None, "0.08"],
+        ["Total:-", "", "", "", "60", "15467"],
+    ]
+    pages = [(1, page_text, [rows])]
+
+    products, invoice_no, invoice_date = _extract_west_bengal_bevco_invoice(
+        page_text,
+        pages,
+    )
+    assert len(products) == 1
+    assert invoice_no == "2026-2027/W/2024/015/01/008033"
+    assert invoice_date == "21/09/2026"
+    item = products[0]
+    assert item.itemName == "TOP 10 PREMIUM WHISKY , 750 Ml."
+    assert item.ml == 750
+    assert item.box == 5
+    assert item.loose == 0
+    assert item.amount == 14804.40
+    dumped = item.model_dump()
+    assert dumped["invoiceAmount"] == 14804.40
+    assert dumped["invoiceAltQuantityBottles"] == 60
+
+    financials = _west_bengal_bevco_financials(pages, products)
+    assert financials["taxes"] == {
+        "specialPurposeFee": 0.0,
+        "roundOffValueToGovt": 359.4,
+        "tcs": 303.28,
+    }
+    assert financials["roundedOff"] == 0.08
+    assert financials["totalAmount"] == 15467.08
+    assert financials["totalNet"] == 15467.0
+    assert financials["itemSubtotal"] == 14804.4
+    assert financials["reconciled"] is True
+
+
+def test_batch_tp_plus_wb_invoice_enriches_tp_row_without_duplicate_item(client, monkeypatch):
+    from app.main import document_import_service
+    from app.modules.document_import import service as service_module
+
+    financials = {
+        "taxes": {
+            "specialPurposeFee": 0.0,
+            "roundOffValueToGovt": 359.4,
+            "tcs": 303.28,
+        },
+        "roundedOff": 0.08,
+        "totalAmount": 15467.08,
+        "totalNet": 15467.0,
+        "itemSubtotal": 14804.4,
+        "reconciled": True,
+    }
+
+    def fake_local_extract(path):
+        payload = Path(path).read_bytes()
+        if b"BEVCO-INVOICE" in payload:
+            return (
+                ExtractedDocument(
+                    documentType="invoice",
+                    invoiceNumber="2026-2027/W/2024/015/01/008033",
+                    invoiceDate="21/09/2026",
+                    documentRole="financial_enrichment",
+                    invoiceFinancials=financials,
+                    items=[
+                        ExtractedProduct(
+                            itemName="TOP 10 PREMIUM WHISKY , 750 Ml.",
+                            brand="TOP 10 PREMIUM WHISKY",
+                            ml=750,
+                            box=5,
+                            loose=0,
+                            amount=14804.40,
+                            invoiceAmount=14804.40,
+                        )
+                    ],
+                ),
+                {
+                    "engine": "pymupdf-state-adapter",
+                    "usable": True,
+                    "profile": "WEST_BENGAL_BEVCO_INVOICE",
+                    "documentRole": "financial_enrichment",
+                    "invoiceFinancials": financials,
+                    "needsFallback": False,
+                },
+            )
+        return (
+            ExtractedDocument(
+                documentType="invoice",
+                invoiceNumber="TP-2026-001",
+                transportPassNo="tFLDR/2026-2027/07015578/P",
+                invoiceDate="21/09/2026",
+                documentRole="primary",
+                items=[
+                    ExtractedProduct(
+                        itemName="TOP 10 PREMIUM WHISKY",
+                        brand="TOP 10 PREMIUM WHISKY",
+                        ml=750,
+                        box=5,
+                        loose=0,
+                        batchNo="BATCH-1",
+                    )
+                ],
+            ),
+            {
+                "engine": "pymupdf-state-adapter",
+                "usable": True,
+                "profile": "WEST_BENGAL_FORM3",
+                "documentRole": "primary",
+                "needsFallback": False,
+                "totalValidation": {"status": "passed"},
+            },
+        )
+
+    monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local_extract)
+
+    session = create_session(client)
+    response = client.post(
+        "/api/v1/document-import/upload/batch/pdf",
+        headers=auth(session),
+        files=[
+            ("files", ("tp.pdf", b"%PDF-1.4 TP-PASS", "application/pdf")),
+            ("files", ("invoice.pdf", b"%PDF-1.4 BEVCO-INVOICE", "application/pdf")),
+        ],
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["summary"]["detected"] == 1
+    assert len(payload["normalizedItems"]) == 1
+    assert len(payload["reviewItems"]) == 1
+    assert payload["extractedDocument"]["invoiceNumber"] == "TP-2026-001"
+    assert payload["extractedDocument"]["transportPassNo"] == "tFLDR/2026-2027/07015578/P"
+
+    normalized = payload["normalizedItems"][0]
+    assert normalized["rawName"] == "TOP 10 PREMIUM WHISKY"
+    assert normalized["box"] == 5
+    assert normalized["loose"] is None
+    assert normalized["amount"] is None
+    assert normalized["rawData"]["invoiceAmount"] == 14804.4
+    assert normalized["rawData"]["invoiceFinancials"]["totalAmount"] == 15467.08
+
+
+
+def test_invoice_enriched_review_rejects_identity_or_quantity_change(client, monkeypatch):
+    from app.main import document_import_service
+    from app.modules.document_import import service as service_module
+
+    financials = {
+        "taxes": {
+            "specialPurposeFee": 0.0,
+            "roundOffValueToGovt": 0.0,
+            "tcs": 0.0,
+        },
+        "roundedOff": 0.0,
+        "totalAmount": 100.0,
+        "totalNet": 100.0,
+        "itemSubtotal": 100.0,
+        "reconciled": True,
+    }
+
+    def fake_local_extract(path):
+        payload = Path(path).read_bytes()
+        if b"INVOICE" in payload:
+            return (
+                ExtractedDocument(
+                    documentType="invoice",
+                    invoiceNumber="INV-1",
+                    invoiceDate="21/09/2026",
+                    documentRole="financial_enrichment",
+                    invoiceFinancials=financials,
+                    items=[
+                        ExtractedProduct(
+                            itemName="TEST WHISKY 750 ML",
+                            ml=750,
+                            box=1,
+                            loose=0,
+                            amount=100.0,
+                            invoiceAmount=100.0,
+                        )
+                    ],
+                ),
+                {
+                    "engine": "pymupdf-state-adapter",
+                    "usable": True,
+                    "profile": "WEST_BENGAL_BEVCO_INVOICE",
+                    "documentRole": "financial_enrichment",
+                    "invoiceFinancials": financials,
+                    "needsFallback": False,
+                },
+            )
+        return (
+            ExtractedDocument(
+                documentType="invoice",
+                invoiceNumber="TP-1",
+                invoiceDate="21/09/2026",
+                items=[
+                    ExtractedProduct(
+                        itemName="TEST WHISKY",
+                        brand="TEST WHISKY",
+                        ml=750,
+                        box=1,
+                        loose=0,
+                    )
+                ],
+            ),
+            {
+                "engine": "pymupdf-state-adapter",
+                "usable": True,
+                "profile": "WEST_BENGAL_FORM3",
+                "documentRole": "primary",
+                "needsFallback": False,
+                "totalValidation": {"status": "passed"},
+            },
+        )
+
+    monkeypatch.setattr(service_module, "extract_pdf_locally", fake_local_extract)
+    session = create_session(client)
+    uploaded = client.post(
+        "/api/v1/document-import/upload/batch/pdf",
+        headers=auth(session),
+        files=[
+            ("files", ("tp.pdf", b"%PDF-1.4 TP", "application/pdf")),
+            ("files", ("invoice.pdf", b"%PDF-1.4 INVOICE", "application/pdf")),
+        ],
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    row = uploaded.json()["reviewItems"][0]
+
+    changed = client.post(
+        f"/api/v1/document-import/jobs/{uploaded.json()['job']['id']}/review/confirm",
+        headers=auth(session),
+        json={
+            "items": [
+                {
+                    "id": row["id"],
+                    "name": "TEST WHISKY",
+                    "brand": "TEST WHISKY",
+                    "ml": 750,
+                    "box": 2,
+                    "loose": 0,
+                }
+            ]
+        },
+    )
+    assert changed.status_code == 422
+    assert "linked to a WB invoice amount" in changed.text
+
+
+
+def test_invoice_financial_handoff_extension_defaults_to_null_without_invoice():
+    from app.modules.document_import.service import DocumentImportService
+
+    service = DocumentImportService(mapping_service=None)
+    service.get_items = lambda _session, _job_id: [
+        {"raw_data_json": json.dumps({"itemName": "TP ONLY"})}
+    ]
+
+    assert service.get_invoice_financials({}, "job-1") == {
+        "taxes": {
+            "specialPurposeFee": None,
+            "roundOffValueToGovt": None,
+            "tcs": None,
+        },
+        "roundedOff": None,
+        "totalAmount": None,
+        "totalNet": None,
+    }
+
+
+def test_wb_invoice_enrichment_refuses_quantity_mismatch():
+    from app.modules.document_import.service import DocumentImportService
+
+    service = DocumentImportService(mapping_service=None)
+    primary = [
+        ExtractedProduct(
+            itemName="TOP 10 PREMIUM WHISKY",
+            brand="TOP 10 PREMIUM WHISKY",
+            ml=750,
+            box=4,
+            loose=0,
+        )
+    ]
+    invoice = ExtractedDocument(
+        documentType="invoice",
+        invoiceNumber="INV-1",
+        invoiceDate="21/09/2026",
+        invoiceFinancials={
+            "taxes": {
+                "specialPurposeFee": 0.0,
+                "roundOffValueToGovt": 0.0,
+                "tcs": 0.0,
+            },
+            "roundedOff": 0.0,
+            "totalAmount": 100.0,
+            "totalNet": 100.0,
+            "reconciled": True,
+        },
+        items=[
+            ExtractedProduct(
+                itemName="TOP 10 PREMIUM WHISKY, 750 ML",
+                ml=750,
+                box=5,
+                loose=0,
+                amount=100.0,
+                invoiceAmount=100.0,
+            )
+        ],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        service._enrich_primary_items_with_invoice(
+            primary,
+            invoice,
+            invoice_filename="invoice.pdf",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "did not match one-to-one" in str(exc_info.value.detail)
+
+
 def test_pymupdf_state_adapters_emit_canonical_box_loose():
     from app.modules.document_import.pdf_extractor import (
         _extract_jharkhand,

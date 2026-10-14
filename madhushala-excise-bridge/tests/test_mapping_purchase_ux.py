@@ -354,6 +354,53 @@ def test_mapping_handoff_is_frontend_calculation_owned():
     assert 'if missing and strict:' in required
 
 
+
+def test_handoff_keeps_existing_contract_and_adds_optional_wb_invoice_fields():
+    routes = Path("app/modules/document_import/routes.py").read_text(encoding="utf-8")
+    adapter = Path("app/modules/document_import/purchase_adapter.py").read_text(encoding="utf-8")
+
+    route_start = routes.index('@router.get("/jobs/{job_id}/purchase/handoff")')
+    route_end = routes.index('@router.get("/jobs/{job_id}/purchase/transaction")', route_start)
+    handoff = routes[route_start:route_end]
+
+    # Existing handoff inputs stay in place.
+    for existing in (
+        '"shopCode"',
+        '"companyCode"',
+        '"yearCode"',
+        '"trnDate"',
+        '"docDate"',
+        '"docNo"',
+        '"tpPassNo"',
+        '"supplierCode"',
+        '"storeCode"',
+        '"schemeCode"',
+        '"purchaseAccCode"',
+        '"narration"',
+        '"userCode"',
+        '"billType"',
+        '"pType"',
+        '"jobId"',
+        '"sourceType"',
+        '"supplierName"',
+        '"salesTaxRate"',
+        '"salesTaxIncludingFree"',
+        '"items"',
+    ):
+        assert existing in handoff
+
+    # New fields are additive and nullable when no companion invoice exists.
+    assert 'invoice_financials = service.get_invoice_financials(session, job_id)' in handoff
+    assert '"taxes": invoice_financials["taxes"]' in handoff
+    assert '"roundedOff": invoice_financials["roundedOff"]' in handoff
+    assert '"totalAmount": invoice_financials["totalAmount"]' in handoff
+    assert '"totalNet": invoice_financials["totalNet"]' in handoff
+
+    # Legacy itemAmount remains untouched; printed invoice amount is separate.
+    assert '"itemAmount": amount' in adapter
+    assert '"amount": invoice_amount' in adapter
+
+
 def test_portal_bootstrap_returns_diagnostics_without_422_loading_lock():
     main = Path("app/main.py").read_text(encoding="utf-8")
     runtime = Path("app/static/index.html").read_text(encoding="utf-8")

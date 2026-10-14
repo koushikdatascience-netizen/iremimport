@@ -194,6 +194,7 @@ def create_router(service: DocumentImportService) -> APIRouter:
 
         base = base_handoff.get("purchasePayload") if isinstance(base_handoff, dict) else {}
         job = service.get_job(session, job_id)
+        invoice_financials = service.get_invoice_financials(session, job_id)
         purchase = {
             "shopCode": str(session.get("shop_code") or "").strip(),
             "companyCode": str(session.get("company_code") or "").strip(),
@@ -216,6 +217,12 @@ def create_router(service: DocumentImportService) -> APIRouter:
             "salesTaxRate": 0.0,
             "salesTaxIncludingFree": False,
             "items": handoff_items,
+            # Additive WB invoice enrichment fields. Existing handoff keys and
+            # values above remain unchanged for backward compatibility.
+            "taxes": invoice_financials["taxes"],
+            "roundedOff": invoice_financials["roundedOff"],
+            "totalAmount": invoice_financials["totalAmount"],
+            "totalNet": invoice_financials["totalNet"],
         }
         return {
             "success": True,

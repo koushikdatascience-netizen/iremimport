@@ -23,6 +23,7 @@ from app.modules.document_import.normalizer import normalize_extracted_document
 from app.modules.document_import.pdf_extractor import extract_pdf_locally
 from app.modules.document_import.purchase_context import build_purchase_context
 from app.modules.document_import.purchase_contract import calculate_source_line_amount
+from app.modules.document_import.quantity import resolve_case_loose
 from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct, NormalizedImportItem
 from app.services.mapping_service import MappingService
 from app.services.normalizer import normalize_brand
@@ -457,6 +458,30 @@ class DocumentImportService:
             loose = int(loose_decimal) if loose_decimal == loose_decimal.to_integral_value() else -1
 
             row_errors: list[str] = []
+            if existing_raw.get("invoiceAmount") not in (None, ""):
+                invoice_name = str(existing_raw.get("invoiceMatchedName") or "").strip()
+                invoice_ml = _int_value(existing_raw.get("invoiceMatchedMl"))
+                invoice_box = _int_value(existing_raw.get("invoiceMatchedBox"))
+                invoice_loose = _int_value(existing_raw.get("invoiceMatchedLoose"))
+                invoice_identity_changed = bool(
+                    invoice_name
+                    and self._invoice_match_name(name)
+                    != self._invoice_match_name(invoice_name)
+                )
+                invoice_shape_changed = bool(
+                    invoice_ml > 0
+                    and (
+                        ml != invoice_ml
+                        or box != invoice_box
+                        or loose != invoice_loose
+                    )
+                )
+                if invoice_identity_changed or invoice_shape_changed:
+                    row_errors.append(
+                        "This row is linked to a WB invoice amount. "
+                        "Name, ML, Box and Loose must continue to match the invoice; "
+                        "re-upload the correct TP/invoice pair if they differ."
+                    )
             if not name:
                 row_errors.append("Name is required")
             if not brand:
@@ -628,6 +653,182 @@ class DocumentImportService:
             },
         )
 
+
+    @staticmethod
+    def _invoice_match_name(value: Any) -> str:
+        """Stable name key for TP ↔ WB invoice matching.
+
+        Matching stays deterministic: punctuation and an embedded "750 ML"
+        suffix are ignored, but words are never fuzzy-substituted.
+        """
+        text = normalize_brand(str(value or ""))
+        text = re.sub(r"\b\d{2,5}\s*m\.?l\.?\b", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"[^a-z0-9]+", " ", text)
+        return " ".join(text.split())
+
+    @classmethod
+    def _invoice_item_key(cls, item: ExtractedProduct) -> tuple[str, int]:
+        name = str(item.itemName or item.brand or "")
+        ml = _int_value(item.ml)
+        return cls._invoice_match_name(name), ml
+
+    @staticmethod
+    def _invoice_item_quantity(item: ExtractedProduct) -> tuple[int, int]:
+        box, loose = resolve_case_loose(item.box, item.loose)
+        return _int_value(box), _int_value(loose)
+
+    def _enrich_primary_items_with_invoice(
+        self,
+        primary_items: list[ExtractedProduct],
+        invoice: ExtractedDocument,
+        *,
+        invoice_filename: str,
+    ) -> tuple[list[ExtractedProduct], dict[str, Any]]:
+        """Attach printed WB invoice amounts to the canonical TP rows.
+
+        The invoice never creates purchase rows. Every invoice line must match
+        exactly one TP line by normalized name + exact ML, with printed
+        case/loose quantity used as an additional guard when present.
+        """
+        financials = getattr(invoice, "invoiceFinancials", None)
+        if not isinstance(financials, dict) or not financials.get("reconciled"):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "The WB invoice financial totals could not be reconciled. "
+                    "No invoice amount was attached to the TP rows."
+                ),
+            )
+
+        invoice_items = list(invoice.items or [])
+        if not invoice_items:
+            raise HTTPException(
+                status_code=422,
+                detail="The WB invoice did not contain any product rows.",
+            )
+        if not primary_items:
+            raise HTTPException(
+                status_code=422,
+                detail="A WB invoice must be uploaded together with its TP pass.",
+            )
+
+        primary_by_key: dict[tuple[str, int], list[int]] = {}
+        for index, item in enumerate(primary_items):
+            primary_by_key.setdefault(self._invoice_item_key(item), []).append(index)
+
+        used_primary: set[int] = set()
+        enriched = list(primary_items)
+        unmatched_invoice: list[str] = []
+
+        for invoice_item in invoice_items:
+            key = self._invoice_item_key(invoice_item)
+            candidates = [
+                index
+                for index in primary_by_key.get(key, [])
+                if index not in used_primary
+            ]
+
+            invoice_box, invoice_loose = self._invoice_item_quantity(invoice_item)
+            if invoice_box > 0 or invoice_loose > 0:
+                quantity_matches = [
+                    index
+                    for index in candidates
+                    if self._invoice_item_quantity(primary_items[index])
+                    == (invoice_box, invoice_loose)
+                ]
+                candidates = quantity_matches
+
+            if len(candidates) != 1:
+                label = f"{invoice_item.itemName or invoice_item.brand} {invoice_item.ml or ''} ML".strip()
+                unmatched_invoice.append(label)
+                continue
+
+            target_index = candidates[0]
+            amount_raw = invoice_item.model_dump().get("invoiceAmount")
+            if amount_raw in (None, ""):
+                amount_raw = invoice_item.amount
+            try:
+                invoice_amount = float(Decimal(str(amount_raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            except Exception:
+                invoice_amount = -1.0
+            if invoice_amount < 0:
+                unmatched_invoice.append(str(invoice_item.itemName or invoice_item.brand or key))
+                continue
+
+            target_payload = primary_items[target_index].model_dump()
+            target_payload["invoiceAmount"] = invoice_amount
+            target_payload["invoiceFinancials"] = financials
+            target_payload["invoiceSourceFilename"] = invoice_filename
+            target_payload["invoiceDocumentNumber"] = str(invoice.invoiceNumber or "").strip()
+            target_payload["invoiceDocumentDate"] = str(invoice.invoiceDate or "").strip()
+            target_payload["invoiceMatchedName"] = str(invoice_item.itemName or invoice_item.brand or "").strip()
+            target_payload["invoiceMatchedMl"] = _int_value(invoice_item.ml)
+            target_payload["invoiceMatchedBox"] = invoice_box
+            target_payload["invoiceMatchedLoose"] = invoice_loose
+            enriched[target_index] = ExtractedProduct.model_validate(target_payload)
+            used_primary.add(target_index)
+
+        if unmatched_invoice or len(used_primary) != len(primary_items):
+            unmatched_primary = [
+                f"{item.itemName or item.brand} {item.ml or ''} ML".strip()
+                for index, item in enumerate(primary_items)
+                if index not in used_primary
+            ]
+            details: list[str] = []
+            if unmatched_invoice:
+                details.append("invoice rows: " + ", ".join(unmatched_invoice[:5]))
+            if unmatched_primary:
+                details.append("TP rows: " + ", ".join(unmatched_primary[:5]))
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "WB invoice and TP pass items did not match one-to-one by item name, ML and quantity ("
+                    + "; ".join(details)
+                    + "). No financial enrichment was applied."
+                ),
+            )
+
+        return enriched, financials
+
+    def get_invoice_financials(
+        self,
+        session: dict[str, Any],
+        job_id: str,
+    ) -> dict[str, Any]:
+        """Return the stable optional handoff financial extension."""
+        defaults = {
+            "taxes": {
+                "specialPurposeFee": None,
+                "roundOffValueToGovt": None,
+                "tcs": None,
+            },
+            "roundedOff": None,
+            "totalAmount": None,
+            "totalNet": None,
+        }
+        for row in self.get_items(session, job_id):
+            try:
+                raw = json.loads(row.get("raw_data_json") or "{}")
+            except Exception:
+                raw = {}
+            if not isinstance(raw, dict):
+                continue
+            financials = raw.get("invoiceFinancials")
+            if not isinstance(financials, dict):
+                continue
+            taxes = financials.get("taxes") if isinstance(financials.get("taxes"), dict) else {}
+            return {
+                "taxes": {
+                    "specialPurposeFee": taxes.get("specialPurposeFee"),
+                    "roundOffValueToGovt": taxes.get("roundOffValueToGovt"),
+                    "tcs": taxes.get("tcs"),
+                },
+                "roundedOff": financials.get("roundedOff"),
+                "totalAmount": financials.get("totalAmount"),
+                "totalNet": financials.get("totalNet"),
+            }
+        return defaults
+
     async def _extract_upload_part(
         self,
         data: bytes,
@@ -643,6 +844,10 @@ class DocumentImportService:
 
             if ext == "pdf":
                 extracted, meta = extract_pdf_locally(temp_path)
+                if extracted is None and meta.get("profile") == "WEST_BENGAL_BEVCO_INVOICE":
+                    raise ValueError(
+                        "WB BEVCO invoice could not be extracted deterministically from its first copy"
+                    )
                 logger.info(
                     "document_pdf_local_extraction file=%s engine=%s profile=%s usable=%s needsFallback=%s timingsMs=%s",
                     filename,
@@ -660,6 +865,16 @@ class DocumentImportService:
                         "fallbackFrom": "pymupdf",
                         "fallbackReason": meta.get("reason") or "no_usable_local_extraction",
                         "pageItemCounts": getattr(extracted, "pageItemCounts", None),
+                    }
+                elif meta.get("profile") == "WEST_BENGAL_BEVCO_INVOICE":
+                    if meta.get("needsFallback"):
+                        raise ValueError(
+                            "WB BEVCO invoice item rows or financial totals are incomplete"
+                        )
+                    meta = {
+                        **meta,
+                        "engine": "pymupdf-state-adapter",
+                        "needsFallback": False,
                     }
                 elif meta.get("needsFallback") and (
                     meta.get("profile") != "WEST_BENGAL_FORM3"
@@ -772,19 +987,44 @@ class DocumentImportService:
                 extracted_parts.append(extracted)
                 metas.append(meta)
 
+            enrichment_parts = [
+                (doc, meta)
+                for doc, meta in zip(extracted_parts, metas)
+                if str(meta.get("documentRole") or getattr(doc, "documentRole", "")).strip()
+                == "financial_enrichment"
+            ]
+            primary_parts = [
+                (doc, meta)
+                for doc, meta in zip(extracted_parts, metas)
+                if str(meta.get("documentRole") or getattr(doc, "documentRole", "primary")).strip()
+                != "financial_enrichment"
+            ]
+
+            if enrichment_parts and not primary_parts:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Upload the WB TP pass together with the WB BEVCO invoice. The invoice is financial enrichment only.",
+                )
+            if len(enrichment_parts) > 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Upload only one WB BEVCO invoice for a purchase.",
+                )
+
+            primary_documents = [doc for doc, _meta in primary_parts]
             doc_numbers = [
                 str(doc.invoiceNumber or "").strip()
-                for doc in extracted_parts
+                for doc in primary_documents
                 if str(doc.invoiceNumber or "").strip()
             ]
             transport_pass_numbers = [
                 str(getattr(doc, "transportPassNo", None) or "").strip()
-                for doc in extracted_parts
+                for doc in primary_documents
                 if str(getattr(doc, "transportPassNo", None) or "").strip()
             ]
             doc_dates = [
                 str(doc.invoiceDate or "").strip()
-                for doc in extracted_parts
+                for doc in primary_documents
                 if str(doc.invoiceDate or "").strip()
             ]
             number_keys = {self._document_number_key(value) for value in doc_numbers if self._document_number_key(value)}
@@ -792,16 +1032,16 @@ class DocumentImportService:
             if len(number_keys) > 1:
                 raise HTTPException(
                     status_code=422,
-                    detail="Selected files appear to belong to different document numbers. Upload only files/pages from the same purchase.",
+                    detail="Selected TP files appear to belong to different document numbers. Upload only files/pages from the same purchase.",
                 )
             if len(date_keys) > 1:
                 raise HTTPException(
                     status_code=422,
-                    detail="Selected files appear to have different document dates. Upload only files/pages from the same purchase.",
+                    detail="Selected TP files appear to have different document dates. Upload only files/pages from the same purchase.",
                 )
 
             merged_items: list[ExtractedProduct] = []
-            for doc in extracted_parts:
+            for doc in primary_documents:
                 doc_tp_pass = str(getattr(doc, "transportPassNo", None) or "").strip()
                 for item in (doc.items or []):
                     if doc_tp_pass:
@@ -811,22 +1051,48 @@ class DocumentImportService:
                     else:
                         merged_items.append(item)
 
+            invoice_financials: dict[str, Any] | None = None
+            if enrichment_parts:
+                invoice_doc, invoice_meta = enrichment_parts[0]
+                invoice_date = str(invoice_doc.invoiceDate or "").strip()
+                primary_date = doc_dates[0] if doc_dates else ""
+                if (
+                    invoice_date
+                    and primary_date
+                    and self._document_date_key(invoice_date)
+                    != self._document_date_key(primary_date)
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "The WB invoice date does not match the TP pass date. "
+                            "Upload documents from the same purchase."
+                        ),
+                    )
+                merged_items, invoice_financials = self._enrich_primary_items_with_invoice(
+                    merged_items,
+                    invoice_doc,
+                    invoice_filename=str(invoice_meta.get("filename") or ""),
+                )
+
             if not merged_items:
                 raise HTTPException(status_code=422, detail="No valid product rows were extracted")
 
             merged = ExtractedDocument(
-                documentType=next((doc.documentType for doc in extracted_parts if doc.documentType), "invoice"),
-                supplierName=next((doc.supplierName for doc in extracted_parts if doc.supplierName), None),
+                documentType=next((doc.documentType for doc in primary_documents if doc.documentType), "invoice"),
+                supplierName=next((doc.supplierName for doc in primary_documents if doc.supplierName), None),
                 invoiceNumber=doc_numbers[0] if doc_numbers else None,
                 transportPassNo=transport_pass_numbers[0] if transport_pass_numbers else None,
                 invoiceDate=doc_dates[0] if doc_dates else None,
                 items=merged_items,
                 extractionEngine="batch",
+                invoiceFinancials=invoice_financials,
                 extractionDiagnostics={
                     "sourceFiles": filenames,
                     "fileCount": len(filenames),
                     "fileExtractions": metas,
                     "mergedProductCount": len(merged_items),
+                    "financialEnrichmentFiles": len(enrichment_parts),
                 },
             )
 
