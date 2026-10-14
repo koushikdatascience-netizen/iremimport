@@ -1180,7 +1180,7 @@ def _candidate_row_count(
         for page_no, page_text, _page_tables in selected_pages:
             row_index = 0
             for line in (page_text or "").splitlines():
-                if re.match(r"^\s*(?:IMFL|OSBI|OS)\b", line, re.IGNORECASE):
+                if re.match(r"^\s*(?:IMFL|OSBI|OS|IML)\b", line, re.IGNORECASE):
                     row_index += 1
                     text_rows.add((page_no, row_index))
         if text_rows:
