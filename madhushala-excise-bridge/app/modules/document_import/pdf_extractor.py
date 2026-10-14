@@ -360,8 +360,10 @@ def _detect_profile(text: str) -> str:
         "west bengal state beverages corporation" in lower
         and "description of goods" in lower
         and "invoice no" in lower
-        and "quantity" in lower
-        and "amount" in lower
+        and (
+            ("quantity" in lower and "amount" in lower)
+            or ("special purpose fee" in lower and "round off value" in lower)
+        )
     ):
         return "WEST_BENGAL_BEVCO_INVOICE"
     if "west bengal excise iml" in lower and "form no 5" in lower:
