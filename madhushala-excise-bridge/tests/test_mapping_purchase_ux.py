@@ -582,3 +582,19 @@ def test_mapping_management_refreshes_catalogue_and_keeps_toast_clear_of_footer(
     assert "bottom: 72px;" in runtime
     assert '<span>${escapeHtml(code ? `Code: ${code}` : "")}</span>' not in picker
     assert '<strong>${escapeHtml(label || "Item Master item")}</strong>' in picker
+
+
+def test_temporary_handoff_json_preview_never_saves_purchase_or_navigates():
+    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    start = script.index("async function previewMappingHandoffJson()")
+    end = script.index("function setupMappingNextButton()", start)
+    preview = script[start:end]
+    assert "SHOW_HANDOFF_JSON_PREVIEW = true" in script
+    assert "await buildPurchaseHandoff(jobId)" in preview
+    assert "JSON.stringify(payload, null, 2)" in preview
+    assert "handoff-preview-json" in preview
+    assert "handoff-preview-copy" in preview
+    assert "handoff-preview-download" in preview
+    assert "openPurchaseInMadhushala(" not in preview
+    assert "/purchase/save" not in preview
+
