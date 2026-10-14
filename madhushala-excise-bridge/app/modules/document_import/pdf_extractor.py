@@ -356,6 +356,14 @@ def _detect_profile(text: str) -> str:
     lower = text.casefold()
     if "government of telangana" in lower and ("invoice cum delivery challan" in lower or "icdc" in lower):
         return "TELANGANA_ICDC"
+    if (
+        "west bengal state beverages corporation" in lower
+        and "description of goods" in lower
+        and "special purpose fee" in lower
+        and "round off value" in lower
+        and "invoice no" in lower
+    ):
+        return "WEST_BENGAL_BEVCO_INVOICE"
     if "west bengal excise foreign" in lower or "wbexcise.gov.in" in lower:
         return "WEST_BENGAL_FORM3"
     if "government of jharkhand" in lower or "jharkhand state beverages corporation" in lower:
@@ -623,6 +631,239 @@ def _clean_west_bengal_case(value: Any) -> str:
         return f"{int(match.group(1))} - {int(match.group(2))}"
     integer = re.search(r"(?<!\d)(\d+)(?!\d)", text)
     return integer.group(1) if integer else ""
+
+
+
+def _west_bengal_bevco_table(
+    pages: list[tuple[int, str, list[list[list[str]]]]],
+) -> tuple[list[list[str]], int, dict[str, int]] | None:
+    """Return the first authoritative WBSC invoice item/summary table.
+
+    WBSC/BEVCO invoices repeat the same commercial document as Office Copy,
+    Buyer's Copy and Depot Manager's Copy. The first page is authoritative for
+    import purposes, so never aggregate repeated copies.
+    """
+    for _page_no, _page_text, page_tables in pages[:1]:
+        for rows in page_tables:
+            for row_index, cells in enumerate(rows):
+                keys = [_key(cell) for cell in cells]
+                name_idx = next((i for i, value in enumerate(keys) if value == "descriptionofgoods"), None)
+                amount_idx = next((i for i, value in enumerate(keys) if value == "amountrs"), None)
+                quantity_idx = next(
+                    (
+                        i for i, value in enumerate(keys)
+                        if value.startswith("quantitycase") or value in {"quantitycasebot", "quantitycasebottle"}
+                    ),
+                    None,
+                )
+                if name_idx is None or amount_idx is None or quantity_idx is None:
+                    continue
+                mrp_idx = next((i for i, value in enumerate(keys) if value.startswith("mrpbot")), None)
+                mrp_value_idx = next((i for i, value in enumerate(keys) if value.startswith("mrpvalue")), None)
+                alt_idx = next((i for i, value in enumerate(keys) if value.startswith("altquantity")), None)
+                return rows, row_index, {
+                    "name": int(name_idx),
+                    "amount": int(amount_idx),
+                    "quantity": int(quantity_idx),
+                    "mrp": int(mrp_idx) if mrp_idx is not None else -1,
+                    "mrpValue": int(mrp_value_idx) if mrp_value_idx is not None else -1,
+                    "altQuantity": int(alt_idx) if alt_idx is not None else -1,
+                }
+    return None
+
+
+def _optional_money(value: Any) -> float | None:
+    number = _number(value)
+    return round(float(number), 2) if number is not None else None
+
+
+def _extract_west_bengal_bevco_invoice(
+    full_text: str,
+    pages: list[tuple[int, str, list[list[list[str]]]]],
+) -> tuple[list[ExtractedProduct], str | None, str | None]:
+    """Extract WBSC/BEVCO invoice line items from the first (Office) copy only."""
+    products: list[ExtractedProduct] = []
+    table = _west_bengal_bevco_table(pages)
+    if table:
+        rows, header_index, indexes = table
+        for cells in rows[header_index + 1 :]:
+            if len(cells) <= max(indexes["name"], indexes["amount"], indexes["quantity"]):
+                continue
+
+            name = _clean(cells[indexes["name"]])
+            label = _key(name)
+            if not name or label in {
+                "lessrebate",
+                "specialpurposefee",
+                "roundoffvaluetoberemittedtogovt",
+                "tcs",
+                "roundedoff",
+                "total",
+            }:
+                continue
+
+            measure = _ml(name)
+            amount = _optional_money(cells[indexes["amount"]])
+            case_text = _clean_west_bengal_case(cells[indexes["quantity"]])
+            cases, loose = resolve_case_loose(case_text, None)
+            if not measure or amount is None or (cases <= 0 and loose <= 0):
+                continue
+
+            alt_quantity = (
+                _int(cells[indexes["altQuantity"]])
+                if indexes["altQuantity"] >= 0 and len(cells) > indexes["altQuantity"]
+                else 0
+            )
+            mrp = (
+                _optional_money(cells[indexes["mrp"]])
+                if indexes["mrp"] >= 0 and len(cells) > indexes["mrp"]
+                else None
+            )
+            mrp_value = (
+                _optional_money(cells[indexes["mrpValue"]])
+                if indexes["mrpValue"] >= 0 and len(cells) > indexes["mrpValue"]
+                else None
+            )
+
+            raw = {f"column{index + 1}": value for index, value in enumerate(cells)}
+            raw.update(
+                {
+                    "Description of Goods": name,
+                    "Quantity (Case - Bot.)": case_text,
+                    "Alt Quantity (Bot.)": alt_quantity,
+                    "Amount (Rs.)": amount,
+                    "MRP/ Bot. (Rs.)": mrp,
+                    "MRP Value (Rs.)": mrp_value,
+                }
+            )
+            item = _product(
+                name=name,
+                ml=f"{measure} ML",
+                box=cases,
+                loose=loose,
+                raw=raw,
+                state="WEST_BENGAL",
+                page=1,
+                semantics="west_bengal_bevco_invoice_case_bot",
+            )
+            if item:
+                payload = item.model_dump()
+                payload["amount"] = amount
+                payload["invoiceAmount"] = amount
+                payload["invoiceAltQuantityBottles"] = alt_quantity
+                payload["invoiceMrpPerBottle"] = mrp
+                payload["invoiceMrpValue"] = mrp_value
+                products.append(ExtractedProduct.model_validate(payload))
+
+    invoice_match = re.search(
+        r"Invoice\s*No\.?\s*[:\-]?\s*([A-Z0-9][A-Z0-9/\-]+)",
+        full_text,
+        re.IGNORECASE,
+    )
+    invoice_number = _clean(invoice_match.group(1)) if invoice_match else None
+    date_match = re.search(
+        r"\bDated\s*[:\-]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})",
+        full_text,
+        re.IGNORECASE,
+    )
+    invoice_date = _normalize_date(date_match.group(1)) if date_match else None
+    return _dedupe(products), invoice_number, invoice_date
+
+
+def _west_bengal_bevco_financials(
+    pages: list[tuple[int, str, list[list[list[str]]]]],
+    products: list[ExtractedProduct],
+) -> dict[str, Any]:
+    """Extract and reconcile invoice-level commercial values from page one."""
+    values: dict[str, Any] = {
+        "taxes": {
+            "specialPurposeFee": None,
+            "roundOffValueToGovt": None,
+            "tcs": None,
+        },
+        "roundedOff": None,
+        "totalAmount": None,
+        "totalNet": None,
+    }
+    table = _west_bengal_bevco_table(pages)
+    if not table:
+        return {**values, "reconciled": False, "itemSubtotal": None}
+
+    rows, header_index, indexes = table
+    summary_started = False
+    for cells in rows[header_index + 1 :]:
+        if not cells:
+            continue
+        label_text = _clean(cells[indexes["name"]]) if len(cells) > indexes["name"] else ""
+        label = _key(label_text)
+        amount_value = (
+            _optional_money(cells[indexes["amount"]])
+            if len(cells) > indexes["amount"]
+            else None
+        )
+
+        if label == "specialpurposefee":
+            summary_started = True
+            values["taxes"]["specialPurposeFee"] = amount_value
+            continue
+        if label == "roundoffvaluetoberemittedtogovt":
+            summary_started = True
+            values["taxes"]["roundOffValueToGovt"] = amount_value
+            continue
+        if label == "tcs":
+            summary_started = True
+            values["taxes"]["tcs"] = amount_value
+            continue
+        if label == "roundedoff":
+            summary_started = True
+            values["roundedOff"] = amount_value
+            continue
+        if label == "total":
+            summary_started = True
+            values["totalNet"] = amount_value
+            continue
+
+        # WBSC prints the pre-rounding total as a standalone numeric row between
+        # TCS and "Rounded Off".
+        standalone = _optional_money(label_text)
+        if summary_started and values["totalAmount"] is None and standalone is not None:
+            values["totalAmount"] = standalone
+
+    item_subtotal = round(
+        sum(float(item.model_dump().get("invoiceAmount") or item.amount or 0) for item in products),
+        2,
+    )
+    special_fee = values["taxes"]["specialPurposeFee"]
+    govt_round = values["taxes"]["roundOffValueToGovt"]
+    tcs = values["taxes"]["tcs"]
+    calculated_total = round(
+        item_subtotal
+        + float(special_fee or 0)
+        + float(govt_round or 0)
+        + float(tcs or 0),
+        2,
+    )
+    if values["totalAmount"] is None:
+        values["totalAmount"] = calculated_total
+
+    total_amount = values["totalAmount"]
+    total_net = values["totalNet"]
+    rounded_off = values["roundedOff"]
+    component_ok = (
+        total_amount is not None
+        and abs(float(total_amount) - calculated_total) <= 0.02
+    )
+    rounding_ok = True
+    if total_amount is not None and total_net is not None and rounded_off is not None:
+        rounding_ok = abs(
+            abs(float(total_amount) - float(total_net)) - abs(float(rounded_off))
+        ) <= 0.02
+
+    return {
+        **values,
+        "itemSubtotal": item_subtotal,
+        "reconciled": bool(component_ok and rounding_ok),
+    }
 
 
 def _extract_west_bengal(
@@ -931,6 +1172,23 @@ def _candidate_row_count(
     # text layer, even when PyMuPDF table detection returns only part of a page.
     # Count those independently so partial find_tables() output cannot be
     # mistaken for a complete extraction.
+    if profile == "WEST_BENGAL_BEVCO_INVOICE":
+        table = _west_bengal_bevco_table(selected_pages)
+        if table:
+            rows, header_index, indexes = table
+            count = 0
+            for cells in rows[header_index + 1 :]:
+                if len(cells) <= max(indexes["name"], indexes["amount"], indexes["quantity"]):
+                    continue
+                name = _clean(cells[indexes["name"]])
+                if (
+                    _ml(name)
+                    and _optional_money(cells[indexes["amount"]]) is not None
+                    and _clean_west_bengal_case(cells[indexes["quantity"]])
+                ):
+                    count += 1
+            return count
+
     if profile == "TELANGANA_ICDC":
         text_serials: set[tuple[int, int]] = set()
         for page_no, page_text, _page_tables in selected_pages:
@@ -1042,13 +1300,17 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         # First inspect the text layer so state/profile-specific table handling
         # can be selected before extracting cells.
         text_layer_started = time.perf_counter()
-        for page in document:
+        for page_index, page in enumerate(document, start=1):
             text = page.get_text("text") or ""
             page_texts.append(text)
             try:
                 word_count += len(page.get_text("words") or [])
             except Exception:
                 pass
+            if page_index == 1 and _detect_profile(text) == "WEST_BENGAL_BEVCO_INVOICE":
+                # Office Copy is authoritative; later pages are repeated buyer/
+                # depot copies of the same invoice and must not be scraped again.
+                break
         timings["textLayerMs"] = (time.perf_counter() - text_layer_started) * 1000
 
         full_text = "\n".join(page_texts)
@@ -1066,6 +1328,8 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         if horizontal_only and not west_bengal_original_pages and page_texts:
             west_bengal_original_pages = {1}
         for page_index, page in enumerate(document, start=1):
+            if page_index > len(page_texts):
+                break
             should_extract_tables = not horizontal_only or page_index in west_bengal_original_pages
             if should_extract_tables:
                 try:
@@ -1102,6 +1366,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         parse_started = time.perf_counter()
         extractor = {
             "TELANGANA_ICDC": _extract_telangana,
+            "WEST_BENGAL_BEVCO_INVOICE": _extract_west_bengal_bevco_invoice,
             "WEST_BENGAL_FORM3": _extract_west_bengal,
             "JHARKHAND_EXCISE": _extract_jharkhand,
             "MADHYA_PRADESH_DELIVERY_CHALLAN": _extract_madhya_pradesh,
@@ -1113,6 +1378,11 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         west_bengal_validation = (
             _west_bengal_total_validation(products, pages)
             if profile == "WEST_BENGAL_FORM3"
+            else None
+        )
+        bevco_financials = (
+            _west_bengal_bevco_financials(pages, products)
+            if profile == "WEST_BENGAL_BEVCO_INVOICE"
             else None
         )
         if west_bengal_validation and west_bengal_validation["status"] == "passed":
@@ -1127,6 +1397,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         )
         needs_fallback = bool(
             (west_bengal_validation and west_bengal_validation["status"] == "failed")
+            or (bevco_financials and not bevco_financials.get("reconciled"))
             or candidate_rows > product_count
         )
         timings["parseValidateMs"] = (time.perf_counter() - parse_started) * 1000
@@ -1147,8 +1418,10 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
 
         state = {
             "TELANGANA_ICDC": "TELANGANA",
+            "WEST_BENGAL_BEVCO_INVOICE": "WEST_BENGAL",
             "WEST_BENGAL_FORM3": "WEST_BENGAL",
             "JHARKHAND_EXCISE": "JHARKHAND",
+            "MADHYA_PRADESH_DELIVERY_CHALLAN": "MADHYA_PRADESH",
         }.get(profile, "UNKNOWN")
 
         extracted = ExtractedDocument(
@@ -1161,8 +1434,15 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             extractionEngine="pymupdf-state-adapter",
             extractionProfile=profile,
             sourceState=state,
+            documentRole=(
+                "financial_enrichment"
+                if profile == "WEST_BENGAL_BEVCO_INVOICE"
+                else "primary"
+            ),
+            invoiceFinancials=bevco_financials,
             extractionDiagnostics={
                 "pageCount": len(document),
+                "processedPageCount": len(pages),
                 "textChars": text_chars,
                 "wordCount": word_count,
                 "tableCount": table_count,
@@ -1179,7 +1459,14 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             "usable": True,
             "profile": profile,
             "state": state,
+            "documentRole": (
+                "financial_enrichment"
+                if profile == "WEST_BENGAL_BEVCO_INVOICE"
+                else "primary"
+            ),
+            "invoiceFinancials": bevco_financials,
             "pageCount": len(document),
+            "processedPageCount": len(pages),
             "textChars": text_chars,
             "wordCount": word_count,
             "tableCount": table_count,
