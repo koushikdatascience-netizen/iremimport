@@ -458,6 +458,30 @@ class DocumentImportService:
             loose = int(loose_decimal) if loose_decimal == loose_decimal.to_integral_value() else -1
 
             row_errors: list[str] = []
+            if existing_raw.get("invoiceAmount") not in (None, ""):
+                invoice_name = str(existing_raw.get("invoiceMatchedName") or "").strip()
+                invoice_ml = _int_value(existing_raw.get("invoiceMatchedMl"))
+                invoice_box = _int_value(existing_raw.get("invoiceMatchedBox"))
+                invoice_loose = _int_value(existing_raw.get("invoiceMatchedLoose"))
+                invoice_identity_changed = bool(
+                    invoice_name
+                    and self._invoice_match_name(name)
+                    != self._invoice_match_name(invoice_name)
+                )
+                invoice_shape_changed = bool(
+                    invoice_ml > 0
+                    and (
+                        ml != invoice_ml
+                        or box != invoice_box
+                        or loose != invoice_loose
+                    )
+                )
+                if invoice_identity_changed or invoice_shape_changed:
+                    row_errors.append(
+                        "This row is linked to a WB invoice amount. "
+                        "Name, ML, Box and Loose must continue to match the invoice; "
+                        "re-upload the correct TP/invoice pair if they differ."
+                    )
             if not name:
                 row_errors.append("Name is required")
             if not brand:
@@ -739,6 +763,8 @@ class DocumentImportService:
             target_payload["invoiceDocumentDate"] = str(invoice.invoiceDate or "").strip()
             target_payload["invoiceMatchedName"] = str(invoice_item.itemName or invoice_item.brand or "").strip()
             target_payload["invoiceMatchedMl"] = _int_value(invoice_item.ml)
+            target_payload["invoiceMatchedBox"] = invoice_box
+            target_payload["invoiceMatchedLoose"] = invoice_loose
             enriched[target_index] = ExtractedProduct.model_validate(target_payload)
             used_primary.add(target_index)
 
