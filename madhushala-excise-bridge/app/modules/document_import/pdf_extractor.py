@@ -1421,7 +1421,6 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             "WEST_BENGAL_BEVCO_INVOICE": "WEST_BENGAL",
             "WEST_BENGAL_FORM3": "WEST_BENGAL",
             "JHARKHAND_EXCISE": "JHARKHAND",
-            "MADHYA_PRADESH_DELIVERY_CHALLAN": "MADHYA_PRADESH",
         }.get(profile, "UNKNOWN")
 
         extracted = ExtractedDocument(
