@@ -991,6 +991,7 @@
             showToast(error?.message || "Could not load handoff JSON.", "error");
         } finally {
             if (button && document.contains(button)) {
+                button.disabled = false;
                 button.textContent = "Preview Handoff JSON";
                 updateSummary();
             }
