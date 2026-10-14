@@ -791,7 +791,27 @@ def _west_bengal_bevco_financials(
 
     rows, header_index, indexes = table
     summary_started = False
-    for cells in rows[header_index + 1 :]:
+    # The authoritative Office Copy may span two or more PDF pages.
+    # Continue across its continuation pages only, stopping before the
+    # Buyer's Copy / Depot Manager's Copy repeats the same commercial data.
+    office_pages = []
+    for entry in pages:
+        page_header = [line.strip().casefold() for line in entry[1].splitlines()[:18] if line.strip()]
+        if any(line in {"buyer's copy", "buyers copy", "depot manager's copy", "depot managers copy"} for line in page_header):
+            break
+        office_pages.append(entry)
+    summary_rows = list(rows[header_index + 1 :])
+    for _page_no, _page_text, continuation_tables in office_pages[1:]:
+        for continuation in continuation_tables:
+            if not continuation:
+                continue
+            first_row = [_key(cell) for cell in continuation[0]]
+            if "descriptionofgoods" not in first_row or "amountrs" not in first_row:
+                continue
+            summary_rows.extend(continuation[1:])
+            break
+
+    for cells in summary_rows:
         if not cells:
             continue
         label_text = _clean(cells[indexes["name"]]) if len(cells) > indexes["name"] else ""
@@ -843,17 +863,15 @@ def _west_bengal_bevco_financials(
         + float(tcs or 0),
         2,
     )
-    if values["totalAmount"] is None:
-        values["totalAmount"] = calculated_total
-
     total_amount = values["totalAmount"]
     total_net = values["totalNet"]
     rounded_off = values["roundedOff"]
     component_ok = (
         total_amount is not None
+        and all(value is not None for value in (special_fee, govt_round, tcs))
         and abs(float(total_amount) - calculated_total) <= 0.02
     )
-    rounding_ok = True
+    rounding_ok = False
     if total_amount is not None and total_net is not None and rounded_off is not None:
         rounding_ok = abs(
             abs(float(total_amount) - float(total_net)) - abs(float(rounded_off))

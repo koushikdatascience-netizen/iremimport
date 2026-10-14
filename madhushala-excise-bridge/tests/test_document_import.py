@@ -1011,6 +1011,51 @@ def test_wb_bevco_invoice_adapter_extracts_first_copy_amounts_and_totals():
     assert financials["reconciled"] is True
 
 
+
+def test_wb_bevco_multpage_office_copy_reconciles_without_duplicate_summary():
+    from app.modules.document_import.pdf_extractor import (
+        _extract_west_bengal_bevco_invoice,
+        _west_bengal_bevco_financials,
+    )
+    header = ["Description of Goods", "MRP/ Bot. (Rs.)", "MRP Value (Rs.)",
+              "Quantity (Case - Bot.)", "Alt Quantity (Bot.)", "Amount (Rs.)"]
+    first_page_rows = [
+        header,
+        ["Johnnie Walker Red Label Blended Scotch Whisky , 200 Ml.",
+         "650.00", "3250.00", "0-5", "5", "2613.90"],
+        ["", "", "", "", "", "2613.90"],
+        ["Less Rebate :", "", "", "", "", ""],
+        ["Special Purpose Fee :", "", "", "", "", "8544.82"],
+        ["Round Off value (to be remitted to Govt.)", "", "", "", "", "715.64"],
+        ["T.C.S.", "", "", "2", "%", "1887.45"],
+        ["96259.80", "", "", "", "", ""],
+    ]
+    continuation = [
+        header,
+        ["Rounded Off", "", "", "", "", "0.20"],
+        ["Total:-", "", "", "", "170", "96260"],
+    ]
+    pages = [
+        (1, "Office Copy\nINVOICE\nWest Bengal State Beverages Corporation Limited\n"
+            "Invoice No 2026-2027/W/2022/009/01/028754 Dated 25/09/2026", [first_page_rows]),
+        (2, "Page No:2\nDescription of Goods", [continuation]),
+        (3, "Buyer's Copy\nINVOICE", [first_page_rows]),
+    ]
+    # Financial test only: line-item sum here is partial (one of 12). The
+    # true total must therefore FAIL reconciliation, but page-2 values
+    # must be faithfully extracted and copies excluded.
+    products, _, _ = _extract_west_bengal_bevco_invoice(pages[0][1], pages)
+    assert len(products) == 1
+    result = _west_bengal_bevco_financials(pages, products)
+    assert result["roundedOff"] == 0.20
+    assert result["totalNet"] == 96260.0
+    assert result["totalAmount"] == 96259.80
+    assert result["taxes"]["specialPurposeFee"] == 8544.82
+    assert result["taxes"]["roundOffValueToGovt"] == 715.64
+    assert result["taxes"]["tcs"] == 1887.45
+    assert result["reconciled"] is False
+
+
 def test_batch_tp_plus_wb_invoice_enriches_tp_row_without_duplicate_item(client, monkeypatch):
     from app.main import document_import_service
     from app.modules.document_import import service as service_module
