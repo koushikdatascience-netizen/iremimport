@@ -255,6 +255,13 @@ class DocumentPurchaseAdapter:
                 qnty=qnty,
             )
 
+            invoice_amount_raw = raw_value("invoiceAmount")
+            invoice_amount = (
+                _money(invoice_amount_raw)
+                if invoice_amount_raw not in (None, "")
+                else None
+            )
+
             extracted_name = str(
                 row["raw_name"]
                 or row["normalized_name"]
@@ -288,6 +295,10 @@ class DocumentPurchaseAdapter:
                 "looseRate": loose_rate,
                 "mrp": mrp,
                 "itemAmount": amount,
+                # Optional printed WB invoice amount. This is an additive
+                # handoff field only; it never replaces existing Calculate
+                # inputs or the legacy itemAmount key.
+                "amount": invoice_amount,
                 # Document Purchase never imports Item Master discount. The
                 # Calculate request also sends discount=0 and Madhushala remains
                 # authoritative for any calculation-time adjustments.
