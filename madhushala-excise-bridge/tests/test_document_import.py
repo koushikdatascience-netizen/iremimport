@@ -935,6 +935,42 @@ def test_review_confirm_persists_edits_then_starts_mapping(client, monkeypatch):
 
 
 
+
+def test_wb_form5_recognized_as_deterministic_adapter():
+    from app.modules.document_import.pdf_extractor import _detect_profile, _extract_west_bengal
+    text = (
+        "West Bengal Excise IML Form No 5.\\nORIGINAL\\n"
+        "Transport Pass No. : tCSDR/2026-2027/07240765/P\\n"
+        "Date : 21/09/2026\\n"
+    )
+    assert _detect_profile(text) == "WEST_BENGAL_FORM5"
+    # Form No. 5's IML category must not be ignored by the TP adapter.
+    # The existing Form-3 case/bottle rules are identical.
+    header = ["Kind of Foreign Liquor", "Category", "Brand Name", "Measure",
+              "Strength", "Batch No. & Date", "Quantity In Cases", "In Bottles",
+              "In B.L", "In LPL", "Amount of Duty Involved"]
+    row = ["IML", "India Made Liquor", "TOP 10 PREMIUM WHISKY [Pet Bottle]",
+           "750 Ml.", "28.5 %v/v", "232AUG26-1", "5-0", "60",
+           "45.00", "22.48", "10665.00"]
+    items, _, _ = _extract_west_bengal(text, [(1, text, [[header, [""]*11, row]])])
+    assert len(items) == 1
+    assert items[0].ml == 750
+    assert items[0].box == 5
+    assert items[0].loose == 0
+
+
+def test_bevco_invoice_profile_detects_without_page_two_tax_text():
+    from app.modules.document_import.pdf_extractor import _detect_profile
+    first_page = (
+        "Office Copy\\nINVOICE\\n"
+        "West Bengal State Beverages Corporation Limited\\n"
+        "Invoice No 2026-2027/W/2018/004/01/042618 Dated 15/09/2026\\n"
+        "Description of Goods MRP/ Bot. (Rs.) "
+        "Quantity (Case - Bot.) Amount (Rs.)"
+    )
+    assert _detect_profile(first_page) == "WEST_BENGAL_BEVCO_INVOICE"
+
+
 def test_wb_bevco_invoice_adapter_extracts_first_copy_amounts_and_totals():
     from app.modules.document_import.pdf_extractor import (
         _detect_profile,
