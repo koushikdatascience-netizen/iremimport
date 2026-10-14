@@ -1288,6 +1288,59 @@ def test_invoice_financial_handoff_extension_defaults_to_null_without_invoice():
     }
 
 
+
+def test_wb_invoice_matching_ignores_only_bracketed_packaging():
+    from app.modules.document_import.service import DocumentImportService
+
+    service = DocumentImportService(mapping_service=None)
+    invoice = ExtractedDocument(
+        documentType="invoice",
+        invoiceNumber="2026-2027/W/2024/015/01/008033",
+        invoiceDate="21/09/2026",
+        invoiceFinancials={
+            "reconciled": True,
+            "taxes": {
+                "specialPurposeFee": 0.0,
+                "roundOffValueToGovt": 359.40,
+                "tcs": 303.28,
+            },
+            "roundedOff": 0.08,
+            "totalAmount": 15467.08,
+            "totalNet": 15467.0,
+        },
+        items=[
+            ExtractedProduct(
+                itemName="TOP 10 PREMIUM WHISKY , 750 Ml.",
+                ml=750,
+                box=5,
+                loose=0,
+                amount=14804.40,
+                invoiceAmount=14804.40,
+            )
+        ],
+    )
+    tp = [
+        ExtractedProduct(
+            itemName="TOP 10 PREMIUM WHISKY [Pet Bottle]",
+            ml=750,
+            box=5,
+            loose=0,
+        )
+    ]
+    enriched, _ = service._enrich_primary_items_with_invoice(
+        tp, invoice, invoice_filename="bevco.pdf"
+    )
+    assert len(enriched) == 1
+    assert enriched[0].invoiceAmount == 14804.40
+    assert enriched[0].itemName == tp[0].itemName
+
+    key = service._invoice_match_name
+    assert key("TOP 10 PREMIUM WHISKY [Pet Bottle]") == key("TOP 10 PREMIUM WHISKY, 750 ML")
+    assert key("TOP 10 PREMIUM WHISKY [Glass Bottle]") == key("TOP 10 PREMIUM WHISKY")
+    assert key("TOP 10 PREMIUM WHISKY PET BOTTLE") != key("TOP 10 PREMIUM WHISKY")
+    assert key("TOP 10 PREMIUM WHISKY [Gift Pack]") != key("TOP 10 PREMIUM WHISKY")
+
+
 def test_wb_invoice_enrichment_refuses_quantity_mismatch():
     from app.modules.document_import.service import DocumentImportService
 
