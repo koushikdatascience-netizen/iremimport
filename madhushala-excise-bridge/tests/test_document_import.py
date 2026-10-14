@@ -1222,6 +1222,27 @@ def test_invoice_enriched_review_rejects_identity_or_quantity_change(client, mon
     assert "linked to a WB invoice amount" in changed.text
 
 
+
+def test_invoice_financial_handoff_extension_defaults_to_null_without_invoice():
+    from app.modules.document_import.service import DocumentImportService
+
+    service = DocumentImportService(mapping_service=None)
+    service.get_items = lambda _session, _job_id: [
+        {"raw_data_json": json.dumps({"itemName": "TP ONLY"})}
+    ]
+
+    assert service.get_invoice_financials({}, "job-1") == {
+        "taxes": {
+            "specialPurposeFee": None,
+            "roundOffValueToGovt": None,
+            "tcs": None,
+        },
+        "roundedOff": None,
+        "totalAmount": None,
+        "totalNet": None,
+    }
+
+
 def test_wb_invoice_enrichment_refuses_quantity_mismatch():
     from app.modules.document_import.service import DocumentImportService
 
