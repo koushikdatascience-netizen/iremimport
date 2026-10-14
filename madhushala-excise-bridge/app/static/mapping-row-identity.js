@@ -906,11 +906,110 @@
         }
     }
 
+
+    // Temporary QA control. Set to false to hide it after client testing.
+    const SHOW_HANDOFF_JSON_PREVIEW = true;
+
+    async function previewMappingHandoffJson() {
+        const jobId = sanitizeJobId(currentDocumentJobId || workspace?.jobId || "");
+        if (!jobId) {
+            showToast("No document import job is available.", "error");
+            return;
+        }
+        const button = document.getElementById("mapping-preview-handoff");
+        if (button) {
+            button.disabled = true;
+            button.textContent = "Loading JSON…";
+        }
+        try {
+            // Persist any pending item mappings exactly as Next: Purchase does.
+            // This never calls Purchase Save and never navigates to CRM.
+            if (selectedMappings.size > 0) {
+                const saved = await saveMappings();
+                if (!saved) return;
+            } else {
+                await loadWorkspace(jobId, {preserveState: true});
+            }
+            const counts = mappingStatusCounts();
+            if (counts.invalid + counts.unmapped > 0) {
+                showToast("Complete all item mappings before previewing handoff.", "error");
+                return;
+            }
+            const payload = await buildPurchaseHandoff(jobId);
+            const json = JSON.stringify(payload, null, 2);
+
+            let backdrop = document.getElementById("handoff-json-preview-modal");
+            if (!backdrop) {
+                backdrop = document.createElement("div");
+                backdrop.id = "handoff-json-preview-modal";
+                backdrop.className = "handoff-preview-overlay";
+                backdrop.innerHTML = `
+                    <section class="handoff-preview-panel" role="dialog" aria-modal="true" aria-labelledby="handoff-preview-heading">
+                        <header class="handoff-preview-header">
+                            <div>
+                                <h2 id="handoff-preview-heading">Purchase Handoff JSON</h2>
+                                <small>Read-only preview. No Purchase Save or CRM navigation.</small>
+                            </div>
+                            <div class="handoff-preview-actions">
+                                <button type="button" id="handoff-preview-copy">Copy JSON</button>
+                                <button type="button" id="handoff-preview-download">Download JSON</button>
+                                <button type="button" id="handoff-preview-close">Close</button>
+                            </div>
+                        </header>
+                        <pre id="handoff-preview-json"></pre>
+                    </section>`;
+                document.body.appendChild(backdrop);
+                const close = () => { backdrop.hidden = true; };
+                backdrop.querySelector("#handoff-preview-close").addEventListener("click", close);
+                backdrop.addEventListener("click", (event) => {
+                    if (event.target === backdrop) close();
+                });
+                backdrop.querySelector("#handoff-preview-copy").addEventListener("click", async () => {
+                    const value = backdrop.querySelector("#handoff-preview-json").textContent;
+                    try {
+                        await navigator.clipboard.writeText(value);
+                        showToast("Handoff JSON copied.", "success");
+                    } catch {
+                        showToast("Clipboard unavailable. Select the JSON and copy manually.", "error");
+                    }
+                });
+                backdrop.querySelector("#handoff-preview-download").addEventListener("click", () => {
+                    const value = backdrop.querySelector("#handoff-preview-json").textContent;
+                    const url = URL.createObjectURL(new Blob([value], {type: "application/json"}));
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.download = "purchase-handoff-" + jobId + ".json";
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    URL.revokeObjectURL(url);
+                });
+            }
+            backdrop.querySelector("#handoff-preview-json").textContent = json;
+            backdrop.hidden = false;
+        } catch (error) {
+            showToast(error?.message || "Could not load handoff JSON.", "error");
+        } finally {
+            if (button && document.contains(button)) {
+                button.textContent = "Preview Handoff JSON";
+                updateSummary();
+            }
+        }
+    }
+
     function setupMappingNextButton() {
         if (!mappingMode || !sanitizeJobId(currentDocumentJobId)) return;
         const footer = document.querySelector("#mapping-view .mapping-footer");
         if (!footer) return;
 
+        if (SHOW_HANDOFF_JSON_PREVIEW && !document.getElementById("mapping-preview-handoff")) {
+            const previewButton = document.createElement("button");
+            previewButton.id = "mapping-preview-handoff";
+            previewButton.type = "button";
+            previewButton.textContent = "Preview Handoff JSON";
+            previewButton.addEventListener("click", () => void previewMappingHandoffJson());
+            footer.appendChild(previewButton);
+        }
         let next = document.getElementById("mapping-next-purchase");
         if (!next) {
             next = document.createElement("button");
@@ -921,6 +1020,34 @@
             footer.appendChild(next);
         }
         next.disabled = true;
+    }
+
+    function ensureHandoffPreviewStyles() {
+        if (document.getElementById("handoff-preview-style")) return;
+        const style = document.createElement("style");
+        style.id = "handoff-preview-style";
+        style.textContent = `
+            .handoff-preview-overlay { position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; padding:12px; }
+            .handoff-preview-overlay[hidden] { display:none!important; }
+            .handoff-preview-panel { width:min(1100px,100%); max-height:92dvh; min-width:0; display:flex; flex-direction:column; overflow:hidden; border-radius:12px; background:#fff; color:#202020; }
+            .handoff-preview-header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; padding:14px; border-bottom:1px solid #ddd; }
+            .handoff-preview-header h2 { margin:0; font-size:17px; }
+            .handoff-preview-header small { display:block; margin-top:4px; color:#666; }
+            .handoff-preview-actions { display:flex; gap:7px; flex-wrap:wrap; }
+            .handoff-preview-actions button { min-height:40px; padding:8px 12px; border-radius:6px; cursor:pointer; }
+            #handoff-preview-json { flex:1; overflow:auto; min-height:120px; margin:0; padding:15px; background:#101820; color:#eff6ff; white-space:pre; font:12px/1.5 monospace; user-select:text; }
+            body.mapping-mode #mapping-preview-handoff { background:#fff!important; color:#222!important; border:1px solid #888!important; }
+            @media (max-width:760px) {
+                .handoff-preview-panel { max-height:96dvh; }
+                .handoff-preview-header { padding:10px; }
+                .handoff-preview-actions { width:100%; }
+                .handoff-preview-actions button { flex:1 1 auto; font-size:11px; }
+                #handoff-preview-json { font-size:11px; padding:10px; }
+                body.mapping-mode #mapping-view .mapping-footer { grid-template-columns:repeat(2,minmax(0,1fr))!important; }
+                body.mapping-mode #mapping-preview-handoff { grid-column:1/-1!important; }
+            }
+        `;
+        document.head.appendChild(style);
     }
 
     function ensureCompactMappingStyles() {
@@ -2096,6 +2223,7 @@
         // Do not mount Purchase fields on Mapping in the simplified flow.
         // The function is retained above so the old UI can be restored later.
         ensureCompactMappingStyles();
+        ensureHandoffPreviewStyles();
         setupMappingNextButton();
         setupMappingManagementControls();
         const result = originalInitMapping();
