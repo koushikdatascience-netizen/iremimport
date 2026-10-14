@@ -5,6 +5,7 @@ import logging
 import mimetypes
 import re
 import tempfile
+import time
 import uuid
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -966,6 +967,7 @@ class DocumentImportService:
                 detail=f"A purchase can contain at most {settings.DOCUMENT_IMPORT_MAX_FILES} source files",
             )
 
+        upload_started = time.perf_counter()
         parts: list[tuple[bytes, str, str]] = []
         source_types: set[str] = set()
         for upload in uploads:
@@ -992,10 +994,21 @@ class DocumentImportService:
             metas: list[dict[str, Any]] = []
             self._update_job(job_id, status="EXTRACTING")
 
+            file_timings: list[dict[str, Any]] = []
             for index, (data, ext, filename) in enumerate(parts, start=1):
+                part_started = time.perf_counter()
                 extracted, meta = await self._extract_upload_part(data, ext, filename, index)
+                file_timings.append({
+                    "filename": filename,
+                    "elapsedMs": round((time.perf_counter() - part_started) * 1000, 2),
+                    "engine": meta.get("engine"),
+                    "profile": meta.get("profile"),
+                    "fallbackReason": meta.get("fallbackReason"),
+                    "localTimingsMs": meta.get("timingsMs"),
+                })
                 extracted_parts.append(extracted)
                 metas.append(meta)
+            extraction_done = time.perf_counter()
 
             enrichment_parts = [
                 (doc, meta)
@@ -1106,6 +1119,7 @@ class DocumentImportService:
                 },
             )
 
+            matching_done = time.perf_counter()
             self._update_job(
                 job_id,
                 status="NORMALIZING",
@@ -1118,6 +1132,7 @@ class DocumentImportService:
             if not normalized:
                 raise HTTPException(status_code=422, detail="No valid product rows were extracted")
 
+            normalization_done = time.perf_counter()
             self._persist_items(job_id, normalized)
             self._update_job(
                 job_id,
@@ -1127,6 +1142,16 @@ class DocumentImportService:
                 error=None,
             )
             review_items = self.get_review_items(session, job_id)
+            persistence_done = time.perf_counter()
+            stage_timings = {
+                "fileExtractionMs": round((extraction_done - upload_started) * 1000, 2),
+                "matchMergeMs": round((matching_done - extraction_done) * 1000, 2),
+                "normalizeMs": round((normalization_done - matching_done) * 1000, 2),
+                "persistAndReviewMs": round((persistence_done - normalization_done) * 1000, 2),
+                "totalMs": round((persistence_done - upload_started) * 1000, 2),
+                "fileTimings": file_timings,
+            }
+            logger.info("document_upload_timings job=%s stages=%s", job_id, stage_timings)
             attention = sum(1 for item in review_items if not item["valid"])
             return {
                 "job": self.get_job(session, job_id),
@@ -1143,11 +1168,13 @@ class DocumentImportService:
                     {
                         "engine": "batch",
                         "files": metas,
+                        "timingsMs": stage_timings,
                     }
                     if len(parts) > 1
                     else {
                         **metas[0],
                         "files": metas,
+                        "uploadTimingsMs": stage_timings,
                     }
                 ),
                 "sourceFiles": filenames,
