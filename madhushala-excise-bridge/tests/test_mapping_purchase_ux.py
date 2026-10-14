@@ -598,3 +598,15 @@ def test_temporary_handoff_json_preview_never_saves_purchase_or_navigates():
     assert "openPurchaseInMadhushala(" not in preview
     assert "/purchase/save" not in preview
 
+
+
+def test_handoff_preview_button_is_reenabled_after_success_or_error():
+    script = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    start = script.index("async function previewMappingHandoffJson()")
+    end = script.index("function setupMappingNextButton()", start)
+    preview = script[start:end]
+    assert 'button.disabled = true;' in preview
+    assert 'finally {' in preview
+    finally_code = preview.split('finally {', 1)[1]
+    assert 'button.disabled = false;' in finally_code
+    assert 'button.textContent = "Preview Handoff JSON";' in finally_code
