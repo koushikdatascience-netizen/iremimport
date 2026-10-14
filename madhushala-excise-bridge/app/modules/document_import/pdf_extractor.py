@@ -359,11 +359,13 @@ def _detect_profile(text: str) -> str:
     if (
         "west bengal state beverages corporation" in lower
         and "description of goods" in lower
-        and "special purpose fee" in lower
-        and "round off value" in lower
         and "invoice no" in lower
+        and "quantity" in lower
+        and "amount" in lower
     ):
         return "WEST_BENGAL_BEVCO_INVOICE"
+    if "west bengal excise iml" in lower and "form no 5" in lower:
+        return "WEST_BENGAL_FORM5"
     if "west bengal excise foreign" in lower or "wbexcise.gov.in" in lower:
         return "WEST_BENGAL_FORM3"
     if "government of jharkhand" in lower or "jharkhand state beverages corporation" in lower:
@@ -928,7 +930,7 @@ def _extract_west_bengal(
                 if len(cells) <= max(required_indexes):
                     continue
                 category = _clean(cells[0]).upper()
-                if category not in {"IMFL", "OSBI", "OS"}:
+                if category not in {"IMFL", "OSBI", "OS", "IML"}:
                     continue
 
                 name = _clean_west_bengal_brand(cells[name_idx])
@@ -1167,7 +1169,7 @@ def _candidate_row_count(
     than inventing missing products.
     """
     selected_pages = pages
-    if profile == "WEST_BENGAL_FORM3":
+    if profile in {"WEST_BENGAL_FORM3", "WEST_BENGAL_FORM5"}:
         originals = [entry for entry in pages if _west_bengal_copy_label(entry[1]) == "ORIGINAL"]
         selected_pages = originals or pages[:2]
 
@@ -1178,7 +1180,7 @@ def _candidate_row_count(
         for page_no, page_text, _page_tables in selected_pages:
             row_index = 0
             for line in (page_text or "").splitlines():
-                if re.match(r"^\s*(?:IMFL|OSBI|OS)\b", line, re.IGNORECASE):
+                if re.match(r"^\s*(?:IMFL|OSBI|OS|IML)\b", line, re.IGNORECASE):
                     row_index += 1
                     text_rows.add((page_no, row_index))
         if text_rows:
@@ -1326,8 +1328,15 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             except Exception:
                 pass
             if page_index == 1 and _detect_profile(text) == "WEST_BENGAL_BEVCO_INVOICE":
-                # Office Copy is authoritative; later pages are repeated buyer/
-                # depot copies of the same invoice and must not be scraped again.
+                # Read the whole authoritative Office Copy; its totals may be
+                # on a continuation page. Never read Buyer/Depot copies.
+                for following in document[1:]:
+                    following_text = following.get_text("text") or ""
+                    first_lines = [line.strip().casefold() for line in following_text.splitlines()[:25] if line.strip()]
+                    if any(label in {"buyer's copy", "buyers copy", "depot manager's copy", "depot managers copy"} for label in first_lines):
+                        break
+                    page_texts.append(following_text)
+                    word_count += len(following.get_text("words") or [])
                 break
         timings["textLayerMs"] = (time.perf_counter() - text_layer_started) * 1000
 
@@ -1337,7 +1346,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         # WB repeats the same document as ORIGINAL/DUPLICATE/TRIPLICATE/
         # QUADRUPLICATE. Detect copies from the cheap text pass and perform
         # expensive table reconstruction only for ORIGINAL pages.
-        horizontal_only = profile == "WEST_BENGAL_FORM3"
+        horizontal_only = profile in {"WEST_BENGAL_FORM3", "WEST_BENGAL_FORM5"}
         west_bengal_original_pages = {
             index
             for index, text in enumerate(page_texts, start=1)
@@ -1386,6 +1395,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             "TELANGANA_ICDC": _extract_telangana,
             "WEST_BENGAL_BEVCO_INVOICE": _extract_west_bengal_bevco_invoice,
             "WEST_BENGAL_FORM3": _extract_west_bengal,
+            "WEST_BENGAL_FORM5": _extract_west_bengal,
             "JHARKHAND_EXCISE": _extract_jharkhand,
             "MADHYA_PRADESH_DELIVERY_CHALLAN": _extract_madhya_pradesh,
             "GENERIC": _extract_generic,
@@ -1395,7 +1405,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         product_count = len(products)
         west_bengal_validation = (
             _west_bengal_total_validation(products, pages)
-            if profile == "WEST_BENGAL_FORM3"
+            if profile in {"WEST_BENGAL_FORM3", "WEST_BENGAL_FORM5"}
             else None
         )
         bevco_financials = (
@@ -1438,6 +1448,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             "TELANGANA_ICDC": "TELANGANA",
             "WEST_BENGAL_BEVCO_INVOICE": "WEST_BENGAL",
             "WEST_BENGAL_FORM3": "WEST_BENGAL",
+            "WEST_BENGAL_FORM5": "WEST_BENGAL",
             "JHARKHAND_EXCISE": "JHARKHAND",
         }.get(profile, "UNKNOWN")
 
