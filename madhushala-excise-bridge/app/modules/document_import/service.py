@@ -848,7 +848,7 @@ class DocumentImportService:
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "WB invoice and TP pass items did not match by product, ML, aggregated quantities or bottle totals ("
+                    "WB invoice and TP pass items did not match one-to-one or by verified batch-group quantities, ML and bottle totals ("
                     + "; ".join(details)
                     + "). No financial enrichment was applied."
                 ),
