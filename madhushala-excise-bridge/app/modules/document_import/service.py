@@ -727,57 +727,112 @@ class DocumentImportService:
         for index, item in enumerate(primary_items):
             primary_by_key.setdefault(self._invoice_item_key(item), []).append(index)
 
+
         used_primary: set[int] = set()
+        used_keys: set[tuple[str, int]] = set()
         enriched = list(primary_items)
         unmatched_invoice: list[str] = []
 
         for invoice_item in invoice_items:
             key = self._invoice_item_key(invoice_item)
+            label = f"{invoice_item.itemName or invoice_item.brand} {invoice_item.ml or ''} ML".strip()
+            # Two commercial invoice lines for exactly the same product+ML
+            # cannot be assigned unambiguously to TP batches. Reject instead
+            # of guessing or reusing a batch.
+            if key in used_keys:
+                unmatched_invoice.append(f"{label} (duplicate invoice group)")
+                continue
+            used_keys.add(key)
             candidates = [
-                index
-                for index in primary_by_key.get(key, [])
+                index for index in primary_by_key.get(key, [])
                 if index not in used_primary
             ]
-
-            invoice_box, invoice_loose = self._invoice_item_quantity(invoice_item)
-            if invoice_box > 0 or invoice_loose > 0:
-                quantity_matches = [
-                    index
-                    for index in candidates
-                    if self._invoice_item_quantity(primary_items[index])
-                    == (invoice_box, invoice_loose)
-                ]
-                candidates = quantity_matches
-
-            if len(candidates) != 1:
-                label = f"{invoice_item.itemName or invoice_item.brand} {invoice_item.ml or ''} ML".strip()
+            if not candidates:
                 unmatched_invoice.append(label)
                 continue
 
-            target_index = candidates[0]
+            invoice_box, invoice_loose = self._invoice_item_quantity(invoice_item)
+            actual_box = sum(self._invoice_item_quantity(primary_items[i])[0] for i in candidates)
+            actual_loose = sum(self._invoice_item_quantity(primary_items[i])[1] for i in candidates)
+            if (invoice_box, invoice_loose) != (actual_box, actual_loose):
+                unmatched_invoice.append(f"{label} (TP quantities {actual_box}-{actual_loose}, invoice {invoice_box}-{invoice_loose})")
+                continue
+
+            invoice_alt = _int_value(invoice_item.model_dump().get("invoiceAltQuantityBottles"))
+            bottle_counts: list[int] = []
+            for index in candidates:
+                raw = primary_items[index].model_dump().get("rawPdfRow") or {}
+                bottles = _int_value(raw.get("In Bottles")) if isinstance(raw, dict) else 0
+                bottle_counts.append(bottles)
+            # The printed TP bottle quantities must be present and sum to the
+            # printed invoice alternate bottle quantity for split allocation.
+            if len(candidates) > 1 and (
+                any(count <= 0 for count in bottle_counts)
+                or invoice_alt <= 0
+                or sum(bottle_counts) != invoice_alt
+            ):
+                unmatched_invoice.append(f"{label} (bottle quantities unavailable or inconsistent)")
+                continue
+            if invoice_alt > 0 and all(count > 0 for count in bottle_counts):
+                if sum(bottle_counts) != invoice_alt:
+                    unmatched_invoice.append(f"{label} (bottle totals disagree)")
+                    continue
+
             amount_raw = invoice_item.model_dump().get("invoiceAmount")
             if amount_raw in (None, ""):
                 amount_raw = invoice_item.amount
             try:
-                invoice_amount = float(Decimal(str(amount_raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-            except Exception:
-                invoice_amount = -1.0
-            if invoice_amount < 0:
-                unmatched_invoice.append(str(invoice_item.itemName or invoice_item.brand or key))
+                amount_decimal = Decimal(str(amount_raw))
+                if not amount_decimal.is_finite() or amount_decimal < 0:
+                    raise ValueError("Invalid printed invoice amount")
+                total_cents = int(
+                    (amount_decimal * Decimal(100)).quantize(
+                        Decimal("1"), rounding=ROUND_HALF_UP
+                    )
+                )
+            except (ValueError, TypeError, ArithmeticError):
+                unmatched_invoice.append(f"{label} (invalid invoice amount)")
                 continue
 
-            target_payload = primary_items[target_index].model_dump()
-            target_payload["invoiceAmount"] = invoice_amount
-            target_payload["invoiceFinancials"] = financials
-            target_payload["invoiceSourceFilename"] = invoice_filename
-            target_payload["invoiceDocumentNumber"] = str(invoice.invoiceNumber or "").strip()
-            target_payload["invoiceDocumentDate"] = str(invoice.invoiceDate or "").strip()
-            target_payload["invoiceMatchedName"] = str(invoice_item.itemName or invoice_item.brand or "").strip()
-            target_payload["invoiceMatchedMl"] = _int_value(invoice_item.ml)
-            target_payload["invoiceMatchedBox"] = invoice_box
-            target_payload["invoiceMatchedLoose"] = invoice_loose
-            enriched[target_index] = ExtractedProduct.model_validate(target_payload)
-            used_primary.add(target_index)
+            # Distribute integer paise using the largest-remainder method:
+            # exact total, deterministic tie breaks by original TP row order,
+            # and no rounding drift. Every batch keeps its original identity.
+            if len(candidates) == 1:
+                allocations = [total_cents]
+            else:
+                total_bottles = sum(bottle_counts)
+                numerators = [total_cents * count for count in bottle_counts]
+                allocations = [numerator // total_bottles for numerator in numerators]
+                remainder = total_cents - sum(allocations)
+                ranking = sorted(
+                    range(len(candidates)),
+                    key=lambda i: (-(numerators[i] % total_bottles), i),
+                )
+                for position in ranking[:remainder]:
+                    allocations[position] += 1
+
+            for offset, target_index in enumerate(candidates):
+                target_payload = primary_items[target_index].model_dump()
+                target_payload["invoiceAmount"] = float(
+                    Decimal(allocations[offset]) / Decimal(100)
+                )
+                target_payload["invoiceFinancials"] = financials
+                target_payload["invoiceSourceFilename"] = invoice_filename
+                target_payload["invoiceDocumentNumber"] = str(invoice.invoiceNumber or "").strip()
+                target_payload["invoiceDocumentDate"] = str(invoice.invoiceDate or "").strip()
+                target_payload["invoiceMatchedName"] = str(invoice_item.itemName or invoice_item.brand or "").strip()
+                target_payload["invoiceMatchedMl"] = _int_value(invoice_item.ml)
+                # Review validates the actual TP batch quantities, not the
+                # consolidated invoice quantity, preserving batch edit safety.
+                batch_box, batch_loose = self._invoice_item_quantity(primary_items[target_index])
+                target_payload["invoiceMatchedBox"] = batch_box
+                target_payload["invoiceMatchedLoose"] = batch_loose
+                target_payload["invoiceGroupedBox"] = invoice_box
+                target_payload["invoiceGroupedLoose"] = invoice_loose
+                target_payload["invoiceGroupAmount"] = float(Decimal(total_cents) / Decimal(100))
+                target_payload["invoiceGroupBottleCount"] = invoice_alt
+                enriched[target_index] = ExtractedProduct.model_validate(target_payload)
+                used_primary.add(target_index)
 
         if unmatched_invoice or len(used_primary) != len(primary_items):
             unmatched_primary = [
@@ -793,7 +848,7 @@ class DocumentImportService:
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "WB invoice and TP pass items did not match one-to-one by item name, ML and quantity ("
+                    "WB invoice and TP pass items did not match one-to-one or by verified batch-group quantities, ML and bottle totals ("
                     + "; ".join(details)
                     + "). No financial enrichment was applied."
                 ),
