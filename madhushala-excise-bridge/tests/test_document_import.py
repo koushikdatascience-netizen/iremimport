@@ -2804,3 +2804,69 @@ def test_purchase_item_source_uses_purchase_dropdown_without_generic_item_overri
     assert item["purchaseRateCase"] == 3415.2
     assert item["vat"] == 60
     assert item["tcs"] == 2284.08
+
+def test_wb_batch_split_keeps_four_tp_rows_and_allocates_invoice_exactly():
+    from app.modules.document_import.service import DocumentImportService
+    service = DocumentImportService(mapping_service=None)
+    financials = {"reconciled": True, "taxes": {"specialPurposeFee": 4667.0,
+        "roundOffValueToGovt": 2083.88, "tcs": 6444.22},
+        "roundedOff": 0.3, "totalAmount": 328655.3, "totalNet": 328655.0}
+    def tp(name, ml, boxes, bottles, batch):
+        return ExtractedProduct(
+            itemName=name, ml=ml, box=boxes, loose=0, batchNo=batch,
+            rawPdfRow={"In Bottles": str(bottles)}
+        )
+    primary = [
+        tp("Captain [Pet Bottle]", 375, 10, 320, "364-1"),
+        tp("Captain [Pet Bottle]", 500, 8, 192, "378-1"),
+        tp("Captain [Pet Bottle]", 600, 79, 1580, "373-2"),
+        tp("Captain [Pet Bottle]", 600, 4, 80, "379-1"),
+    ]
+    def inv(ml, boxes, bottles, amount):
+        return ExtractedProduct(
+            itemName=f"Captain , {ml} Ml.", ml=ml, box=boxes,
+            loose=0, amount=amount, invoiceAmount=amount,
+            invoiceAltQuantityBottles=bottles,
+        )
+    invoice = ExtractedDocument(
+        documentType="invoice", invoiceFinancials=financials,
+        items=[inv(375, 10, 320, 31244.8),
+               inv(600, 83, 1660, 259341.8),
+               inv(500, 8, 192, 24873.6)],
+    )
+    result, _ = service._enrich_primary_items_with_invoice(
+        primary, invoice, invoice_filename="clash2.pdf"
+    )
+    assert len(result) == 4
+    assert [row.batchNo for row in result] == [
+        "364-1", "378-1", "373-2", "379-1"
+    ]
+    assert [row.invoiceAmount for row in result] == [
+        31244.8, 24873.6, 246843.4, 12498.4
+    ]
+    assert sum(Decimal(str(row.invoiceAmount)) for row in result) == Decimal("315460.20")
+    assert result[2].invoiceMatchedBox == 79
+    assert result[3].invoiceMatchedBox == 4
+
+
+def test_wb_batch_split_rejects_inaccurate_bottle_totals():
+    from app.modules.document_import.service import DocumentImportService
+    service = DocumentImportService(mapping_service=None)
+    rows = [
+        ExtractedProduct(itemName="Captain [Pet Bottle]", ml=600, box=79,
+            loose=0, rawPdfRow={"In Bottles": "1580"}),
+        ExtractedProduct(itemName="Captain [Pet Bottle]", ml=600, box=4,
+            loose=0, rawPdfRow={"In Bottles": "79"}),
+    ]
+    invoice = ExtractedDocument(documentType="invoice",
+        invoiceFinancials={"reconciled": True},
+        items=[ExtractedProduct(itemName="Captain 600 Ml.", ml=600,
+            box=83, loose=0, amount=259341.8,
+            invoiceAltQuantityBottles=1660)],
+    )
+    with pytest.raises(HTTPException) as exc:
+        service._enrich_primary_items_with_invoice(
+            rows, invoice, invoice_filename="clash2.pdf"
+        )
+    assert exc.value.status_code == 422
+    assert "bottle" in str(exc.value.detail).lower()
