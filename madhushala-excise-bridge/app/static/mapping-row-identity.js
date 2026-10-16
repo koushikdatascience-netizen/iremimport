@@ -49,7 +49,10 @@
                 selectedMappings.get(mappingRowKey(row)) || row.selectedItemCode || ""
             ).trim()).filter(Boolean));
             const hasInvalid = members.some((row) => mappingRowStatus(row) === "invalid_mapping");
-            if (codes.size > 1 || hasInvalid) {
+            const partiallyMapped = codes.size > 0 && members.some((row) =>
+                !String(selectedMappings.get(mappingRowKey(row)) || row.selectedItemCode || "").trim()
+            );
+            if (codes.size > 1 || hasInvalid || partiallyMapped) {
                 // A previous conflicting assignment needs manual resolution.
                 display.push(...members.map((row) => ({rows: [row], item: row, conflict: true})));
             } else {
