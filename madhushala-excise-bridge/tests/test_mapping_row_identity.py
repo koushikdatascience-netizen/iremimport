@@ -17,7 +17,7 @@ def test_document_mapping_script_keys_rows_by_job_item_id():
     assert "jobItemId" in script
     assert "return `job:${jobItemId}`" in script
     assert 'data-row-key="${escapeHtml(rowKey)}"' in script
-    assert "selectedMappings.set(rowKey" in script
+    assert "selectedMappings.set(mappingRowKey(member), String(itemCode))" in script
     assert "jobItemId: documentMapping ? row.jobItemId || null : null" in script
     assert "exciseItemCode: hasValidExciseCode ? parsedExciseCode : null" in script
     assert "/mapping/save`" in script
