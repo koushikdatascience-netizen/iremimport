@@ -15,6 +15,57 @@
         return (workspace?.unmappedItems || []).find((item) => mappingRowKey(item) === String(key));
     }
 
+    // Mapping-only grouping; original TP batch rows and jobItemIds stay intact.
+    // Do not group the Item Map Master or rows with ambiguous product identity.
+    function documentMappingGroupKey(item) {
+        if (!isDocumentWorkspace() || mappingManagementMode || !item?.jobItemId) return "";
+        const name = String(item.itemName || "").normalize("NFKC")
+            .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+        const measure = Number(item.capturedItem?.measureMl ?? item.capturedItem?.ml ?? item.ml);
+        // Preserve explicit packaging identity: different packages must not
+        // inherit each other's Item Master mapping.
+        const packaging = String(
+            item.capturedItem?.packageType ?? item.capturedItem?.packagingType ??
+            item.capturedItem?.packingType ?? ""
+        ).normalize("NFKC").toLowerCase().trim();
+        if (!name || !Number.isInteger(measure) || measure <= 0) return "";
+        return JSON.stringify([name, measure, packaging]);
+    }
+
+    function mappingDisplayGroups() {
+        const rows = workspace?.unmappedItems || [];
+        if (!isDocumentWorkspace() || mappingManagementMode) {
+            return rows.map((row) => ({rows: [row], item: row}));
+        }
+        const grouped = new Map();
+        for (const row of rows) {
+            const key = documentMappingGroupKey(row) || "single:" + mappingRowKey(row);
+            if (!grouped.has(key)) grouped.set(key, []);
+            grouped.get(key).push(row);
+        }
+        const display = [];
+        for (const members of grouped.values()) {
+            const codes = new Set(members.map((row) => String(
+                selectedMappings.get(mappingRowKey(row)) || row.selectedItemCode || ""
+            ).trim()).filter(Boolean));
+            const hasInvalid = members.some((row) => mappingRowStatus(row) === "invalid_mapping");
+            if (codes.size > 1 || hasInvalid) {
+                // A previous conflicting assignment needs manual resolution.
+                display.push(...members.map((row) => ({rows: [row], item: row, conflict: true})));
+            } else {
+                display.push({rows: members, item: members[0]});
+            }
+        }
+        return display;
+    }
+
+    function mappingMembersForItem(item) {
+        const group = mappingDisplayGroups().find((entry) =>
+            entry.rows.some((row) => mappingRowKey(row) === mappingRowKey(item))
+        );
+        return group?.rows || [item];
+    }
+
     function mappingRowStatus(item) {
         const pendingCode = String(selectedMappings.get(mappingRowKey(item)) || "").trim();
         if (pendingCode) return "valid";
@@ -258,7 +309,7 @@
         const counts = mappingStatusCounts();
         const left = counts.invalid + counts.unmapped;
         const mapped = counts.valid;
-        const visible = mappingManagementMode ? filteredManagementRows().length : rows.length;
+        const visible = mappingManagementMode ? filteredManagementRows().length : mappingDisplayGroups().length;
         const mappingSummary = document.getElementById("mapping-summary");
         if (mappingSummary) {
             mappingSummary.hidden = false;
@@ -267,7 +318,7 @@
                 mappingManagementMode
                     ? `All: ${rows.length} | Mapped: ${mapped} | Unmapped: ${left} | Showing: ${visible}`
                     : isDocumentWorkspace()
-                        ? `Valid: ${counts.valid} | Remap: ${counts.invalid} | Unmapped: ${counts.unmapped}`
+                        ? `Products: ${visible} | Batches: ${rows.length} | Unmapped: ${left}`
                         : `Selected: ${selectedMappings.size} | Left: ${left}`,
             );
         }
@@ -502,7 +553,8 @@
         const list = document.getElementById("unmapped-items");
         if (!list) return;
         setDocumentListTitle();
-        const rows = mappingManagementMode ? filteredManagementRows() : (workspace.unmappedItems || []);
+        const displayGroups = mappingDisplayGroups();
+        const rows = mappingManagementMode ? filteredManagementRows() : displayGroups.map((group) => group.item);
 
         if (mappingManagementMode) {
             renderManagementTable(rows);
@@ -534,13 +586,18 @@
             const rowStatus = mappingRowStatus(item);
             if (documentModeRows) {
                 const invalid = rowStatus === "invalid_mapping";
+                const group = displayGroups.find((entry) => mappingRowKey(entry.item) === rowKey);
+                const batchCount = group?.rows.length || 1;
+                const batchHint = batchCount > 1
+                    ? `<small class="mapping-batch-hint">${batchCount} batches · one mapping</small>`
+                    : "";
                 const companyCode = String(workspace?.companyCode || "").trim();
                 const warning = invalid
                     ? `<span class="mapping-row-warning"><strong>Remap required</strong><span>${escapeHtml(item.mappingValidationMessage || `Mapped item ${item.selectedItemCode || ""} is not available in company ${companyCode || "current company"}.`)}</span></span>`
                     : "";
                 return `
                     <button class="unmapped-item document-map-row mapping-${rowStatus} ${selected ? "selected" : ""}" data-row-key="${escapeHtml(rowKey)}" type="button">
-                        <span class="doc-extracted"><small>${escapeHtml(code || "New")}</small><strong>${escapeHtml(item.itemName)}</strong>${selectedExciseDetails(item)}</span>
+                        <span class="doc-extracted"><small>${escapeHtml(code || "New")}</small><strong>${escapeHtml(item.itemName)}</strong>${selectedExciseDetails(item)}${batchHint}</span>
                         <span class="doc-arrow" aria-hidden="true">→</span>
                         ${mappedItemMarkup(item)}
                         ${warning}
@@ -654,8 +711,14 @@
         const issues = guardrailIssues(exciseItem, madhushalaItem, score);
         const rowKey = mappingRowKey(exciseItem);
         const apply = () => {
-            selectedMappings.set(rowKey, String(itemCode));
-            showToast("Mapping selected", "success");
+            const members = mappingMembersForItem(exciseItem);
+            for (const member of members) {
+                selectedMappings.set(mappingRowKey(member), String(itemCode));
+            }
+            showToast(
+                members.length > 1 ? `Mapping selected for ${members.length} batches` : "Mapping selected",
+                "success"
+            );
             const search = document.getElementById("madhushala-search");
             if (search) search.value = "";
             renderWorkspace();
@@ -1046,6 +1109,28 @@
                 #handoff-preview-json { font-size:11px; padding:10px; }
                 body.mapping-mode #mapping-view .mapping-footer { grid-template-columns:repeat(2,minmax(0,1fr))!important; }
                 body.mapping-mode #mapping-preview-handoff { grid-column:1/-1!important; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function ensureBatchGroupStyles() {
+        if (document.getElementById("batch-mapping-group-style")) return;
+        const style = document.createElement("style");
+        style.id = "batch-mapping-group-style";
+        style.textContent = `
+            .document-map-row .mapping-batch-hint {
+                display: inline-flex;
+                width: fit-content;
+                margin-top: 3px;
+                padding: 2px 6px;
+                border: 1px solid #d8e1e7;
+                border-radius: 5px;
+                background: #f5f8fa;
+                color: #445665;
+                font-size: 10px;
+                font-weight: 600;
+                white-space: nowrap;
             }
         `;
         document.head.appendChild(style);
@@ -2224,6 +2309,7 @@
         // Do not mount Purchase fields on Mapping in the simplified flow.
         // The function is retained above so the old UI can be restored later.
         ensureCompactMappingStyles();
+        ensureBatchGroupStyles();
         ensureHandoffPreviewStyles();
         setupMappingNextButton();
         setupMappingManagementControls();
