@@ -17,7 +17,7 @@ def test_saved_document_mapping_is_presented_as_mapped_and_remappable():
     assert 'invalid ? "Remap required" : "Mapped"' in script
     assert 'saved Madhushala item for the extracted purchase row' in script
     assert 'Already mapped. Use Change / Re-map only if the saved item is wrong.' in script
-    assert 'Valid: ${counts.valid} | Remap: ${counts.invalid} | Unmapped: ${counts.unmapped}' in script
+    assert 'Products: ${visible} | Batches: ${rows.length} | Unmapped: ${left}' in script
     assert 'Change / Re-map' in script
 
 
