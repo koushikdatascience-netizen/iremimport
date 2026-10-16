@@ -610,3 +610,33 @@ def test_handoff_preview_button_is_reenabled_after_success_or_error():
     finally_code = preview.split('finally {', 1)[1]
     assert 'button.disabled = false;' in finally_code
     assert 'button.textContent = "Preview Handoff JSON";' in finally_code
+
+
+def test_document_mapping_groups_batch_rows_only_in_ui_and_preserves_job_item_saves():
+    source = Path("app/static/mapping-row-identity.js").read_text(encoding="utf-8")
+    start = source.index("function documentMappingGroupKey(item)")
+    end = source.index("function mappingRowStatus(item)", start)
+    helper = source[start:end]
+    assert 'if (!isDocumentWorkspace() || mappingManagementMode' in helper
+    assert "item.capturedItem?.measureMl" in helper
+    assert "item.capturedItem?.packageType" in helper
+    assert "hasInvalid || partiallyMapped" in helper
+    assert "codes.size > 1" in helper
+    assert "return display;" in helper
+    assert "mappingMembersForItem" in helper
+
+    selected = source[source.index("selectMadhushalaItem = function selectForUniqueDocumentRow"):
+        source.index("loadWorkspace = async function loadUniqueDocumentWorkspace")]
+    assert "const members = mappingMembersForItem(exciseItem)" in selected
+    assert "selectedMappings.set(mappingRowKey(member), String(itemCode))" in selected
+
+    save = source[source.index("saveMappings = async function saveUniqueDocumentMappings"):
+        source.index("function purchaseSourceHintKey") if "function purchaseSourceHintKey" in source[source.index("saveMappings = async function saveUniqueDocumentMappings"):] else len(source)]
+    assert "jobItemId: documentMapping ? row.jobItemId || null : null" in save
+    assert '"/mapping/submit"' in save
+
+    render = source[source.index("renderWorkspace = function renderUniqueDocumentRows"):
+        source.index("renderSelectedExcise = function renderDocumentMappingSelection")]
+    assert "displayGroups.map((group) => group.item)" in render
+    assert "mapping-batch-hint" in render
+    assert "batchCount > 1" in render
