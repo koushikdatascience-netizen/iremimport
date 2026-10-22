@@ -23,14 +23,16 @@ def parse_bar_row(values, page, confidence=1):
         return None
     sl = re.sub(r"\D", "", values[0])
     brand = re.sub(r"\s+", "", values[2]).upper()
-    if not sl.isdigit() or not BRAND.fullmatch(brand):
+    if not sl.isdigit() or int(sl) <= 0 or not BRAND.fullmatch(brand):
         return None
     cases_text = re.sub(r"[^0-9]", "", values[8].upper().replace("I","1").replace("O","0"))
     cases = int(cases_text) if cases_text else None
     price, total = money(values[9]), money(values[10])
     flags = []
-    if cases is None or price is None or total is None or Decimal(cases)*price != total:
+    if cases is None or cases <= 0 or price is None or total is None or Decimal(cases)*price != total:
         flags.append("manual_check")
+    if not " ".join(values[3].split()):
+        flags.append("missing_brand_name")
     if confidence < .8:
         flags.append("low_ocr_confidence")
     pack_shape = re.search(r"(\d+)\s*/\s*(\d+)\s*ML", values[6].upper())
@@ -71,10 +73,39 @@ def parse_bar_rows(boxes, columns, horizontal_lines, page, height):
             output.append(item)
     return output
 
-def validate_bar_items(items):
-    serials=[item["sl_no"] for item in items]
-    checks={"serial_sequence":bool(items) and serials==list(range(1,len(items)+1)),
-            "row_arithmetic":all("manual_check" not in item["flags"] for item in items)}
-    return {"status":"REVIEW_REQUIRED" if all(checks.values()) else "FAILED",
-            "checks":checks,"rows_needing_review":[i["sl_no"] for i in items if i["flags"]],
-            "note":"Bar Indent is not an ICDC tax invoice; purchase saving remains disabled pending document-specific business approval."}
+def validate_bar_items(items, *, expected_total_cases=None, expected_total_amount=None):
+    """Fail closed if invoice-page summary and product rows cannot be reconciled."""
+    serials = [item["sl_no"] for item in items]
+    amounts = [money(item.get("total")) for item in items]
+    cases = [item.get("qty_cases") for item in items]
+    checks = {
+        "serial_sequence": bool(items) and serials == list(range(1, len(items) + 1)),
+        "row_arithmetic": bool(items) and all("manual_check" not in x["flags"] for x in items),
+        "size_and_identity": bool(items) and all(x.get("size_ml") and x.get("brand_name") and x.get("brand_number") for x in items),
+        "case_quantity": expected_total_cases is not None and all(x is not None for x in cases) and sum(cases) == expected_total_cases,
+        "total_amount": expected_total_amount is not None and all(x is not None for x in amounts) and sum(amounts, Decimal(0)) == money(expected_total_amount),
+    }
+    needs_review = sorted({x["sl_no"] for x in items if x.get("flags")})
+    status = "FAILED" if not all(checks.values()) else ("REVIEW_REQUIRED" if needs_review else "PASSED")
+    return {"status":status, "checks":checks, "rows_needing_review":needs_review,
+            "expected_cases":expected_total_cases, "expected_amount":float(money(expected_total_amount)) if money(expected_total_amount) is not None else None,
+            "note":"Bar Indent is an order document, not a verified purchase invoice; saving requires explicit operator confirmation and upstream acceptance."}
+
+def parse_bar_summary(ocr_boxes):
+    """Locate Total label and adjacent cases/amount by spatial alignment.
+
+    Ignore unrelated subtotal-looking numbers; ambiguous evidence returns None.
+    """
+    import re
+    labels = [b for b in ocr_boxes if re.fullmatch(r"total\s*:?", b["text"].strip(), re.I)]
+    for label in reversed(labels):
+        yc = (label["y0"] + label["y1"]) / 2
+        neighbors = [b for b in ocr_boxes if b["x0"] > label["x1"] and abs((b["y0"]+b["y1"])/2-yc) < 17]
+        neighbors.sort(key=lambda b:b["x0"])
+        nums = [b["text"].strip().replace(",","") for b in neighbors if re.fullmatch(r"\d+(?:\.\d{1,2})?",b["text"].strip().replace(",",""))]
+        if len(nums) >= 2:
+            cases = next((int(n) for n in nums if re.fullmatch(r"\d+",n)), None)
+            amount = money(nums[-1])
+            if cases is not None and amount is not None and amount >= 0:
+                return {"total_cases":cases, "issue_price":float(amount)}
+    return {"total_cases":None, "issue_price":None}
