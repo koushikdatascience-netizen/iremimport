@@ -61,6 +61,18 @@ def header_from_text(text):
       "driver_name": capture(r"Driver\s*Name\s*[:\-]?\s*([A-Za-z ]{3,30})"),
     }
 
+def bar_indent_header_from_boxes(boxes):
+    """Extract indent identity without using ICDC invoice assumptions."""
+    ordered = sorted(boxes, key=lambda x: (round(x["y0"] / 18), x["x0"]))
+    text = " ".join(str(x["text"]) for x in ordered)
+    def match(pattern):
+        found = re.search(pattern, text, re.I)
+        return found.group(1).strip() if found else None
+    return {
+        "indent_number": match(r"(?:Bar\\s*)?Indent\\s*(?:No|Number)\\.?\\s*[:#-]?\\s*([A-Z0-9/-]{4,})"),
+        "indent_date": match(r"Indent\\s*Date\\s*[:#-]?\\s*(\\d{1,2}[-/]\\d{1,2}[-/]\\d{4})"),
+    }
+
 def extract_pdf(path, dpi=250, threads=2, ocr_mode='full', document_type='icdc', engine=None):
     # Legacy onnxruntime-backed version is intentional pending measured benchmark.
     from rapidocr_onnxruntime import RapidOCR
@@ -91,7 +103,7 @@ def extract_pdf(path, dpi=250, threads=2, ocr_mode='full', document_type='icdc',
         if boundaries is None:
             checks.update(status='FAILED', reason='bar_table_columns_not_found')
         return {'source':str(path),'document_type':'AP_BAR_INDENT',
-                'header':header_from_text(' '.join(b['text'] for _,boxes,*_ in rendered for b in boxes)),
+                'header':bar_indent_header_from_boxes(rendered[0][1] if rendered else []),
                 'items':found,'summary':summary,'validation':checks,
                 'diagnostics':{'page_count':len(rendered),'elapsed_seconds':round(time.perf_counter()-start,2),
                                'ocr_modes':[r[-1]['mode'] for r in rendered]}}
