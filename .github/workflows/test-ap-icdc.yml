@@ -1,0 +1,23 @@
+name: AP ICDC core tests
+on:
+  pull_request:
+    paths:
+      - 'madhushala-excise-bridge/app/modules/document_import/ap_icdc/**'
+      - 'madhushala-excise-bridge/tests/test_ap_icdc_core.py'
+      - '.github/workflows/test-ap-icdc.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install isolated test runner
+        run: python -m pip install 'pytest>=7,<10'
+      - name: Run AP core tests
+        working-directory: madhushala-excise-bridge
+        run: python -m pytest -q tests/test_ap_icdc_core.py
