@@ -1305,6 +1305,52 @@ function bindDropzone(id, handler, multiple = false) {
     });
 }
 bindDropzone("pdf-dropzone", (files) => void uploadDocuments(files, "pdf"), true);
+// Explicit AP Bar Indent action: never silently switch the existing PDF import.
+(function installBarIndentUpload() {
+    const zone = document.getElementById("pdf-dropzone");
+    if (!zone || document.getElementById("ap-bar-indent-upload")) return;
+    const chooser = document.createElement("input");
+    chooser.type = "file";
+    chooser.accept = ".pdf,application/pdf";
+    chooser.hidden = true;
+    chooser.id = "ap-bar-indent-file";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.id = "ap-bar-indent-upload";
+    button.className = "btn btn-secondary";
+    button.textContent = "Upload Andhra Pradesh Bar Indent";
+    button.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); chooser.click(); });
+    chooser.addEventListener("change", async () => {
+        const file = chooser.files?.[0];
+        if (!file) return;
+        chooser.value = "";
+        if (!sessionToken) {
+            setDocumentImportState("error", "Open import from Madhushala CRM first.");
+            return;
+        }
+        currentUploadKind = "pdf";
+        currentDocumentFiles = [file];
+        currentDocumentFile = file;
+        renderDocumentPreviews([file]);
+        setDocumentImportState("extracting");
+        const form = new FormData();
+        form.append("file", file);
+        try {
+            const payload = await api("/api/v1/document-import/upload/ap/bar-indent", {
+                method: "POST", body: form,
+            });
+            if (!payload?.job) throw new Error("Bar Indent import failed to create a review job.");
+            renderDocumentReview(payload);
+            setDocumentImportState("review");
+        } catch (error) {
+            setText(documentElements().errorMessage, error.message || "Bar Indent extraction failed.");
+            setDocumentImportState("error");
+        }
+    });
+    zone.parentNode?.insertBefore(button, zone.nextSibling);
+    zone.parentNode?.insertBefore(chooser, button.nextSibling);
+})();
+
 bindDropzone("image-dropzone", (files) => void uploadDocuments(files, "image"), true);
 bindDropzone("qr-dropzone", uploadQr);
 document.getElementById("document-refresh")?.addEventListener("click", resetDocumentImport);
