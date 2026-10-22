@@ -64,7 +64,7 @@ def parse_pass_html(html: str, pass_id: str) -> ExtractedDocument:
     parser.feed(html[:1_000_000])
     payload = parser.payload()
     items = []
-    for index, row in enumerate(_table_dict_rows(payload.get("tables") or []), 1):
+    for index, row in enumerate(_table_dict_rows([payload.get("tables") or []]), 1):
         name = _clean_cell(_first_present(row, "Brand Name", "Item Name", "Product Name", "Description of Goods", "Description"))
         if not name or name.casefold().startswith(("total", "sub total")):
             continue
@@ -128,4 +128,4 @@ async def extract_haryana_pass(service, session, url: str):
             "extractedDocument":extracted.model_dump(),
             "normalizedItems":[x.model_dump() for x in normalized],
             "reviewItems":rows,
-            "extracted":{"passHeaderId":pass_id, "tableRows":len(items) if False else len(rows)}}
+            "extracted":{"passHeaderId":pass_id, "tableRows":len(rows)}}
