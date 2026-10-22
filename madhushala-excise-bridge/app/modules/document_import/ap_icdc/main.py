@@ -82,7 +82,7 @@ def extract_pdf(path, dpi=250, threads=2):
         master_width = rendered[0][4]
         cols = [round(x * width/master_width) for x in boundaries]
         # Repeated header is identified from the first few ruled bands.
-        for band in table_rows(boxes, cols, ys, page):
+        for band in table_rows(boxes, cols, ys, page, image_height=height):
             cells = band["cells"]
             if not BRAND.fullmatch(cells[1].replace(" ","").upper()):
                 # Preserve only possible orphan continuations for manual inspection.
