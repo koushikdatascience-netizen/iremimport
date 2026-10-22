@@ -4,7 +4,7 @@ from io import BytesIO
 
 import zxingcpp
 from fastapi import HTTPException, UploadFile
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps, ImageEnhance, ImageFilter, UnidentifiedImageError
 
 
 MAX_QR_IMAGE_BYTES = 12 * 1024 * 1024
@@ -40,26 +40,44 @@ def decode_qr_image_bytes(data: bytes) -> str:
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Uploaded file is not a readable image") from exc
 
-    try:
-        barcodes = zxingcpp.read_barcodes(image)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail="QR image could not be decoded") from exc
+    # Start with the original pixels. Only run bounded fallback passes if
+    # necessary; this avoids slowing down QR codes that already decode.
+    variants = [image]
+    grayscale = ImageOps.autocontrast(ImageOps.grayscale(image))
+    variants.append(grayscale)
+    variants.append(grayscale.filter(ImageFilter.UnsharpMask(radius=2, percent=180, threshold=2)))
+    variants.append(ImageEnhance.Contrast(grayscale).enhance(1.7))
+    width, height = image.size
+    # A QR often takes a small fraction of a photograph. Crop overlapping
+    # regions so barcode detection sees it at a more useful relative scale.
+    for left, top, right, bottom in (
+        (0, 0, width // 2, height // 2),
+        (width // 2, 0, width, height // 2),
+        (0, height // 2, width // 2, height),
+        (width // 2, height // 2, width, height),
+        (width // 4, height // 4, 3 * width // 4, 3 * height // 4),
+    ):
+        crop = grayscale.crop((left, top, right, bottom))
+        if crop.width >= 100 and crop.height >= 100:
+            variants.append(crop)
 
-    # Prefer an actual QR result when an image contains multiple barcode types.
-    for barcode in barcodes:
-        value = str(getattr(barcode, "text", "") or "").strip()
-        if value and getattr(barcode, "format", None) == zxingcpp.BarcodeFormat.QRCode:
-            return value
+    for candidate in variants:
+        try:
+            barcodes = zxingcpp.read_barcodes(candidate)
+        except Exception:
+            continue
+        for barcode in barcodes:
+            value = str(getattr(barcode, "text", "") or "").strip()
+            if value and getattr(barcode, "format", None) == zxingcpp.BarcodeFormat.QRCode:
+                return value
+        # Older ZXing builds may expose QR formats differently. The URL
+        # validator downstream still decides whether a decoded link is safe.
+        for barcode in barcodes:
+            value = str(getattr(barcode, "text", "") or "").strip()
+            if value:
+                return value
 
-    # Some zxing-cpp builds expose equivalent format values differently. If a
-    # readable barcode was returned, let the existing QR-link validator decide
-    # whether its text is a supported HTTP(S) URL.
-    for barcode in barcodes:
-        value = str(getattr(barcode, "text", "") or "").strip()
-        if value:
-            return value
-
-    raise HTTPException(status_code=422, detail="No QR code detected in this image")
+    raise HTTPException(status_code=422, detail="No QR code detected after enhanced photo decoding")
 
 
 async def decode_qr_upload(file: UploadFile) -> str:
