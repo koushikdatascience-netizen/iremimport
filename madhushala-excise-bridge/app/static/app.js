@@ -212,19 +212,40 @@ async function savePurchaseFromJob(source = "review") {
 }
 
 async function decodeQrFromImage(file) {
-    if (!("BarcodeDetector" in window)) {
-        throw new Error("QR scanning is not supported in this browser. Paste the QR link below after scanning externally.");
+    // Browser detection is opportunistic, NOT authoritative. Printed excise
+    // documents and photographs often decode successfully only with ZXing.
+    let browserValue = "";
+    if ("BarcodeDetector" in window) {
+        try {
+            const bitmap = await createImageBitmap(file);
+            try {
+                const detector = new BarcodeDetector({formats: ["qr_code"]});
+                const codes = await detector.detect(bitmap);
+                browserValue = String(codes?.find(code => code?.rawValue)?.rawValue || "").trim();
+            } finally {
+                bitmap.close?.();
+            }
+        } catch (error) {
+            console.debug("Browser QR decoder unavailable; using server ZXing fallback", error);
+        }
     }
-    const bitmap = await createImageBitmap(file);
+    if (browserValue) return browserValue;
+
+    // Reuse the existing authenticated POST /qr/decode route. The backend has
+    // EXIF correction, ZXing decoding and its own image validation.
+    const form = new FormData();
+    form.append("file", file, file.name || "qr-photo.jpg");
     try {
-        const detector = new BarcodeDetector({formats: ["qr_code"]});
-        const codes = await detector.detect(bitmap);
-        const value = codes?.[0]?.rawValue || "";
-        if (!value) throw new Error("No QR code detected in this image. Paste the QR link below if the code is readable on your phone.");
-        return value;
-    } finally {
-        bitmap.close?.();
+        const decoded = await api("/api/v1/document-import/qr/decode", {
+            method: "POST",
+            body: form,
+        });
+        const value = String(decoded?.value || "").trim();
+        if (value) return value;
+    } catch (error) {
+        if (error?.status !== 422) throw error;
     }
+    throw new Error("QR could not be decoded even with the server scanner. Try a sharper, closer crop around the QR, or paste its link.");
 }
 
 async function extractQrUrl(qrUrl) {
