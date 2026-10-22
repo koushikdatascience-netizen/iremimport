@@ -5,6 +5,7 @@ on:
       - 'madhushala-excise-bridge/app/modules/document_import/ap_icdc/**'
       - 'madhushala-excise-bridge/tests/test_ap_icdc_core.py'
       - 'madhushala-excise-bridge/tests/test_ap_indent_and_performance.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/routes.py'
       - '.github/workflows/test-ap-icdc.yml'
   workflow_dispatch:
 jobs:
