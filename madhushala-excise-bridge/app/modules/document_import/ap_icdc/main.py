@@ -10,6 +10,8 @@ import re
 import time
 from pathlib import Path
 from .extract import render_pages, ocr_boxes, grid, choose_columns, table_rows
+from .performance import ocr_page
+from .bar_indent import select_bar_columns, parse_bar_rows, validate_bar_items
 from .parse import parse_cells, merge_continuation, BRAND, clean_name
 from .validate import validate_document
 
@@ -59,22 +61,39 @@ def header_from_text(text):
       "driver_name": capture(r"Driver\s*Name\s*[:\-]?\s*([A-Za-z ]{3,30})"),
     }
 
-def extract_pdf(path, dpi=250, threads=2):
+def extract_pdf(path, dpi=250, threads=2, ocr_mode='full', document_type='icdc', engine=None):
     # Legacy onnxruntime-backed version is intentional pending measured benchmark.
     from rapidocr_onnxruntime import RapidOCR
     import os
     os.environ.setdefault("OMP_NUM_THREADS", str(threads))
-    engine = RapidOCR()
+    engine = engine if engine is not None else RapidOCR()
     start = time.perf_counter()
+    with __import__('fitz').open(str(path)) as _source:
+        page_count = len(_source)
     rendered = []
     for page, img in render_pages(path, dpi=dpi):
-        boxes = ocr_boxes(engine, img)
         xs, ys = grid(img)
-        rendered.append((page, boxes, xs, ys, img.shape[1], img.shape[0]))
-    boundaries = choose_columns([(p,x,y) for p,_,x,y,_,_ in rendered])
+        boxes, optimization = ocr_page(engine, img, page, page_count, mode=ocr_mode)
+        rendered.append((page, boxes, xs, ys, img.shape[1], img.shape[0], optimization))
+    boundaries = (select_bar_columns if document_type == 'bar_indent' else choose_columns)([(p,x,y) for p,_,x,y,_,_,_ in rendered])
+    if document_type == 'bar_indent':
+        found = []
+        for page, boxes, xs, ys, width, height, optimization in rendered:
+            if boundaries is None:
+                continue
+            cols = [round(x * width / rendered[0][4]) for x in boundaries]
+            found.extend(parse_bar_rows(boxes, cols, ys, page, height))
+        checks = validate_bar_items(found)
+        if boundaries is None:
+            checks.update(status='FAILED', reason='bar_table_columns_not_found')
+        return {'source':str(path),'document_type':'AP_BAR_INDENT',
+                'header':header_from_text(' '.join(b['text'] for _,boxes,*_ in rendered for b in boxes)),
+                'items':found,'summary':{},'validation':checks,
+                'diagnostics':{'page_count':len(rendered),'elapsed_seconds':round(time.perf_counter()-start,2),
+                               'ocr_modes':[r[-1]['mode'] for r in rendered]}}
     candidates = []
     all_text = []
-    for page, boxes, xs, ys, width, height in rendered:
+    for page, boxes, xs, ys, width, height, optimization in rendered:
         all_text.extend([b["text"] for b in boxes])
         if boundaries is None:
             continue
@@ -99,7 +118,7 @@ def extract_pdf(path, dpi=250, threads=2):
     summary = {key: None for key in FIELDS}
     summary.update({"invoice_qty_imfl_fl":None,"invoice_qty_beer":None,"invoice_qty_total":None})
     # Conservative: summary fields may span multiple OCR boxes; keep null until identified.
-    for page, boxes, _, _, width, _ in rendered:
+    for page, boxes, _, _, width, _, optimization in rendered:
         if page >= max(1, len(rendered)-1):
             values = summary_from_boxes(boxes,width)
             for key, val in values.items():
@@ -119,6 +138,7 @@ def extract_pdf(path, dpi=250, threads=2):
         "items":items, "summary":summary,"validation":validation,
         "diagnostics":{"page_count":len(rendered),"ocr_elapsed_seconds":round(time.perf_counter()-start,2),
              "grid_columns_detected":bool(boundaries),"candidate_count":len(items),
+             "ocr_modes":[r[-1]["mode"] for r in rendered],
              "warning":"Experimental extractor; FAIL-CLOSED. Never auto-save."}
     }
 
@@ -127,6 +147,8 @@ def main():
     p.add_argument("input",help="PDF file or directory")
     p.add_argument("-o","--output",default=None)
     p.add_argument("--dpi",type=int,default=250)
+    p.add_argument("--ocr-mode",choices=["full","table"],default="full",help="Use cautious cropped OCR on middle pages")
+    p.add_argument("--document-type",choices=["icdc","bar_indent"],default="icdc")
     args=p.parse_args()
     paths = sorted(Path(args.input).glob("*.pdf")) if Path(args.input).is_dir() else [Path(args.input)]
     dest=Path(args.output) if args.output else Path("ap_icdc_output")
@@ -135,8 +157,10 @@ def main():
     else:
         dest.mkdir(parents=True,exist_ok=True)
     all_items=[]
+    from rapidocr_onnxruntime import RapidOCR
+    shared_engine = RapidOCR()
     for path in paths:
-        result=extract_pdf(path,dpi=args.dpi)
+        result=extract_pdf(path,dpi=args.dpi,ocr_mode=args.ocr_mode,document_type=args.document_type,engine=shared_engine)
         output=dest if dest.suffix.lower()==".json" and len(paths)==1 else dest / (path.stem+".json")
         output.write_text(json.dumps(result,indent=2,ensure_ascii=False),encoding="utf-8")
         print(f"{path.name}: {result['validation']['status']} | {len(result['items'])} rows | {result['diagnostics']['ocr_elapsed_seconds']}s")
