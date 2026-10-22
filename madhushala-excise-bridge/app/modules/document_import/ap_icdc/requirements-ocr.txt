@@ -1,0 +1,10 @@
+# Isolated CPU OCR dependencies; intentionally NOT added to production requirements.
+# Pin exact patch versions after the two real invoice benchmarks pass.
+rapidocr-onnxruntime>=1.3.20,<2
+onnxruntime>=1.17,<2
+opencv-python-headless>=4.8,<5
+numpy>=1.24,<3
+PyMuPDF>=1.24
+pytest>=7
+# Optional brand-name second-pass dependency:
+pytesseract>=0.3.10
