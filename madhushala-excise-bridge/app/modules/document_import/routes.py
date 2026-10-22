@@ -14,6 +14,7 @@ from app.modules.document_import.purchase_handoff import build_purchase_handoff
 from app.modules.document_import.purchase_preview import calculate_purchase_preview
 from app.modules.document_import.purchase_required import resolve_required_purchase_header
 from app.modules.document_import.qr_decoder import decode_qr_upload
+from app.modules.document_import.haryana_qr import is_haryana_pass_url, extract_haryana_pass
 from app.modules.document_import.document_mapping import save_document_row_mappings
 from app.modules.document_import.up_excise_qr import (
     extract_up_transport_pass,
@@ -143,6 +144,8 @@ def create_router(service: DocumentImportService) -> APIRouter:
     @router.post("/qr/extract")
     async def extract_qr_link(payload: QrExtractRequest, request: Request):
         session = session_service.from_request(request)
+        if is_haryana_pass_url(payload.url):
+            return await extract_haryana_pass(service, session, payload.url)
         if is_up_transport_pass_url(payload.url):
             result = await extract_up_transport_pass(service, session, payload.url)
             supplier_name = up_supplier_hint(result.get("extracted"))

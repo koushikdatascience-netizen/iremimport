@@ -1,0 +1,24 @@
+name: Haryana QR regression tests
+on:
+  pull_request:
+    paths:
+      - 'madhushala-excise-bridge/app/modules/document_import/haryana_qr.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/routes.py'
+      - 'madhushala-excise-bridge/tests/test_haryana_qr.py'
+      - '.github/workflows/test-haryana-qr.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: madhushala-excise-bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q tests/test_haryana_qr.py tests/test_qr_browser_fallback.py tests/test_purchase_handoff.py tests/test_document_mapping_without_excise_code.py
