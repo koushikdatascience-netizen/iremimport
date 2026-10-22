@@ -14,7 +14,7 @@ from fastapi import HTTPException
 
 from app.modules.document_import.normalizer import normalize_extracted_document
 from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct
-from app.modules.document_import.service import _ReadableHtmlParser, _clean_cell, _table_dict_rows, _first_present
+from app.modules.document_import.service import _ReadableHtmlParser, _clean_cell, _first_present
 
 ALLOWED_HOST = "portal.haryanatax.gov.in"
 ALLOWED_PATH = "/department/qrgeneration/passdetails"
@@ -64,7 +64,19 @@ def parse_pass_html(html: str, pass_id: str) -> ExtractedDocument:
     parser.feed(html[:1_000_000])
     payload = parser.payload()
     items = []
-    for index, row in enumerate(_table_dict_rows([payload.get("tables") or []]), 1):
+    # The generic table helper skips the Haryana "Brand Name" header.
+    rows = []
+    headers = None
+    for cells in payload.get("tables") or []:
+        keys = [re.sub(r"[^a-z0-9]", "", _clean_cell(x).casefold()) for x in cells]
+        has_name = any(x in {"brandname", "itemname", "productname", "descriptionofgoods", "description"} for x in keys)
+        has_qty = any(x in {"cases", "caseqty", "noofcases", "qtycases", "quantitycases", "loosebottles", "qtybottles", "noofbottles", "bottleqty"} for x in keys)
+        if has_name and has_qty:
+            headers = cells
+            continue
+        if headers and len(cells) == len(headers):
+            rows.append(dict(zip(headers, cells)))
+    for index, row in enumerate(rows, 1):
         name = _clean_cell(_first_present(row, "Brand Name", "Item Name", "Product Name", "Description of Goods", "Description"))
         if not name or name.casefold().startswith(("total", "sub total")):
             continue
