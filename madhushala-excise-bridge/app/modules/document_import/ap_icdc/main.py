@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from .extract import render_pages, ocr_boxes, grid, choose_columns, table_rows
 from .performance import ocr_page
-from .bar_indent import select_bar_columns, parse_bar_rows, validate_bar_items
+from .bar_indent import select_bar_columns, parse_bar_rows, validate_bar_items, parse_bar_summary
 from .parse import parse_cells, merge_continuation, BRAND, clean_name
 from .validate import validate_document
 
@@ -83,12 +83,16 @@ def extract_pdf(path, dpi=250, threads=2, ocr_mode='full', document_type='icdc',
                 continue
             cols = [round(x * width / rendered[0][4]) for x in boundaries]
             found.extend(parse_bar_rows(boxes, cols, ys, page, height))
-        checks = validate_bar_items(found)
+        summaries = [parse_bar_summary(boxes) for _, boxes, *_ in rendered]
+        complete = [value for value in summaries if value["total_cases"] is not None and value["issue_price"] is not None]
+        summary = complete[-1] if complete else {"total_cases":None, "issue_price":None}
+        checks = validate_bar_items(found, expected_total_cases=summary["total_cases"],
+                                    expected_total_amount=summary["issue_price"])
         if boundaries is None:
             checks.update(status='FAILED', reason='bar_table_columns_not_found')
         return {'source':str(path),'document_type':'AP_BAR_INDENT',
                 'header':header_from_text(' '.join(b['text'] for _,boxes,*_ in rendered for b in boxes)),
-                'items':found,'summary':{},'validation':checks,
+                'items':found,'summary':summary,'validation':checks,
                 'diagnostics':{'page_count':len(rendered),'elapsed_seconds':round(time.perf_counter()-start,2),
                                'ocr_modes':[r[-1]['mode'] for r in rendered]}}
     candidates = []
