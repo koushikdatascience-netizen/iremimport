@@ -6,7 +6,7 @@ Product Type, Size Code, Pack Qty/Size, Pack Type, Cases, Issue Price, Amount.
 from __future__ import annotations
 import re
 from decimal import Decimal
-from .extract import table_rows
+from .extract import cell_text
 from .validate import money
 
 COLUMNS = ("sl_no", "product_code", "brand_code", "brand_name", "product_type",
@@ -47,9 +47,26 @@ def parse_bar_row(values, page, confidence=1):
     }
 
 def parse_bar_rows(boxes, columns, horizontal_lines, page, height):
-    output=[]
-    for row in table_rows(boxes,columns,horizontal_lines,page,image_height=height):
-        item=parse_bar_row(row["cells"],page,min(row["confidences"] or [0]))
+    """Spatially assign OCR text to all 11 Bar Indent columns."""
+    if len(columns) != 12:
+        return []
+    lines = sorted(horizontal_lines)
+    if len(lines) < 2:
+        return []
+    import bisect
+    cells = {}
+    for box in boxes:
+        xc = (box["x0"] + box["x1"]) / 2
+        yc = (box["y0"] + box["y1"]) / 2
+        col = bisect.bisect_right(columns, xc) - 1
+        row = bisect.bisect_right(lines, yc) - 1
+        if 0 <= col < 11 and 0 <= row < len(lines)-1:
+            cells.setdefault((row,col), []).append(box)
+    output = []
+    for row in range(len(lines)-1):
+        values = [cell_text(cells.get((row,col),[])) for col in range(11)]
+        scores = [b["confidence"] for col in range(11) for b in cells.get((row,col),[])]
+        item = parse_bar_row(values,page,min(scores or [0]))
         if item:
             output.append(item)
     return output
