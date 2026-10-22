@@ -77,7 +77,16 @@ def assign_cells(boxes, xs, ys):
 def cell_text(parts):
     return " ".join(x["text"] for x in sorted(parts, key=lambda b: (round(b["y0"]/12), b["x0"])))
 
-def table_rows(boxes, xs, ys, page):
+def table_rows(boxes, xs, ys, page, image_height=None):
+    # A page-cut product may have no closing horizontal rule. Add an OCR-supported
+    # interval only when ink/words occur below the last grid line and above footer.
+    ys = list(ys)
+    if image_height and len(ys) >= 2:
+        footer_limit = int(image_height * 0.966)
+        tail = [b for b in boxes if ys[-1] + 5 < (b["y0"] + b["y1"]) / 2 < footer_limit
+                and xs and xs[0] <= (b["x0"] + b["x1"])/2 <= xs[-1]]
+        if tail:
+            ys.append(min(footer_limit, int(max(b["y1"] for b in tail) + 12)))
     cells = assign_cells(boxes, xs, ys)
     result = []
     for r in range(len(ys)-1):
