@@ -4,6 +4,8 @@ on:
     paths:
       - 'madhushala-excise-bridge/app/modules/document_import/ap_icdc/**'
       - 'madhushala-excise-bridge/tests/test_ap_icdc_core.py'
+      - 'madhushala-excise-bridge/tests/test_ap_indent_and_performance.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/routes.py'
       - '.github/workflows/test-ap-icdc.yml'
   workflow_dispatch:
 jobs:
@@ -17,7 +19,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install isolated test runner
-        run: python -m pip install 'pytest>=7,<10'
+        run: python -m pip install 'pytest>=7,<10' 'numpy>=1.24,<3' 'opencv-python-headless>=4.8,<5' 'PyMuPDF>=1.24'
       - name: Run AP core tests
         working-directory: madhushala-excise-bridge
-        run: python -m pytest -q tests/test_ap_icdc_core.py
+        run: python -m pytest -q tests/test_ap_icdc_core.py tests/test_ap_indent_and_performance.py

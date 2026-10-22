@@ -14,6 +14,7 @@ from app.modules.document_import.purchase_handoff import build_purchase_handoff
 from app.modules.document_import.purchase_preview import calculate_purchase_preview
 from app.modules.document_import.purchase_required import resolve_required_purchase_header
 from app.modules.document_import.qr_decoder import decode_qr_upload
+from app.modules.document_import.ap_icdc.bar_upload import process_bar_indent_upload
 from app.modules.document_import.document_mapping import save_document_row_mappings
 from app.modules.document_import.up_excise_qr import (
     extract_up_transport_pass,
@@ -65,6 +66,12 @@ def create_router(service: DocumentImportService) -> APIRouter:
             raise HTTPException(status_code=400, detail="PDF upload accepts .pdf files only")
         session = session_service.from_request(request)
         return await service.process_upload(session, file)
+
+    @router.post("/upload/ap/bar-indent")
+    async def upload_ap_bar_indent(request: Request, file: UploadFile = File(...)):
+        """Dedicated opt-in Bar Indent import; other state routes are untouched."""
+        session = session_service.from_request(request)
+        return await process_bar_indent_upload(service, session, file)
 
     @router.post("/upload/image")
     async def upload_image(request: Request, file: UploadFile = File(...)):
