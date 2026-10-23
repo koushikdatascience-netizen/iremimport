@@ -126,7 +126,7 @@ def extract_osbcl(document) -> tuple[ExtractedDocument, dict[str, Any]]:
     if (reported["cases"] != cases_total or reported["loose"] != loose_total
         or reported["mger"] != mger_total or reported["amount"] != amount_total):
         raise ValueError("Odisha product totals do not match printed table subtotal")
-    financials = _financials(document[-1].get_text("text"))
+    financials = _financials("\n".join(page.get_text("text") for page in document))
     if amount_total != financials["subtotal"]:
         raise ValueError("Odisha printed invoice subtotal mismatch")
     if financials["subtotal"] + financials["vat"] + financials["tcs"] != financials["total"]:
