@@ -995,6 +995,13 @@ class DocumentImportService:
                 extracted = await LlamaCloudClient().extract_products(temp_path, filename)
                 meta = {"engine": "llamaparse"}
 
+            # Andhra Pradesh invoice/indent category totals are metadata, not products.
+            # Apply only to positively identified AP documents. Other states unchanged.
+            if ext == "pdf":
+                from app.modules.document_import.ap_icdc.category_summary import strip_ap_category_totals
+                extracted, category_audit = strip_ap_category_totals(extracted, filename)
+                meta = {**meta, **category_audit}
+
             tagged: list[ExtractedProduct] = []
             for item in extracted.items or []:
                 payload = item.model_dump()
