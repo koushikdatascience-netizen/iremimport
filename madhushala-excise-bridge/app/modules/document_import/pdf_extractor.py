@@ -354,6 +354,8 @@ def _page_tables(
 
 def _detect_profile(text: str) -> str:
     lower = text.casefold()
+    if "odisha state beverages corporation" in lower and "delivery challan cum invoice" in lower:
+        return "ODISHA_OSBCL_INVOICE"
     if "government of telangana" in lower and ("invoice cum delivery challan" in lower or "icdc" in lower):
         return "TELANGANA_ICDC"
     if (
@@ -1344,6 +1346,12 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
 
         full_text = "\n".join(page_texts)
         profile = _detect_profile(full_text)
+
+        if profile == "ODISHA_OSBCL_INVOICE":
+            # Strict Odisha path: no generic or Llama fallback after an
+            # identified OSBCL invoice fails accounting reconciliation.
+            from app.modules.document_import.odisha_osbcl import extract_osbcl
+            return extract_osbcl(document)
 
         # WB repeats the same document as ORIGINAL/DUPLICATE/TRIPLICATE/
         # QUADRUPLICATE. Detect copies from the cheap text pass and perform
