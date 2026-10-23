@@ -49,8 +49,8 @@ def _financials(text: str) -> dict[str, Decimal]:
     # the immediately following amount, not a product-row field.
     def value(label: str):
         matches = re.findall(rf"(?m)^\s*{label}\s*\n\s*([\d,]+\.\d{{2}})\s*$", text, re.I)
-        if len(matches) != 1:
-            raise ValueError(f"Missing or duplicate Odisha total: {label}")
+        if not matches or len(set(matches)) != 1:
+            raise ValueError(f"Missing or conflicting Odisha total: {label}")
         return _money(matches[0])
     return {"subtotal": value("Sub Total"), "vat": value("VAT"),
             "tcs": value("TCS"), "total": value("Total")}
