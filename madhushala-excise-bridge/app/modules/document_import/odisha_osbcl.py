@@ -140,7 +140,9 @@ def extract_osbcl(document) -> tuple[ExtractedDocument, dict[str, Any]]:
         "invoiceTotals": {
             "cases":cases_total,"loose":loose_total,
             **{key:str(value) for key,value in financials.items()},
-            "mger":str(mger_total), "grandTotal":str(financials["total"]),\n            "grossAmount":str(financials["subtotal"]), "netAmount":str(financials["total"]),\n            "roundOff":None, "taxes":{"vat":str(financials["vat"]), "tcs":str(financials["tcs"])},
+            "mger":str(mger_total), "grandTotal":str(financials["total"]),
+            "grossAmount":str(financials["subtotal"]), "netAmount":str(financials["total"]),
+            "roundOff":None, "taxes":{"vat":str(financials["vat"]), "tcs":str(financials["tcs"])},
         },
     }
     extracted = ExtractedDocument(
