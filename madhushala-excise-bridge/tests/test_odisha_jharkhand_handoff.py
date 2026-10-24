@@ -67,3 +67,40 @@ def test_west_bengal_token_is_not_overridden():
         def get_items(self, session, job_id):
             return [{"raw_data_json": json.dumps({"sourceState": "WEST_BENGAL", "transportPassNo": "WB-UNCHANGED"})}]
     assert DocumentPurchaseAdapter(Service()).odisha_tp_pass({}, "job") == ""
+
+
+def test_jharkhand_permit_prefill_and_manual_override():
+    import json
+    from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
+    class Service:
+        def get_items(self, session, job_id):
+            return [{"raw_data_json": json.dumps({
+                "sourceState": "JHARKHAND", "transportPassNo": "DHA-2026-2027/6267"
+            })}]
+    adapter = DocumentPurchaseAdapter(Service())
+    assert adapter.non_wb_tp_pass({}, "job") == "DHA-2026-2027/6267"
+
+
+def test_non_wb_conflicting_permits_rejected():
+    import json
+    from fastapi import HTTPException
+    from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
+    class Service:
+        def get_items(self, session, job_id):
+            return [{"raw_data_json": json.dumps({
+                "sourceState": "JHARKHAND", "transportPassNo": pass_no
+            })} for pass_no in ("DHA-2026-2027/6267", "DHA-2026-2027/6268")]
+    with pytest.raises(HTTPException) as exc:
+        DocumentPurchaseAdapter(Service()).non_wb_tp_pass({}, "job")
+    assert exc.value.status_code == 422
+
+
+def test_non_wb_prefill_ignores_west_bengal():
+    import json
+    from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
+    class Service:
+        def get_items(self, session, job_id):
+            return [{"raw_data_json": json.dumps({
+                "sourceState": "WEST_BENGAL", "transportPassNo": "WB-123"
+            })}]
+    assert DocumentPurchaseAdapter(Service()).non_wb_tp_pass({}, "job") == ""
