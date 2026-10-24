@@ -2082,6 +2082,7 @@ async def test_jharkhand_scanned_repair_recovers_ml_from_source_unit_text(monkey
     assert int(result.items[0].ml) == 180
     assert int(result.items[0].box) == 4
     assert int(result.items[0].loose or 0) == 0
+    assert result.sourceState == "JHARKHAND"
     assert result.items[0].model_dump()["quantitySemantics"] == "jharkhand_cases_dot_loose"
     assert requested_modes == [llama_module.settings.DOCUMENT_IMPORT_SCANNED_EXTRACTION_MODE]
     assert requested_modes[0] == "MULTIMODAL"
