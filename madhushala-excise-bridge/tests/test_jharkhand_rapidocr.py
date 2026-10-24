@@ -44,3 +44,33 @@ def test_missing_price_fail_closed():
 def test_grid_detection_failure_is_explicit():
     with pytest.raises(ValueError, match="incomplete"):
         _cells([], [0, 100], [0, 200])
+
+
+def test_column_anchor_segmentation_without_detectable_grid():
+    from app.modules.document_import.jharkhand_rapidocr import column_anchored_rows
+    width, height = 1000, 1200
+    # Synthetic OCR boxes in known Jharkhand column centers, two source rows.
+    centers = [48, 90, 220, 365, 410, 475, 557, 630, 700, 760, 850]
+    texts = [
+        ["1", "Beer", "GODFATHER STRONG BEER", "650 ML", "15.00", "11025.15",
+         "22441.05", "1122.00", "57.90", "3.00", "12238.05"],
+        ["2", "Beer", "KINGFISHER STRONG", "500 ML", "20.00", "11025.15",
+         "22441.05", "1122.00", "57.90", "3.00", "12238.05"],
+    ]
+    boxes = []
+    for y, source in [(400, texts[0]), (440, texts[1])]:
+        for x, value in zip(centers, source):
+            boxes.append({"x0": x-3, "x1": x+3, "y0": y-4, "y1": y+4,
+                          "text": value, "confidence": 0.99})
+    rows = column_anchored_rows(boxes, width, height)
+    assert len(rows) == 2
+    assert rows[0][2] == "GODFATHER STRONG BEER"
+    assert rows[1][4] == "20.00"
+
+
+def test_column_anchor_rejects_missing_serial():
+    from app.modules.document_import.jharkhand_rapidocr import column_anchored_rows
+    boxes = [{"x0": 45, "x1": 50, "y0": y, "y1": y+6,
+              "text": str(n), "confidence": .99} for n, y in [(1, 400), (3, 440)]]
+    with pytest.raises(ValueError, match="missing or out of order"):
+        column_anchored_rows(boxes, 1000, 1200)
