@@ -37,6 +37,14 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
         # own only item identity + physical quantity; Item Master owns the
         # commercial/tax values used by Calculate.
         raw = item.model_dump()
+        # Jharkhand Form-T permit is document-level metadata. Persist it only
+        # for Jharkhand items so Calculate/Save can prefill the TP field.
+        # Existing WB invoice and TP mapping semantics remain unchanged.
+        if str(getattr(document, "sourceState", "") or "").upper() == "JHARKHAND":
+            permit = str(getattr(document, "transportPassNo", "") or "").strip()
+            if permit:
+                raw["sourceState"] = "JHARKHAND"
+                raw["transportPassNo"] = permit
         raw_name = (item.itemName or item.brand or "").strip()
         brand = (item.brand or raw_name).strip()
         ml = parse_ml(item.ml or raw_name) or None
