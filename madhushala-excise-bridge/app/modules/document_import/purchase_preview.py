@@ -104,6 +104,9 @@ async def calculate_purchase_preview(
     job = service.get_job(session, job_id)
     adapter = DocumentPurchaseAdapter(service)
     items = await adapter.purchase_items(session, job_id)
+    header = dict(header or {})
+    if not str(header.get("tpPassNo") or "").strip():
+        header["tpPassNo"] = adapter.odisha_tp_pass(session, job_id)
     if adapter.item_master_snapshot:
         client = adapter.calculation_client(session, items)
     elif settings.is_production:
