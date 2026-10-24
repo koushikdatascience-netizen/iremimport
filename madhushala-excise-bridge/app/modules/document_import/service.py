@@ -1153,6 +1153,15 @@ class DocumentImportService:
                     invoice_filename=str(invoice_meta.get("filename") or ""),
                 )
 
+            # Non-WB financial metadata travels as source evidence only.
+            # Do not alter the proven WB invoice-enrichment or Calculate flow.
+            if not enrichment_parts and len(primary_parts) == 1:
+                primary_doc = primary_parts[0][0]
+                if str(getattr(primary_doc, "sourceState", "")).upper() in {"ODISHA", "JHARKHAND"}:
+                    invoice_financials = getattr(primary_doc, "invoiceFinancials", None)
+                    if invoice_financials and not isinstance(invoice_financials, dict):
+                        invoice_financials = None
+
             if not merged_items:
                 raise HTTPException(status_code=422, detail="No valid product rows were extracted")
 
