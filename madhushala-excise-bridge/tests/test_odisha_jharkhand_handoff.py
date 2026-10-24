@@ -47,3 +47,23 @@ TCS
 Total
 140.00
 """)
+
+def test_odisha_token_prefill_only_for_odisha():
+    import json
+    from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
+    class Service:
+        def get_items(self, session, job_id):
+            return [
+                {"raw_data_json": json.dumps({"sourceState": "ODISHA", "transportPassNo": "OD-BAL(T)/69/2026-2027"})},
+                {"raw_data_json": json.dumps({"sourceState": "WEST_BENGAL", "transportPassNo": "WB-UNCHANGED"})},
+            ]
+    assert DocumentPurchaseAdapter(Service()).odisha_tp_pass({}, "job") == "OD-BAL(T)/69/2026-2027"
+
+
+def test_west_bengal_token_is_not_overridden():
+    import json
+    from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
+    class Service:
+        def get_items(self, session, job_id):
+            return [{"raw_data_json": json.dumps({"sourceState": "WEST_BENGAL", "transportPassNo": "WB-UNCHANGED"})}]
+    assert DocumentPurchaseAdapter(Service()).odisha_tp_pass({}, "job") == ""
