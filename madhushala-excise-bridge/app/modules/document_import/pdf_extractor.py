@@ -612,8 +612,8 @@ def _extract_jharkhand(
 
 def _jharkhand_permit_number(text: str) -> str | None:
     match = re.search(
-        r"(?:Excise\\s*Permit\\s*No\\.?|Registered\\s*Permit\\s*No\\.?|Permit\\s*No\\.?)"
-        r"\\s*:?\\s*(DHA-\\d{4}-\\d{4}/\\d+)",
+        r"(?:Excise\s*Permit\s*No\.?|Registered\s*Permit\s*No\.?|Permit\s*No\.?)"
+        r"\s*:?\s*(DHA-\d{4}-\d{4}/\d+)",
         text, re.IGNORECASE,
     )
     return match.group(1) if match else None
