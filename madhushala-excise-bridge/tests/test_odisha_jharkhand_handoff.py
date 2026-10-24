@@ -104,3 +104,31 @@ def test_non_wb_prefill_ignores_west_bengal():
                 "sourceState": "WEST_BENGAL", "transportPassNo": "WB-123"
             })}]
     assert DocumentPurchaseAdapter(Service()).non_wb_tp_pass({}, "job") == ""
+
+
+def test_jharkhand_permit_survives_item_normalization():
+    from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct
+    from app.modules.document_import.normalizer import normalize_extracted_document
+    doc = ExtractedDocument(
+        documentType="invoice",
+        sourceState="JHARKHAND",
+        transportPassNo="DHA-2026-2027/6267",
+        items=[ExtractedProduct(itemName="TEST BRAND 750 ML", brand="TEST BRAND", ml=750, box=2, loose=0)],
+    )
+    normalized = normalize_extracted_document(doc, "DOCUMENT_PDF")
+    assert len(normalized) == 1
+    assert normalized[0].rawData["transportPassNo"] == "DHA-2026-2027/6267"
+    assert normalized[0].rawData["sourceState"] == "JHARKHAND"
+
+
+def test_wb_document_normalization_does_not_inject_permit():
+    from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct
+    from app.modules.document_import.normalizer import normalize_extracted_document
+    doc = ExtractedDocument(
+        documentType="invoice",
+        sourceState="WEST_BENGAL",
+        transportPassNo="WB-SAMPLE",
+        items=[ExtractedProduct(itemName="TEST BRAND 750 ML", brand="TEST BRAND", ml=750, box=2, loose=0)],
+    )
+    normalized = normalize_extracted_document(doc, "DOCUMENT_PDF")
+    assert "transportPassNo" not in normalized[0].rawData
