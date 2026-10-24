@@ -84,6 +84,52 @@ def _cells(boxes: list[dict], xs: list[int], ys: list[int]) -> list[list[str]]:
     return rows
 
 
+# Anchor columns to the actual Jharkhand invoice layout, not AP grid rules.
+# Fractions measured from the page width. Fail closed on nonmatching layouts.
+COLUMN_EDGES = (.033, .064, .126, .333, .391, .438, .513, .601, .660, .732, .793, .907)
+
+
+def column_anchored_rows(boxes: list[dict], width: int, height: int) -> list[list[str]]:
+    """Segment source rows by left serial anchors, then text by column centers."""
+    if width <= 0 or height <= 0 or len(COLUMN_EDGES) != EXPECTED_COLUMNS + 1:
+        raise ValueError("Invalid Jharkhand page geometry")
+    # Invoice grid starts below the 25% header band on page 1; page 2
+    # begins with the continuation table. Never count handwritten footer ink.
+    anchors = []
+    for b in boxes:
+        cx = (b["x0"] + b["x1"]) / (2 * width)
+        cy = (b["y0"] + b["y1"]) / (2 * height)
+        value = str(b["text"]).strip()
+        if COLUMN_EDGES[0] <= cx < COLUMN_EDGES[1] and .04 < cy < .80 and re.fullmatch(r"\d{1,2}", value):
+            anchors.append((int(value), (b["y0"] + b["y1"]) / 2))
+    anchors.sort(key=lambda a: a[1])
+    if not anchors:
+        raise ValueError("No trusted Jharkhand serial-row anchors")
+    if len({v for v, _ in anchors}) != len(anchors):
+        raise ValueError("Duplicate Jharkhand serial anchors")
+    # Ignore upper header text by requiring monotonically consecutive rows.
+    if any(anchors[i+1][0] != anchors[i][0] + 1 for i in range(len(anchors)-1)):
+        raise ValueError("Jharkhand serial anchors missing or out of order")
+    rows = []
+    for idx, (serial, top) in enumerate(anchors):
+        lower = (top + anchors[idx+1][1]) / 2 if idx + 1 < len(anchors) else min(height * .82, top + height * .026)
+        upper = (top + anchors[idx-1][1]) / 2 if idx else max(0, top - height * .01)
+        columns = [[] for _ in range(EXPECTED_COLUMNS)]
+        for b in boxes:
+            cy = (b["y0"] + b["y1"]) / 2
+            cx = (b["x0"] + b["x1"]) / (2 * width)
+            if not upper <= cy < lower:
+                continue
+            column = next((i for i in range(EXPECTED_COLUMNS) if COLUMN_EDGES[i] <= cx < COLUMN_EDGES[i+1]), None)
+            if column is not None:
+                columns[column].append(b)
+        values = [" ".join(v["text"] for v in sorted(col, key=lambda v:(round(v["y0"]/12), v["x0"])))
+                  for col in columns]
+        values[0] = str(serial)
+        rows.append(values)
+    return rows
+
+
 def extract(pdf: Path, engine) -> dict:
     """Run strictly local OCR; never call the live Purchase Save endpoint."""
     all_rows = []
@@ -91,18 +137,21 @@ def extract(pdf: Path, engine) -> dict:
     for page_no, image in render_pages(pdf, dpi=250):
         xs, ys = grid(image)
         boxes = ocr_boxes(engine, image)
-        if len(xs) != EXPECTED_COLUMNS + 1:
-            raise ValueError(f"Page {page_no}: expected 12 table vertical rules, found {len(xs)}")
-        if not boxes or len(ys) < 2:
-            raise ValueError(f"Page {page_no}: table OCR/grid unavailable")
-        rows = _cells(boxes, xs, ys)
+        if not boxes:
+            raise ValueError(f"Page {page_no}: no OCR text detected")
+        if len(xs) == EXPECTED_COLUMNS + 1 and len(ys) >= 2:
+            rows = _cells(boxes, xs, ys)
+            method = "grid"
+        else:
+            rows = column_anchored_rows(boxes, image.shape[1], image.shape[0])
+            method = "column-anchors"
         # Header and continuation pages may start on a non-1 serial.
         page_rows = []
         for cells in rows:
             if re.fullmatch(r"\d+", cells[0].strip()):
                 page_rows.append(cells)
         all_rows.extend(page_rows)
-        diagnostics.append({"page": page_no, "ocrBoxes": len(boxes), "sourceRows": len(page_rows)})
+        diagnostics.append({"page": page_no, "ocrBoxes": len(boxes), "sourceRows": len(page_rows), "segmentation": method})
     products = parse_cells(all_rows)
     return {"status": "REVIEW_REQUIRED", "validated": False,
             "reason": "OCR rows need printed invoice financial and Form-T reconciliation",
