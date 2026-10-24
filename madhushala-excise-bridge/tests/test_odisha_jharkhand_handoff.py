@@ -132,3 +132,37 @@ def test_wb_document_normalization_does_not_inject_permit():
     )
     normalized = normalize_extracted_document(doc, "DOCUMENT_PDF")
     assert "transportPassNo" not in normalized[0].rawData
+
+
+def test_jharkhand_invoice_permit_pair_does_not_duplicate_purchase_items():
+    from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct
+    from app.modules.document_import.jharkhand_pair import join_verified_pair
+    row = ExtractedProduct(itemName="SEAGRAMS ROYAL STAG WHISKY", ml=750, box=2, loose=0)
+    invoice = ExtractedDocument(
+        sourceState="JHARKHAND", invoiceNumber="003_COM_DHN_26-27/6267",
+        items=[row], documentType="invoice",
+    )
+    permit = ExtractedDocument(
+        sourceState="JHARKHAND", transportPassNo="DHA-2026-2027/6267",
+        items=[row], documentType="invoice",
+    )
+    joined = join_verified_pair(invoice, permit)
+    assert len(joined.items) == 1
+    assert joined.invoiceNumber == invoice.invoiceNumber
+    assert joined.transportPassNo == permit.transportPassNo
+    assert joined.jharkhandPairValidated is True
+
+
+def test_jharkhand_pair_rejects_mismatched_cases():
+    from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct
+    from app.modules.document_import.jharkhand_pair import join_verified_pair
+    invoice = ExtractedDocument(
+        sourceState="JHARKHAND", invoiceNumber="BILL1",
+        items=[ExtractedProduct(itemName="TEST WHISKY", ml=750, box=2)],
+    )
+    permit = ExtractedDocument(
+        sourceState="JHARKHAND", transportPassNo="DHA-2026-2027/6267",
+        items=[ExtractedProduct(itemName="TEST WHISKY", ml=750, box=3)],
+    )
+    with pytest.raises(ValueError, match="disagree"):
+        join_verified_pair(invoice, permit)
