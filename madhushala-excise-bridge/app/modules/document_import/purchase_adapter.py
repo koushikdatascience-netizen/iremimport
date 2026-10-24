@@ -349,8 +349,8 @@ class DocumentPurchaseAdapter:
             exact_purchase_rates=self.exact_pdf_purchase_rates,
         )
 
-    def odisha_tp_pass(self, session: dict[str, Any], job_id: str) -> str:
-        """Optional Odisha-only Token No prefill. Never changes WB TP behavior."""
+    def non_wb_tp_pass(self, session: dict[str, Any], job_id: str) -> str:
+        """Prefill only verified Odisha tokens or Jharkhand permit numbers; never WB."""
         tokens: set[str] = set()
         for row in self.document_service.get_items(session, job_id):
             raw = row.get("raw_data_json") if isinstance(row, dict) else None
@@ -360,21 +360,31 @@ class DocumentPurchaseAdapter:
                 data = json.loads(raw) if isinstance(raw, str) else raw
             except (TypeError, ValueError):
                 continue
-            if not isinstance(data, dict) or str(data.get("sourceState") or "").upper() != "ODISHA":
+            if not isinstance(data, dict):
                 continue
-            token = str(data.get("transportPassNo") or (data.get("rawPdfRow") or {}).get("sourceToken") or "").strip()
+            state = str(data.get("sourceState") or "").upper()
+            if state not in {"ODISHA", "JHARKHAND"}:
+                continue
+            source_row = data.get("rawPdfRow")
+            if not isinstance(source_row, dict):
+                source_row = {}
+            token = str(data.get("transportPassNo") or (source_row.get("sourceToken") if state == "ODISHA" else None) or "").strip()
             if token:
                 tokens.add(token)
         if len(tokens) > 1:
-            raise HTTPException(status_code=422, detail="Conflicting Odisha Token numbers; do not combine invoices")
+            raise HTTPException(status_code=422, detail="Conflicting Odisha/Jharkhand permit numbers; do not combine documents")
         return next(iter(tokens), "")
+
+    def odisha_tp_pass(self, session: dict[str, Any], job_id: str) -> str:
+        """Backward-compatible alias; restricted to non-WB verified permit prefill."""
+        return self.non_wb_tp_pass(session, job_id)
 
     async def save_purchase(self, session: dict[str, Any], job_id: str, header: dict[str, Any]) -> dict[str, Any]:
         job = self.document_service.get_job(session, job_id)
         items = await self.purchase_items(session, job_id)
         header = dict(header or {})
         if not str(header.get("tpPassNo") or "").strip():
-            header["tpPassNo"] = self.odisha_tp_pass(session, job_id)
+            header["tpPassNo"] = self.non_wb_tp_pass(session, job_id)
         client = self.calculation_client(session, items)
         try:
             result = await purchase_orchestrator.execute(
