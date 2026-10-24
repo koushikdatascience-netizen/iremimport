@@ -370,6 +370,7 @@ class LlamaCloudClient:
             invoiceDate=invoice_date,
             items=deduped_items,
             documentProfile=document_profile,
+            sourceState=("JHARKHAND" if document_profile == "JHARKHAND_STATE_BEVERAGES" else None),
             extractionEngine="llamaparse-page-by-page",
             extractedPageCount=len(page_results),
             pageItemCounts={
