@@ -4,6 +4,11 @@ on:
     paths:
       - 'madhushala-excise-bridge/app/modules/document_import/odisha_osbcl.py'
       - 'madhushala-excise-bridge/app/modules/document_import/pdf_extractor.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/llama_client.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/normalizer.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/purchase_adapter.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/purchase_preview.py'
+      - 'madhushala-excise-bridge/tests/test_document_import.py'
       - 'madhushala-excise-bridge/tests/test_odisha_osbcl.py'
       - 'madhushala-excise-bridge/tests/test_odisha_jharkhand_handoff.py'
       - '.github/workflows/test-odisha-osbcl.yml'
