@@ -20,6 +20,7 @@ from fastapi import HTTPException, UploadFile
 from app.config import settings
 from app.db import conn, now_iso
 from app.modules.document_import.llama_client import LlamaCloudClient, LlamaCloudError
+from app.modules.document_import.jharkhand_pair import join_verified_pair
 from app.modules.document_import.normalizer import normalize_extracted_document
 from app.modules.document_import.pdf_extractor import extract_pdf_locally
 from app.modules.document_import.purchase_context import build_purchase_context
@@ -1088,6 +1089,32 @@ class DocumentImportService:
                     status_code=422,
                     detail="Upload only one WB BEVCO invoice for a purchase.",
                 )
+
+            # Only the invoice supplies purchase rows for a verified
+            # Jharkhand invoice + Form-T upload. Form-T is permit evidence.
+            # Fail closed on any mismatch instead of duplicating line items.
+            jh_docs = [
+                (doc, meta) for doc, meta in primary_parts
+                if str(getattr(doc, "sourceState", "") or "").upper() == "JHARKHAND"
+            ]
+            if jh_docs and len(primary_parts) > 1:
+                if len(primary_parts) != 2 or len(jh_docs) != 2:
+                    raise HTTPException(status_code=422, detail="Upload exactly one Jharkhand invoice and its Form-T permit")
+                invoice_parts = [(doc, meta) for doc, meta in jh_docs if str(doc.invoiceNumber or "").strip()]
+                permit_parts = [(doc, meta) for doc, meta in jh_docs if not str(doc.invoiceNumber or "").strip() and str(doc.transportPassNo or "").strip()]
+                if len(invoice_parts) != 1 or len(permit_parts) != 1:
+                    raise HTTPException(status_code=422, detail="Cannot uniquely identify Jharkhand invoice and Form-T permit")
+                invoice_doc, invoice_meta = invoice_parts[0]
+                permit_doc, permit_meta = permit_parts[0]
+                if (invoice_doc.invoiceDate and permit_doc.invoiceDate
+                        and self._document_date_key(invoice_doc.invoiceDate) != self._document_date_key(permit_doc.invoiceDate)):
+                    raise HTTPException(status_code=422, detail="Jharkhand invoice and permit dates disagree")
+                try:
+                    validated_invoice = join_verified_pair(invoice_doc, permit_doc)
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                primary_parts = [(validated_invoice, {**invoice_meta, "jharkhandPermitVerified": True,
+                                                     "permitFilename": permit_meta.get("filename")})]
 
             primary_documents = [doc for doc, _meta in primary_parts]
             doc_numbers = [
