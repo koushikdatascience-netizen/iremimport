@@ -884,6 +884,21 @@ class DocumentImportService:
             if not isinstance(financials, dict):
                 continue
             taxes = financials.get("taxes") if isinstance(financials.get("taxes"), dict) else {}
+            if str(raw.get("sourceState") or "").upper() == "ODISHA":
+                # Odisha labels: printed subtotal is source gross, printed
+                # final total is source net. Keep these as financial evidence,
+                # not Madhushala Calculate-owned values.
+                return {
+                    "taxes": {
+                        "specialPurposeFee": taxes.get("specialPurposeFee"),
+                        "roundOffValueToGovt": taxes.get("roundOffValueToGovt"),
+                        "tcs": taxes.get("tcs", financials.get("tcs")),
+                        "vat": taxes.get("vat", financials.get("vat")),
+                    },
+                    "roundedOff": financials.get("roundOff", financials.get("roundedOff")),
+                    "totalAmount": financials.get("grossAmount", financials.get("subtotal")),
+                    "totalNet": financials.get("netAmount", financials.get("grandTotal", financials.get("total"))),
+                }
             return {
                 "taxes": {
                     "specialPurposeFee": taxes.get("specialPurposeFee"),
