@@ -1148,8 +1148,22 @@ class DocumentImportService:
             merged_items: list[ExtractedProduct] = []
             for doc in primary_documents:
                 doc_tp_pass = str(getattr(doc, "transportPassNo", None) or "").strip()
+                is_odisha = str(getattr(doc, "sourceState", "") or "").upper() == "ODISHA"
+                source_financials = getattr(doc, "invoiceFinancials", None) if is_odisha else None
+                if not isinstance(source_financials, dict):
+                    source_financials = None
                 for item in (doc.items or []):
-                    if doc_tp_pass:
+                    if is_odisha:
+                        # Persist PDF evidence per source row. The handoff reads
+                        # persisted items, not the ephemeral document object.
+                        payload = item.model_dump()
+                        payload["sourceState"] = "ODISHA"
+                        if doc_tp_pass:
+                            payload["transportPassNo"] = doc_tp_pass
+                        if source_financials is not None:
+                            payload["invoiceFinancials"] = source_financials
+                        merged_items.append(ExtractedProduct.model_validate(payload))
+                    elif doc_tp_pass:
                         payload = item.model_dump()
                         payload["transportPassNo"] = doc_tp_pass
                         merged_items.append(ExtractedProduct.model_validate(payload))
