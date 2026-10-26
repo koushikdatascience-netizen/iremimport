@@ -354,6 +354,8 @@ def _page_tables(
 
 def _detect_profile(text: str) -> str:
     lower = text.casefold()
+    if "odisha state beverages corporation" in lower and "delivery challan cum invoice" in lower:
+        return "ODISHA_OSBCL_INVOICE"
     if "government of telangana" in lower and ("invoice cum delivery challan" in lower or "icdc" in lower):
         return "TELANGANA_ICDC"
     if (
@@ -601,7 +603,20 @@ def _extract_jharkhand(
         re.IGNORECASE,
     )
     invoice_date = _normalize_date(date_match.group(1)) if date_match else None
+    # A Jharkhand Form-T is a transport permit, never an invoice.
+    # Retain the number as TP evidence, not as a fabricated bill number.
+    if "form-t(transport)" in full_text.casefold() or "pass for transport within" in full_text.casefold():
+        invoice_number = None
     return _dedupe(products), invoice_number, invoice_date
+
+
+def _jharkhand_permit_number(text: str) -> str | None:
+    match = re.search(
+        r"(?:Excise\s*Permit\s*No\.?|Registered\s*Permit\s*No\.?|Permit\s*No\.?)"
+        r"\s*:?\s*(DHA-\d{4}-\d{4}/\d+)",
+        text, re.IGNORECASE,
+    )
+    return match.group(1) if match else None
 
 
 def _clean_west_bengal_brand(value: Any) -> str:
@@ -1345,6 +1360,12 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         full_text = "\n".join(page_texts)
         profile = _detect_profile(full_text)
 
+        if profile == "ODISHA_OSBCL_INVOICE":
+            # Strict Odisha path: no generic or Llama fallback after an
+            # identified OSBCL invoice fails accounting reconciliation.
+            from app.modules.document_import.odisha_osbcl import extract_osbcl
+            return extract_osbcl(document, page_texts=page_texts)
+
         # WB repeats the same document as ORIGINAL/DUPLICATE/TRIPLICATE/
         # QUADRUPLICATE. Detect copies from the cheap text pass and perform
         # expensive table reconstruction only for ORIGINAL pages.
@@ -1458,7 +1479,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             documentType="invoice",
             supplierName=None,
             invoiceNumber=invoice_number,
-            transportPassNo=_transport_pass_number(profile, full_text),
+            transportPassNo=(_jharkhand_permit_number(full_text) if profile == "JHARKHAND_EXCISE" else _transport_pass_number(profile, full_text)),
             invoiceDate=invoice_date,
             items=products,
             extractionEngine="pymupdf-state-adapter",

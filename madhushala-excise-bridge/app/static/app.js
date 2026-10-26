@@ -226,7 +226,7 @@ async function decodeQrFromImage(file) {
                 bitmap.close?.();
             }
         } catch (error) {
-            console.debug("Browser QR decoder unavailable; using server ZXing fallback", error);
+            console.debug("Browser QR decoder unavailable; processing document on server");
         }
     }
     if (browserValue) return browserValue;
@@ -1230,7 +1230,7 @@ async function uploadDocuments(files, kind = "pdf") {
             if (document.getElementById("document-processing-panel")?.hidden) return;
             setDocumentImportState("extracting");
             setText(elements.progressTitle, "Extracting purchase data");
-            setText(elements.progressDetail, "Checking PyMuPDF coverage first and using LlamaParse automatically when extraction is incomplete.");
+            setText(elements.progressDetail, "Reading and validating document details.");
         }, 250);
 
         const payload = await api("/api/v1/document-import/upload/batch/" + encodeURIComponent(kind), {
@@ -1239,15 +1239,11 @@ async function uploadDocuments(files, kind = "pdf") {
         });
         if (!payload?.job) throw new Error(payload.detail || payload.error || "Document import failed");
         renderDocumentReview(payload);
-        const engines = (payload.extraction?.files || [])
-            .map((entry) => entry.engine)
-            .filter(Boolean);
-        const engineText = engines.length ? Array.from(new Set(engines)).join(" + ") : (payload.extraction?.engine || "unknown");
         setText(
             document.getElementById("document-action-summary"),
             (document.getElementById("document-action-summary")?.textContent || "") +
             " • " + selectedFiles.length + " source file" + (selectedFiles.length === 1 ? "" : "s") +
-            " • Extractor: " + engineText
+            " • Ready for review"
         );
         setDocumentImportState("review");
     } catch (error) {

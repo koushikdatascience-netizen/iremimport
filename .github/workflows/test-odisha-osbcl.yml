@@ -1,0 +1,32 @@
+name: Odisha OSBCL PDF regression
+on:
+  pull_request:
+    paths:
+      - 'madhushala-excise-bridge/app/modules/document_import/odisha_osbcl.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/pdf_extractor.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/service.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/purchase_required.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/llama_client.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/normalizer.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/purchase_adapter.py'
+      - 'madhushala-excise-bridge/app/modules/document_import/purchase_preview.py'
+      - 'madhushala-excise-bridge/tests/test_document_import.py'
+      - 'madhushala-excise-bridge/tests/test_odisha_osbcl.py'
+      - 'madhushala-excise-bridge/tests/test_odisha_jharkhand_handoff.py'
+      - '.github/workflows/test-odisha-osbcl.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: madhushala-excise-bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q tests/test_odisha_osbcl.py tests/test_odisha_jharkhand_handoff.py tests/test_document_import.py tests/test_purchase_handoff.py
