@@ -102,6 +102,9 @@ class DocumentPurchaseAdapter:
             ).fetchall()
             row_codes = [(row, self._mapped_code(db, session, row)) for row in rows]
 
+        from app.modules.document_import.jharkhand_financials import require_verified_financials
+        require_verified_financials([dict(row) for row in rows])
+
         missing = [
             str(row["raw_name"] or row["normalized_name"] or row["id"])
             for row, code in row_codes

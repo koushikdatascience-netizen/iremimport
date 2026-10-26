@@ -2971,3 +2971,92 @@ def test_odisha_real_pdf_upload_persistence_mapping_and_handoff(client, monkeypa
     print({"uploadPipelineMs": result["extraction"].get("uploadTimingsMs"),
            "handoffMs": round((time.perf_counter()-handoff_started)*1000,2),
            "completeTestMs": round((time.perf_counter()-started)*1000,2)})
+
+
+@pytest.mark.parametrize("verified",[True,False])
+def test_jharkhand_source_financials_persist_and_unverified_handoff_is_blocked(client,monkeypatch,verified):
+    from app.db import conn
+    from app.modules.document_import import service as service_module, purchase_required
+    from app.services.reference_data_service import reference_data_service
+    validation={"status":"verified" if verified else "review_required","errors":[] if verified else ["Printed Amount unreadable"]}
+    financials={"invoiceAmount":"3000.00","grandTotal":"3010.00","vat":"20.00","aed":"5.00","vatOnAed":"1.00"}
+    doc=ExtractedDocument(sourceState="JHARKHAND",invoiceNumber="TEST-INVOICE",transportPassNo="DHA-2030-2031/42",
+        invoiceFinancials=financials,items=[ExtractedProduct(itemName="TEST WHISKY",brand="TEST WHISKY",ml=750,box=3,
+        invoiceAmount="3000.00",sourceState="JHARKHAND",sourceFinancialValidation=validation)])
+    monkeypatch.setattr(service_module,"extract_pdf_locally",lambda path:(doc,{"usable":True,"needsFallback":False}))
+    async def catalogue(session):
+        return [{"itemCode":"TEST","itemName":"MASTER","packing":12,"purchaseRate":99,"purchaseRateCase":1188}]
+    async def context(*args,**kwargs): return {"defaults":{}}
+    monkeypatch.setattr(reference_data_service,"fresh_catalogue",catalogue)
+    monkeypatch.setattr(purchase_required,"build_purchase_context",context)
+    session=create_session(client)
+    response=client.post("/api/v1/document-import/upload",headers=auth(session),files={"file":("scan.pdf",b"%PDF-1.4 test","application/pdf")})
+    assert response.status_code==200,response.text
+    result=response.json();job=result["job"]["id"]
+    assert result["reviewItems"][0]["valid"] is verified
+    with conn() as db:
+        row=db.execute("SELECT * FROM import_items WHERE job_id=?",(job,)).fetchone()
+        raw=json.loads(row["raw_data_json"])
+        assert raw["invoiceAmount"]=="3000.00" and raw["invoiceFinancials"]==financials
+        assert raw["sourceFinancialValidation"]==validation
+        db.execute("UPDATE import_items SET mapped_item_code='TEST',mapping_status='MAPPED' WHERE job_id=?",(job,))
+    response=client.get(f"/api/v1/document-import/jobs/{job}/purchase/handoff",headers=auth(session))
+    if verified:
+        assert response.status_code==200,response.text
+        p=response.json()["purchasePayload"]
+        assert p["items"][0]["amount"]==3000.00
+        assert p["items"][0]["itemAmount"]==0
+        assert p["items"][0]["boxRate"]==1188
+        assert p["totalAmount"]=="3000.00" and p["totalNet"]=="3010.00"
+        assert p["taxes"]["aed"]=="5.00" and p["tpPassNo"]=="DHA-2030-2031/42"
+    else:
+        assert response.status_code==409,response.text
+
+
+@pytest.mark.skipif(not os.getenv("JHARKHAND_REAL_OCR_CAPTURE"),reason="Private real scan/OCR capture not configured")
+def test_real_jharkhand_scan_complete_ocr_persistence_and_handoff(client,monkeypatch):
+    import fitz
+    from app.modules.document_import.llama_client import LlamaCloudClient
+    from app.modules.document_import import purchase_required
+    from app.services.reference_data_service import reference_data_service
+    from app.db import conn
+    capture=json.loads(Path(os.environ["JHARKHAND_REAL_OCR_CAPTURE"]).read_text(encoding="utf-8"))
+    pdf=Path(os.environ["JHARKHAND_REAL_PDF"])
+    with fitz.open(pdf) as source:
+        assert len(source)==2 and all(not page.get_text().strip() for page in source)
+    async def products(self,path,filename,**kwargs):
+        number=int(filename.rsplit("-",1)[1].split(".")[0])
+        return ExtractedDocument.model_validate(next(p["data"] for p in capture["pages"] if f"page-{number}.pdf" in p["filename"]))
+    async def financials(self,path,number):
+        return next(p["data"] for p in capture["financialPages"] if p["page"]==number)
+    async def catalogue(session):
+        return [{"itemCode":f"TEST{i}","itemName":"TEST MASTER","packing":12,"purchaseRate":1,"purchaseRateCase":12} for i in range(27)]
+    async def context(*args,**kwargs): return {"defaults":{}}
+    monkeypatch.setattr(LlamaCloudClient,"extract_products",products)
+    monkeypatch.setattr(LlamaCloudClient,"extract_jharkhand_financial_page",financials)
+    monkeypatch.setattr(reference_data_service,"fresh_catalogue",catalogue)
+    monkeypatch.setattr(purchase_required,"build_purchase_context",context)
+    session=create_session(client)
+    response=client.post("/api/v1/document-import/upload",headers=auth(session),files={"file":("jharkhand-real.pdf",pdf.read_bytes(),"application/pdf")})
+    assert response.status_code==200,response.text
+    result=response.json();job=result["job"]["id"]
+    assert result["summary"]["detected"]==27 and result["summary"]["needsAttention"]==0
+    rows=client.get(f"/api/v1/document-import/jobs/{job}/items",headers=auth(session)).json()["items"]
+    source_amounts=[]
+    with conn() as db:
+        for i,row in enumerate(rows):
+            raw=json.loads(row["raw_data_json"])
+            assert raw["sourceFinancialValidation"]["status"]=="verified"
+            source_amounts.append(Decimal(raw["invoiceAmount"]))
+            db.execute("UPDATE import_items SET mapped_item_code=?,mapping_status='MAPPED' WHERE id=?",(f"TEST{i}",row["id"]))
+    assert len(source_amounts)==27 and sum(source_amounts)==Decimal("282597.87")
+    response=client.get(f"/api/v1/document-import/jobs/{job}/purchase/handoff",headers=auth(session))
+    assert response.status_code==200,response.text
+    p=response.json()["purchasePayload"]
+    assert p["docNo"]=="003_COM_DHN_25-26/2026-2027/6267/61/6024"
+    assert p["tpPassNo"]=="DHA-2026-2027/6267"
+    assert sum(i["box"] for i in p["items"])==159
+    assert sorted(Decimal(str(i["amount"])) for i in p["items"])==sorted(source_amounts)
+    assert all(i["itemAmount"]==0 and i["boxRate"]==12 for i in p["items"])
+    assert p["totalAmount"]=="282597.87" and p["totalNet"]=="288249.83"
+    assert p["taxes"]["vat"]=="26038.93" and p["taxes"]["aed"]=="8544.25" and p["taxes"]["vatOnAed"]=="406.07"
