@@ -227,3 +227,41 @@ async def test_non_odisha_tp_override_not_applied(monkeypatch):
                          "supplierCode": "S", "storeCode": "T",
                          "purchaseAccCode": "P", "userCode": "U"}, strict=False)
     assert got["tpPassNo"] == "WB-TP"
+
+
+def test_jharkhand_financial_source_extension():
+    import json
+    from unittest.mock import Mock
+    from app.modules.document_import.service import DocumentImportService
+    raw = {"sourceState": "JHARKHAND", "invoiceAmount": "12305.05",
+           "transportPassNo": "DHA-2026-2027/6267",
+           "invoiceFinancials": {"invoiceAmount": "282597.87", "grandTotal": "288249.83",
+                                 "vat": "26038.93", "aed": "8544.25", "vatOnAed": "406.07"}}
+    service = Mock(spec=DocumentImportService)
+    service.get_items.return_value = [{"raw_data_json": json.dumps(raw)}]
+    values = DocumentImportService.get_invoice_financials(service, {}, "test")
+    assert values["totalAmount"] == "282597.87"
+    assert values["totalNet"] == "288249.83"
+    assert values["taxes"]["vat"] == "26038.93"
+    assert values["taxes"]["aed"] == "8544.25"
+    assert values["taxes"]["vatOnAed"] == "406.07"
+
+
+@pytest.mark.asyncio
+async def test_jharkhand_distinct_permit_replaces_duplicated_bill(monkeypatch):
+    from unittest.mock import Mock
+    from app.modules.document_import import purchase_required
+    invoice = "003_COM_DHN_25-26/2026-2027/6267/61/6024"
+    service = Mock()
+    service.get_job.return_value = {"source_type": "DOCUMENT_PDF",
+                                    "invoice_number": invoice,
+                                    "invoice_date": "01/09/2026"}
+    monkeypatch.setattr(purchase_required, "_raw_value",
+        lambda jid, *aliases: "JHARKHAND" if "sourceState" in aliases else
+        "DHA-2026-2027/6267" if "transportPassNo" in aliases else "")
+    result = await purchase_required.resolve_required_purchase_header(
+        service, {}, "job",
+        {"tpPassNo": invoice, "supplierCode": "S", "storeCode": "T",
+         "purchaseAccCode": "P", "userCode": "U"}, strict=False)
+    assert result["docNo"] == invoice
+    assert result["tpPassNo"] == "DHA-2026-2027/6267"
