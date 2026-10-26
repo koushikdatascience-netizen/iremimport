@@ -884,6 +884,21 @@ class DocumentImportService:
             if not isinstance(financials, dict):
                 continue
             taxes = financials.get("taxes") if isinstance(financials.get("taxes"), dict) else {}
+            if str(raw.get("sourceState") or "").upper() == "JHARKHAND":
+                return {
+                    "taxes": {
+                        "specialPurposeFee": None,
+                        "liquorTransportation": financials.get("liquorTransportation"),
+                        "roundOffValueToGovt": None,
+                        "tcs": None,
+                        "vat": financials.get("vat"),
+                        "aed": financials.get("aed"),
+                        "vatOnAed": financials.get("vatOnAed"),
+                    },
+                    "roundedOff": None,
+                    "totalAmount": financials.get("invoiceAmount"),
+                    "totalNet": financials.get("grandTotal"),
+                }
             if str(raw.get("sourceState") or "").upper() == "ODISHA":
                 # Odisha labels: printed subtotal is source gross, printed
                 # final total is source net. Keep these as financial evidence,
@@ -1163,8 +1178,10 @@ class DocumentImportService:
             merged_items: list[ExtractedProduct] = []
             for doc in primary_documents:
                 doc_tp_pass = str(getattr(doc, "transportPassNo", None) or "").strip()
-                is_odisha = str(getattr(doc, "sourceState", "") or "").upper() == "ODISHA"
-                source_financials = getattr(doc, "invoiceFinancials", None) if is_odisha else None
+                state = str(getattr(doc, "sourceState", "") or "").upper()
+                is_odisha = state == "ODISHA"
+                is_jharkhand = state == "JHARKHAND"
+                source_financials = getattr(doc, "invoiceFinancials", None) if state in {"ODISHA", "JHARKHAND"} else None
                 if not isinstance(source_financials, dict):
                     source_financials = None
                 for item in (doc.items or []):
@@ -1177,6 +1194,17 @@ class DocumentImportService:
                             payload["transportPassNo"] = doc_tp_pass
                         if source_financials is not None:
                             payload["invoiceFinancials"] = source_financials
+                        merged_items.append(ExtractedProduct.model_validate(payload))
+                    elif is_jharkhand:
+                        payload = item.model_dump()
+                        payload["sourceState"] = "JHARKHAND"
+                        if doc_tp_pass:
+                            payload["transportPassNo"] = doc_tp_pass
+                        if source_financials is not None:
+                            payload["invoiceFinancials"] = source_financials
+                        source_amount = payload.get("invoiceAmount", payload.get("amount"))
+                        if source_amount not in (None, ""):
+                            payload["invoiceAmount"] = source_amount
                         merged_items.append(ExtractedProduct.model_validate(payload))
                     elif doc_tp_pass:
                         payload = item.model_dump()

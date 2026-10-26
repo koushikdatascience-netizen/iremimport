@@ -154,11 +154,11 @@ async def resolve_required_purchase_header(
 
     # Odisha has two distinct printed identifiers. A stale frontend default
     # may copy docNo into tpPassNo; repair that only for verified Odisha rows.
-    if _raw_value(job_id, "sourceState").upper() == "ODISHA":
-        odisha_token = _raw_value(job_id, "transportPassNo")
+    if _raw_value(job_id, "sourceState").upper() in {"ODISHA", "JHARKHAND"}:
+        source_permit = _raw_value(job_id, "transportPassNo")
         current_tp = _text(resolved.get("tpPassNo"))
-        if odisha_token and (not current_tp or current_tp == _text(resolved.get("docNo"))):
-            resolved["tpPassNo"] = odisha_token
+        if source_permit and (not current_tp or current_tp == _text(resolved.get("docNo"))):
+            resolved["tpPassNo"] = source_permit
     if not _text(resolved.get("tpPassNo")):
         resolved["tpPassNo"] = _transport_pass_from_job(job, job_id)
     if not _text(resolved.get("tpPassNo")) and _text(resolved.get("docNo")):
