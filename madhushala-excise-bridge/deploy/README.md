@@ -1,3 +1,49 @@
+# Current production deployment
+
+Production deploys **master**, not the repository's default `main` branch or a feature branch.
+The active public URL is https://integrations.madhushalasoftware.com/excise-import/.
+`excise.connect.snapkey.in` is a legacy URL and currently has no DNS record.
+
+The `Deploy Excise Bridge` workflow runs the complete test suite on pull requests
+into master. A push to master, or a manual run with ref `master`, runs tests and
+then invokes `scripts/deploy-production.sh` over the configured VPS SSH connection.
+Feature-branch regression checks alone do not deploy anything.
+
+From a local clone or a connected ChatGPT terminal with GitHub CLI authentication:
+
+```bash
+gh workflow run deploy-excise-bridge.yml --ref master --repo koushikdatascience-netizen/iremimport
+gh run list --workflow deploy-excise-bridge.yml --repo koushikdatascience-netizen/iremimport
+```
+
+Use the existing SERVER_HOST, SERVER_USER, SERVER_PORT and SERVER_SSH_KEY_B64
+repository secrets. Do not copy server `.env` files or private keys into Git.
+The same script can be run over the established SSH connection with
+`TARGET_COMMIT=<tested full master SHA>` and
+`EXPECTED_ASSET_VERSION=<STATIC_ASSET_VERSION from that commit>`.
+The script refuses commits outside master history.
+
+The immutable release lives under `~/madhushala-releases/` and
+`~/.madhushala-deploy/current/DEPLOYED_GIT_SHA` records the active SHA.
+`/health/ready` reports `gitSha`, which must match the release and every API replica.
+The image also carries the OCI revision label. Verify public HTML's asset version.
+
+Routine releases back up data, preserve the server environment byte-for-byte,
+and reuse the existing Compose project and persistent volumes. They do not run
+SQLite migrations, reset PostgreSQL, change database credentials, or delete volumes.
+Previous release directories are retained. A database cutover is a separate operation.
+If any health, SHA or public frontend verification fails, stop and inspect the logs.
+Do not trigger Purchase Save in smoke tests.
+
+The existing Compose identity is `madhushala-automation-platform`; API traffic goes
+through api-gateway to api1/api2, with a singleton web/noVNC container. The data
+volume is `madhushala-automation-platform_madhushala_automation_data` and PostgreSQL
+uses `madhushala-automation-platform_postgres_data`.
+
+## Historical hosting notes
+
+The notes below describe initial setup. Use the deployment workflow above for upgrades.
+
 # Production Hosting Notes
 
 This project is packaged as an independent Docker Compose microservice. It runs the bridge API, the operator UI, and a noVNC browser view for server-side Chromium.
@@ -114,6 +160,5 @@ host Nginx /excise-browser/* -> 127.0.0.1:6080 -> web (Playwright/noVNC singleto
 ```
 
 Redis is shared by both API replicas. PostgreSQL is required for shared durable
-state; the deployment workflow performs a one-time SQLite-to-PostgreSQL migration
-before enabling horizontal API traffic. The original Docker data volume is
-backed up before migration.
+state. Routine deployment requires the existing PostgreSQL backend and performs
+no database migration.

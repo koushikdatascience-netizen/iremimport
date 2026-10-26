@@ -2872,3 +2872,102 @@ def test_wb_batch_split_rejects_inaccurate_bottle_totals():
         )
     assert exc.value.status_code == 422
     assert "bottle" in str(exc.value.detail).lower()
+
+
+def _sanitized_odisha_pdf():
+    """Exercise real table geometry without publishing a customer's invoice."""
+    import fitz
+    from app.modules.document_import.odisha_osbcl import HEADERS
+    doc = fitz.open()
+    page = doc.new_page(width=1200, height=1800)
+    page.insert_text((30, 30), "Odisha State Beverages Corporation Ltd")
+    for y, text in enumerate(("DELIVERY CHALLAN CUM INVOICE",
+            "Invoice No. : INV(BAL) / 2026-2027 / 19232", "Invoice Date : 22/10/2026",
+            "Token No. : OD-BAL(T)/100/2026-2027", "Depot Name : TEST DEPOT", "Retailer Code : 9999"), 1):
+        page.insert_text((30, 30 + y * 20), text)
+    xs = [30, 70, 190, 520, 600, 700, 790, 900, 1030, 1170]
+    top, height = 200, 30
+    for x in xs:
+        page.draw_line((x, top), (x, top + 30 * height))
+    for i in range(31):
+        page.draw_line((xs[0], top + i * height), (xs[-1], top + i * height))
+    for j, text in enumerate(HEADERS):
+        page.insert_text((xs[j]+2, top+18), text, fontsize=7)
+    for i in range(28):
+        cases = 8 if i < 15 else 7 if i < 27 else 1
+        rate = Decimal("1000.00") if i < 27 else Decimal("1078438.87")
+        amount = rate * cases
+        row = [str(i+1), "WHISKY (IMFL)", f"TEST PRODUCT {i+1}", "750ML",
+               f"{rate:,.2f}", str(cases), "0", "0.00", f"{amount:,.2f}"]
+        for j, text in enumerate(row):
+            page.insert_text((xs[j]+2, top+(i+1)*height+18), text, fontsize=9)
+    for j, text in enumerate(["", "", "", "", "Sub Total", "205", "0", "0.00", "12,82,438.87"]):
+        page.insert_text((xs[j]+2, top+29*height+18), text, fontsize=9)
+    page.insert_text((700, 1200), "Sub Total\n12,82,438.87\nVAT\n4,48,853.60\nTCS\n34,626.00\nTotal\n17,65,918.47")
+    doc.new_page().insert_text((30,30), "Terms & Conditions")
+    return doc.tobytes()
+
+
+def test_odisha_real_pdf_upload_persistence_mapping_and_handoff(client, monkeypatch, tmp_path):
+    import time
+    from app.main import document_import_service
+    from app.db import conn
+    from app.modules.document_import import service as service_module, purchase_required
+    from app.services.reference_data_service import reference_data_service
+
+    reference = os.getenv("ODISHA_REFERENCE_PDF")
+    data = Path(reference).read_bytes() if reference else _sanitized_odisha_pdf()
+    path = tmp_path / "odisha.pdf"
+    path.write_bytes(data)
+    extracted, meta = service_module.extract_pdf_locally(path)
+    assert meta["needsFallback"] is False
+    assert len(extracted.items) == 28
+    assert sum(int(row.box) for row in extracted.items) == 205
+    expected_amounts = [Decimal(str(row.invoiceAmount)) for row in extracted.items]
+    assert sum(expected_amounts) == Decimal("1282438.87")
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("Deterministic Odisha upload must not call external extraction or Purchase Save")
+    monkeypatch.setattr(service_module.LlamaCloudClient, "extract_scanned_pdf_pages", forbidden)
+    monkeypatch.setattr(service_module.LlamaCloudClient, "extract_products", forbidden)
+    async def fake_context(*args, **kwargs):
+        return {"defaults": {}}
+    monkeypatch.setattr(purchase_required, "build_purchase_context", fake_context)
+    async def fresh_catalogue(session):
+        return [{"itemCode": f"TEST{i}", "itemName": f"Master {i}", "packing": 12,
+                 "purchaseRate": 3, "purchaseRateCase": 36, "salesRate": 5} for i in range(28)]
+    monkeypatch.setattr(reference_data_service, "fresh_catalogue", fresh_catalogue)
+    session = create_session(client)
+    started = time.perf_counter()
+    response = client.post("/api/v1/document-import/upload", headers=auth(session),
+                           files={"file": ("odisha.pdf", data, "application/pdf")})
+    assert response.status_code == 200, response.text
+    result = response.json()
+    job_id = result["job"]["id"]
+    assert result["summary"]["detected"] == 28
+    assert result["job"]["invoice_number"] == "INV(BAL)/2026-2027/19232"
+    rows = client.get(f"/api/v1/document-import/jobs/{job_id}/items", headers=auth(session)).json()["items"]
+    assert sum(row["box"] for row in rows) == 205
+    with conn() as db:
+        for i, row in enumerate(rows):
+            raw = json.loads(row["raw_data_json"])
+            assert Decimal(str(raw["invoiceAmount"])) > 0
+            assert row["amount"] in (None, 0)
+            db.execute("UPDATE import_items SET mapped_item_code=?, mapping_status='MAPPED' WHERE id=?",
+                       (f"TEST{i}", row["id"]))
+    handoff_started = time.perf_counter()
+    response = client.get(f"/api/v1/document-import/jobs/{job_id}/purchase/handoff", headers=auth(session))
+    assert response.status_code == 200, response.text
+    payload = response.json()["purchasePayload"]
+    assert payload["tpPassNo"] == "OD-BAL(T)/100/2026-2027"
+    assert Decimal(str(payload["totalAmount"])) == Decimal("1282438.87")
+    assert Decimal(str(payload["totalNet"])) == Decimal("1765918.47")
+    assert Decimal(str(payload["taxes"]["vat"])) == Decimal("448853.60")
+    assert Decimal(str(payload["taxes"]["tcs"])) == Decimal("34626.00")
+    assert len(payload["items"]) == 28
+    assert sum(row["box"] for row in payload["items"]) == 205
+    assert sorted(Decimal(str(row["amount"])) for row in payload["items"]) == sorted(expected_amounts)
+    assert all(row["itemAmount"] == 0 and row["boxRate"] == 36 for row in payload["items"])
+    print({"uploadPipelineMs": result["extraction"].get("uploadTimingsMs"),
+           "handoffMs": round((time.perf_counter()-handoff_started)*1000,2),
+           "completeTestMs": round((time.perf_counter()-started)*1000,2)})

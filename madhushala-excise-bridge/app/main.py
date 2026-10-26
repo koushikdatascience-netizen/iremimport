@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -62,7 +63,7 @@ async def lifespan(_app: FastAPI):
 
 PUBLIC_PREFIX = "/excise-import"
 INDEX_HTML_PATH = Path("app/static/index.html")
-STATIC_ASSET_VERSION = "20260924-inline-invalid-mapping-v24"
+STATIC_ASSET_VERSION = "20261026-odisha-financials-v25"
 DOCUMENT_IMPORT_SCRIPTS = (
     f'<script src="./static/qr-browser-fallback.js?v={STATIC_ASSET_VERSION}"></script>',
     f'<script src="./static/purchase-context.js?v={STATIC_ASSET_VERSION}"></script>',
@@ -393,6 +394,7 @@ async def health_ready():
         "service": "madhushala-excise-bridge",
         "version": "2.1.1",
         "dependencies": dependencies,
+        "gitSha": os.getenv("APP_GIT_SHA", "unknown"),
     }
     return JSONResponse(status_code=200 if ready else 503, content=content)
 

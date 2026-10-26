@@ -5,6 +5,7 @@ extractor fails closed on missing rows, arithmetic, or financial totals.
 """
 from __future__ import annotations
 import re
+import time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from app.modules.document_import.schemas import ExtractedDocument, ExtractedProduct
@@ -56,8 +57,10 @@ def _financials(text: str) -> dict[str, Decimal]:
             "tcs": value("TCS"), "total": value("Total")}
 
 
-def extract_osbcl(document) -> tuple[ExtractedDocument, dict[str, Any]]:
-    first_text = document[0].get_text("text")
+def extract_osbcl(document, page_texts=None) -> tuple[ExtractedDocument, dict[str, Any]]:
+    started = time.perf_counter()
+    page_texts = page_texts if page_texts is not None else [page.get_text("text") for page in document]
+    first_text = page_texts[0]
     if not recognized(first_text):
         raise ValueError("Not an Odisha OSBCL invoice")
     invoice_number = _capture(first_text, r"Invoice\s*No\.?\s*:\s*(INV\([A-Z]+\)\s*/\s*\d{4}-\d{4}\s*/\s*\d+)")
@@ -71,9 +74,27 @@ def extract_osbcl(document) -> tuple[ExtractedDocument, dict[str, Any]]:
     amount_total = mger_total = Decimal(0)
     products: list[ExtractedProduct] = []
     reported = None
+    table_ms = cell_ms = 0.0
     for page_num, page in enumerate(document, 1):
-        for table in page.find_tables().tables:
-            rows = table.extract()
+        # Terms-only pages have no product grid. Reuse the routing text pass
+        # instead of running table detection on them.
+        page_key = _key(page_texts[page_num - 1])
+        if not all(header in page_key for header in ("itemname", "qtyincases", "qtyinlooseunits")):
+            continue
+        table_started = time.perf_counter()
+        tables = page.find_tables().tables
+        table_ms += (time.perf_counter() - table_started) * 1000
+        from app.modules.document_import.pdf_extractor import _horizontal_page_chars, _horizontal_cell_text
+        chars = sorted(_horizontal_page_chars(page), key=lambda char: char[3])
+        centres_y = [char[3] for char in chars]
+        for table in tables:
+            # Table.extract() can reorder punctuation and glyphs in OSBCL's
+            # tightly spaced cells. Read each detected cell from one indexed
+            # glyph pass, preserving the printed decimal and full item name.
+            cell_started = time.perf_counter()
+            rows = [[_horizontal_cell_text(cell, chars, centres_y).strip() if cell else ""
+                     for cell in row.cells] for row in table.rows]
+            cell_ms += (time.perf_counter() - cell_started) * 1000
             if not rows or tuple(_key(x) for x in rows[0]) != HEADERS:
                 continue
             for row in rows[1:]:
@@ -126,7 +147,7 @@ def extract_osbcl(document) -> tuple[ExtractedDocument, dict[str, Any]]:
     if (reported["cases"] != cases_total or reported["loose"] != loose_total
         or reported["mger"] != mger_total or reported["amount"] != amount_total):
         raise ValueError("Odisha product totals do not match printed table subtotal")
-    financials = _financials("\n".join(page.get_text("text") for page in document))
+    financials = _financials("\n".join(page_texts))
     if amount_total != financials["subtotal"]:
         raise ValueError("Odisha printed invoice subtotal mismatch")
     if financials["subtotal"] + financials["vat"] + financials["tcs"] != financials["total"]:
@@ -137,6 +158,8 @@ def extract_osbcl(document) -> tuple[ExtractedDocument, dict[str, Any]]:
         "usable":True,"needsFallback":False,"pageCount":len(document),
         "productCount":len(products),"candidateRowCount":len(products),
         "documentRole":"primary","validated":True,
+        "timingsMs": {"findTablesMs": round(table_ms, 2), "readCellsMs": round(cell_ms, 2),
+                      "totalMs": round((time.perf_counter() - started) * 1000, 2)},
         "invoiceTotals": {
             "cases":cases_total,"loose":loose_total,
             **{key:str(value) for key,value in financials.items()},

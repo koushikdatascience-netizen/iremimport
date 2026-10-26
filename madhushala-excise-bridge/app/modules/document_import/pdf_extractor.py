@@ -1364,7 +1364,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             # Strict Odisha path: no generic or Llama fallback after an
             # identified OSBCL invoice fails accounting reconciliation.
             from app.modules.document_import.odisha_osbcl import extract_osbcl
-            return extract_osbcl(document)
+            return extract_osbcl(document, page_texts=page_texts)
 
         # WB repeats the same document as ORIGINAL/DUPLICATE/TRIPLICATE/
         # QUADRUPLICATE. Detect copies from the cheap text pass and perform

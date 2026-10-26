@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
+import time
 
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException
 from pydantic import BaseModel
@@ -177,6 +179,7 @@ def create_router(service: DocumentImportService) -> APIRouter:
         owns /api/purchase/calculate, display of calculated financial values,
         user edits/recalculation, and final Purchase Save.
         """
+        started = time.perf_counter()
         session = session_service.from_request(request)
         base_handoff = build_purchase_handoff(service, session, job_id)
         header = await resolve_required_purchase_header(
@@ -186,7 +189,9 @@ def create_router(service: DocumentImportService) -> APIRouter:
             {},
             strict=False,
         )
+        header_done = time.perf_counter()
         items = await purchase_adapter.purchase_items(session, job_id)
+        master_done = time.perf_counter()
 
         # Give the frontend the exact inputs needed to build
         # /api/purchase/calculate. Do not calculate or merge financial output
@@ -231,6 +236,11 @@ def create_router(service: DocumentImportService) -> APIRouter:
             "totalAmount": invoice_financials["totalAmount"],
             "totalNet": invoice_financials["totalNet"],
         }
+        logging.getLogger("madhushala-excise-bridge.document-import").info(
+            "document_handoff_timings job=%s headerMs=%.2f itemMasterAndEnrichmentMs=%.2f payloadMs=%.2f totalMs=%.2f",
+            job_id, (header_done - started) * 1000, (master_done - header_done) * 1000,
+            (time.perf_counter() - master_done) * 1000, (time.perf_counter() - started) * 1000,
+        )
         return {
             "success": True,
             "jobId": job_id,

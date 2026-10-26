@@ -10,6 +10,9 @@ from app.services.reference_data_service import reference_data_service
 
 
 class FakeDocumentService:
+    def get_items(self, _session, _job_id):
+        return []
+
     def get_job(self, _session, _job_id):
         return {
             "id": "job-preview-1",

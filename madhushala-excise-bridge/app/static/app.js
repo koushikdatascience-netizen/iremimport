@@ -226,7 +226,7 @@ async function decodeQrFromImage(file) {
                 bitmap.close?.();
             }
         } catch (error) {
-            console.debug("Browser QR decoder unavailable; using server ZXing fallback", error);
+            console.debug("Browser QR decoder unavailable; processing document on server");
         }
     }
     if (browserValue) return browserValue;
