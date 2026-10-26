@@ -360,6 +360,10 @@ class DocumentImportService:
             loose = _int_value(row["quantity"])
 
         issues: list[str] = []
+        financial_validation = raw.get("sourceFinancialValidation")
+        if str(raw.get("sourceState") or "").upper() == "JHARKHAND" and isinstance(financial_validation, dict):
+            if financial_validation.get("status") != "verified":
+                issues.append("Printed invoice financials require review: " + "; ".join(financial_validation.get("errors") or []))
         if not name:
             issues.append("Name is required")
         if not brand:

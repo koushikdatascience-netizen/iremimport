@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import tempfile
 from pathlib import Path
@@ -173,6 +174,7 @@ class LlamaCloudClient:
         *,
         extraction_mode: str | None = None,
         prompt: str | None = None,
+        data_schema: dict[str, Any] | None = None,
     ) -> str | dict[str, Any]:
         response = await self._request(
             "POST",
@@ -180,10 +182,11 @@ class LlamaCloudClient:
             headers={"Content-Type": "application/json"},
             json={
                 "file_id": file_id,
-                "data_schema": PRODUCT_SCHEMA,
+                "data_schema": data_schema if data_schema is not None else PRODUCT_SCHEMA,
                 "config": {
                     "extraction_target": "PER_DOC",
                     "extraction_mode": extraction_mode or settings.DOCUMENT_IMPORT_EXTRACTION_MODE,
+                    **({"system_prompt": prompt, "high_resolution_mode": True} if data_schema is not None else {}),
                 },
                 "prompt": prompt or EXTRACTION_PROMPT,
             },
@@ -259,10 +262,29 @@ class LlamaCloudClient:
                 )
                 return page_number, result
 
+        financial_pages = []
         try:
             page_results = await asyncio.gather(
                 *(extract_page(i + 1, path) for i, path in enumerate(page_paths))
             )
+            is_jharkhand = any(
+                str(getattr(doc, "documentProfile", "") or "").upper() == "JHARKHAND_STATE_BEVERAGES"
+                or "jharkhand state beverages" in str(doc.supplierName or "").casefold()
+                for _, doc in page_results
+            )
+            if is_jharkhand:
+                async def financial_page(number, path):
+                    try:
+                        async with semaphore:
+                            data = await self.extract_jharkhand_financial_page(path, number)
+                        return {"page": number, "data": data}
+                    except Exception:
+                        logging.getLogger("madhushala-excise-bridge.document-import").exception(
+                            "jharkhand_financial_page_failed page=%s", number)
+                        return {"page": number, "data": {"items": []}}
+                financial_pages = await asyncio.gather(
+                    *(financial_page(i + 1, path) for i, path in enumerate(page_paths))
+                )
         finally:
             for path in page_paths:
                 path.unlink(missing_ok=True)
@@ -335,6 +357,8 @@ class LlamaCloudClient:
                         payload["sourceState"] = "WEST_BENGAL"
                 merged_items.append(ExtractedProduct.model_validate(payload))
 
+        if is_jharkhand:
+            document_profile = "JHARKHAND_STATE_BEVERAGES"
         if document_profile == "JHARKHAND_STATE_BEVERAGES":
             corrected_items: list[ExtractedProduct] = []
             for item in merged_items:
@@ -376,7 +400,7 @@ class LlamaCloudClient:
         # separate invoice lines and must not be silently dropped.
         deduped_items = merged_items
 
-        return ExtractedDocument(
+        result = ExtractedDocument(
             documentType=document_type,
             supplierName=supplier_name,
             invoiceNumber=invoice_number,
@@ -393,5 +417,31 @@ class LlamaCloudClient:
                 for page_number, page_document in page_results
             },
         )
+        if document_profile == "JHARKHAND_STATE_BEVERAGES":
+            from app.modules.document_import.jharkhand_financials import apply_financial_evidence
+            result = apply_financial_evidence(result, financial_pages)
+            logging.getLogger("madhushala-excise-bridge.document-import").info(
+                "jharkhand_source_financial_validation status=%s evidence=%s",
+                result.sourceFinancialValidation["status"], result.sourceFinancialValidation)
+        return result
+
+    async def extract_jharkhand_financial_page(self, path: Path, page_number: int) -> dict[str, Any]:
+        from app.modules.document_import.jharkhand_financials import FINANCIAL_SCHEMA, FINANCIAL_PROMPT, MONEY_FIELDS
+        file_id = await self.upload_file(path, f"jharkhand-financial-page-{page_number}.pdf")
+        job = await self.start_extraction(file_id, extraction_mode=settings.DOCUMENT_IMPORT_SCANNED_EXTRACTION_MODE,
+                                          prompt=FINANCIAL_PROMPT, data_schema=FINANCIAL_SCHEMA)
+        result = await self.poll_extraction(job) if isinstance(job, str) else job
+        payload = result.get("data") or result.get("result") or result if isinstance(result, dict) else {}
+        if not isinstance(payload, dict):
+            raise LlamaCloudError("Financial evidence is not a structured object")
+        summary = payload.get("hasPrintedInvoiceSummary") is True
+        aliases = {"aed": "tableAedWithoutVat", "aedIncludingVat": "footerAed"}
+        payload["invoiceFinancials"] = {
+            name: payload[aliases.get(name, name)] for name in MONEY_FIELDS
+            if summary and payload.get(aliases.get(name, name)) not in (None, "")
+        }
+        if not summary:
+            payload["totalCases"] = None
+        return payload
 
 
