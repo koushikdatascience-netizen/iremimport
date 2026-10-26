@@ -887,7 +887,8 @@ class DocumentImportService:
             if str(raw.get("sourceState") or "").upper() == "JHARKHAND":
                 return {
                     "taxes": {
-                        "specialPurposeFee": financials.get("liquorTransportation"),
+                        "specialPurposeFee": None,
+                        "liquorTransportation": financials.get("liquorTransportation"),
                         "roundOffValueToGovt": None,
                         "tcs": None,
                         "vat": financials.get("vat"),
