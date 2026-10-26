@@ -112,7 +112,7 @@ def extract_osbcl(document) -> tuple[ExtractedDocument, dict[str, Any]]:
                 products.append(ExtractedProduct(
                     itemName=name,brand=name,ml=int(mlmatch.group(1)),
                     box=cases,loose=loose,confidence=1,
-                    sourceState="ODISHA",sourcePage=page_num,sourceSerial=serial,
+                    sourceState="ODISHA",sourcePage=page_num,sourceSerial=serial,invoiceAmount=str(amount),
                     quantitySemantics="explicit_cases_and_loose_units",
                     rawPdfRow={"column1":serial,"productCategory":category,
                         "invoiceRatePerCase":str(rate),"invoiceAmount":str(amount),
@@ -140,7 +140,9 @@ def extract_osbcl(document) -> tuple[ExtractedDocument, dict[str, Any]]:
         "invoiceTotals": {
             "cases":cases_total,"loose":loose_total,
             **{key:str(value) for key,value in financials.items()},
-            "mger":str(mger_total),
+            "mger":str(mger_total), "grandTotal":str(financials["total"]),
+            "grossAmount":str(financials["subtotal"]), "netAmount":str(financials["total"]),
+            "roundOff":None, "taxes":{"vat":str(financials["vat"]), "tcs":str(financials["tcs"])},
         },
     }
     extracted = ExtractedDocument(
