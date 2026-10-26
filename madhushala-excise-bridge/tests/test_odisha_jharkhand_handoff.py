@@ -166,3 +166,64 @@ def test_jharkhand_pair_rejects_mismatched_cases():
     )
     with pytest.raises(ValueError, match="disagree"):
         join_verified_pair(invoice, permit)
+
+
+def test_odisha_printed_financials_survive_handoff_lookup():
+    import json
+    from app.modules.document_import.service import DocumentImportService
+    from unittest.mock import Mock
+    raw = {
+        "sourceState": "ODISHA",
+        "invoiceAmount": "106981.40",
+        "transportPassNo": "OD-BAL(T)/100/2026-2027",
+        "invoiceFinancials": {
+            "subtotal": "1282438.87", "grossAmount": "1282438.87",
+            "vat": "448853.60", "tcs": "34626.00",
+            "grandTotal": "1765918.47", "netAmount": "1765918.47",
+            "taxes": {"vat": "448853.60", "tcs": "34626.00"},
+            "roundOff": None,
+        },
+    }
+    service = Mock(spec=DocumentImportService)
+    service.get_items.return_value = [{"raw_data_json": json.dumps(raw)}]
+    result = DocumentImportService.get_invoice_financials(service, {}, "job")
+    assert result["totalAmount"] == "1282438.87"
+    assert result["totalNet"] == "1765918.47"
+    assert result["taxes"]["vat"] == "448853.60"
+    assert result["taxes"]["tcs"] == "34626.00"
+
+
+@pytest.mark.asyncio
+async def test_odisha_tp_number_beats_stale_invoice_duplicate(monkeypatch):
+    from app.modules.document_import import purchase_required
+    from unittest.mock import Mock
+    job = {"source_type": "DOCUMENT_PDF", "invoice_number": "INV(BAL)/2026-2027/19232",
+           "invoice_date": "22/10/2026", "supplier_name": "Odisha State Beverages"}
+    svc = Mock()
+    svc.get_job.return_value = job
+    monkeypatch.setattr(purchase_required, "_raw_value",
+                        lambda jid, *names: "ODISHA" if "sourceState" in names else
+                        "OD-BAL(T)/100/2026-2027" if "transportPassNo" in names else "")
+    got = await purchase_required.resolve_required_purchase_header(
+        svc, {}, "job", {"tpPassNo": job["invoice_number"],
+                         "supplierCode": "S", "storeCode": "T",
+                         "purchaseAccCode": "P", "userCode": "U"}, strict=False)
+    assert got["tpPassNo"] == "OD-BAL(T)/100/2026-2027"
+    assert got["docNo"] == job["invoice_number"]
+
+
+@pytest.mark.asyncio
+async def test_non_odisha_tp_override_not_applied(monkeypatch):
+    from app.modules.document_import import purchase_required
+    from unittest.mock import Mock
+    job = {"source_type": "DOCUMENT_PDF", "invoice_number": "WB-INVOICE",
+           "invoice_date": "22/10/2026"}
+    svc = Mock()
+    svc.get_job.return_value = job
+    monkeypatch.setattr(purchase_required, "_raw_value",
+                        lambda jid, *names: "WEST_BENGAL" if "sourceState" in names else "")
+    got = await purchase_required.resolve_required_purchase_header(
+        svc, {}, "job", {"tpPassNo": "WB-TP",
+                         "supplierCode": "S", "storeCode": "T",
+                         "purchaseAccCode": "P", "userCode": "U"}, strict=False)
+    assert got["tpPassNo"] == "WB-TP"
