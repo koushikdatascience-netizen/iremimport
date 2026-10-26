@@ -22,6 +22,7 @@ PRODUCT_SCHEMA: dict[str, Any] = {
         "transportPassNo": {"type": ["string", "null"]},
         "invoiceDate": {"type": ["string", "null"]},
         "documentProfile": {"type": ["string", "null"]},
+        "invoiceFinancials": {"type": ["object", "null"], "additionalProperties": True},
         "items": {
             "type": "array",
             "items": {
@@ -90,6 +91,13 @@ EXTRACTION_PROMPT = (
     "Lot/Batch or equivalent per-item column, copy that exact populated cell into batchNo for that product. If the "
     "batch cell is blank or the document has no batch column, use null. Never derive batchNo from invoice numbers, "
     "permit numbers, dates or other headers. Quantity semantics are strict: box means CASES/CARTONS and loose means individual BOTTLES/LOOSE UNITS. "
+    "Jharkhand financial evidence: for a scanned invoice copy the exact printed Amount column into "
+    "each item amount (NOT itemAmount or calculated purchase total). Read the header Permit No into "
+    "transportPassNo, separately from Invoice No. Preserve any legible totals/taxes under document "
+    "invoiceFinancials: invoiceAmount (printed summed product Amount), grandTotal, vat, aed, "
+    "vatOnAed, and liquorTransportation if actually shown. Never fabricate or calculate missing "
+    "fields, and do not assign the line Amount to Item Master rates. On a continuation page "
+    "invoiceFinancials may be present without invoiceNumber. "
     "Special Jharkhand rule: for JHARKHAND STATE BEVERAGES CORPORATION LIMITED invoices, preserve EVERY visible "
     "product row, including continuation pages that may start directly with row 21, 22, 23, etc. The table columns are "
     "Sr No, Brand Name, Label Name, Unit Name, Quantity (Cases), followed by financial columns. Copy the visible Sr No "
@@ -267,6 +275,7 @@ class LlamaCloudClient:
         transport_pass_no = None
         invoice_date = None
         document_profile = None
+        jharkhand_financials: dict[str, Any] = {}
 
         wb_original_page: int | None = None
         source_doc = fitz.open(file_path)
@@ -298,6 +307,9 @@ class LlamaCloudClient:
             transport_pass_no = transport_pass_no or getattr(page_document, "transportPassNo", None)
             invoice_date = invoice_date or page_document.invoiceDate
             page_profile = str(getattr(page_document, "documentProfile", "") or "").strip()
+            page_financials = getattr(page_document, "invoiceFinancials", None)
+            if isinstance(page_financials, dict):
+                jharkhand_financials.update({k: v for k, v in page_financials.items() if v not in (None, "")})
             if page_profile:
                 document_profile = document_profile or page_profile
             if not document_profile and "jharkhand" in str(page_document.supplierName or "").casefold():
@@ -348,6 +360,8 @@ class LlamaCloudClient:
                     payload["quantitySemantics"] = "jharkhand_cases_dot_loose"
                     payload["sourceState"] = "JHARKHAND"
 
+                if payload.get("amount") not in (None, ""):
+                    payload["invoiceAmount"] = payload["amount"]
                 if not payload.get("ml"):
                     unit_text = str(payload.get("sourceUnitText") or "").strip()
                     unit_match = re.search(r"(\d{2,5})\s*m\.?l\.?", unit_text, re.IGNORECASE)
@@ -371,6 +385,7 @@ class LlamaCloudClient:
             items=deduped_items,
             documentProfile=document_profile,
             sourceState=("JHARKHAND" if document_profile == "JHARKHAND_STATE_BEVERAGES" else None),
+            invoiceFinancials=(jharkhand_financials if document_profile == "JHARKHAND_STATE_BEVERAGES" and jharkhand_financials else None),
             extractionEngine="llamaparse-page-by-page",
             extractedPageCount=len(page_results),
             pageItemCounts={
