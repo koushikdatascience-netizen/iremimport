@@ -297,3 +297,44 @@ def test_form_t_total_quantity_mismatch_fails_closed():
     ]])]
     with pytest.raises(ValueError, match="total cases"):
         _extract_jharkhand("Form-T(Transport) Total Quantity: 25.00", pages)
+
+
+def test_jharkhand_four_page_actual_table_layout_repeated_dispatch():
+    """Replay the 4-page Form-T table layout observed in PyMuPDF, sanitized."""
+    from app.modules.document_import.pdf_extractor import _extract_jharkhand
+    counts = [15, 15, 20, 20, 15, 20, 5, 1, 1, 2, 1, 1, 1,
+              1, 9, 2, 3, 2, 1, 3, 4, 2, 3, 3, 4, 4, 1]
+    assert sum(counts) == 159
+    def row(n):
+        return [str(n), "whisky", f"BRAND PRODUCT {n}", "375ML",
+                "0", "999", f"{counts[n-1]}.00", "9.00-BL", "", "1498.24"]
+    main = [["INVOICE DETAIL"] + [None]*9,
+            ["Comodity Group", "Kind Of Intoxicant", "Label Name", "Unit",
+             "Physical Qty", "StockQty", "Qty", "Strength", "", "BL"]]
+    main.extend(row(n) for n in range(1, 24))
+    continued = [row(n) for n in range(24, 28)]
+    continued.append(["Total Quantity:", None, None, None, None, None, "159.00"])
+    dispatch = [["DETAILS OF DISPATCHED QUANTITY"] + [None]*7]
+    dispatch.extend([str(n), "whisky", f"BRAND PRODUCT {n}", "375ML",
+                     f"{counts[n-1]}.00", "9.00-BL", "1498.24"]
+                    for n in range(1, 28))
+    pages = [(1, "Form-T(Transport)", []),
+             (2, "INVOICE DETAIL", [main]),
+             (3, "Total Quantity: 159.00", [
+                 continued, [["TRANSPORT DETAIL"] + [None]*7], dispatch[:16]]),
+             (4, "DETAILS OF DISPATCHED QUANTITY", [dispatch[16:]])]
+    items, bill, _ = _extract_jharkhand(
+        "Form-T(Transport) Issued Date 01/09/2026 Total Quantity: 159.00", pages)
+    assert len(items) == 27
+    assert sum(int(item.box) for item in items) == 159
+    assert bill is None
+
+
+def test_jharkhand_formt_dispatch_only_fails_closed():
+    from app.modules.document_import.pdf_extractor import _extract_jharkhand
+    pages = [(1, "Form-T(Transport)", []),
+             (2, "DETAILS OF DISPATCHED QUANTITY", [[
+                 ["DETAILS OF DISPATCHED QUANTITY"], ["Label Name", "Qty"],
+                 ["1", "BRAND", "375ML", "3.00"]]])]
+    with pytest.raises(ValueError, match="canonical INVOICE DETAIL"):
+        _extract_jharkhand("Form-T(Transport) Total Quantity: 3.00", pages)
