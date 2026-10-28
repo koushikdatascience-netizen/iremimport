@@ -598,8 +598,12 @@ def _extract_jharkhand(
             invoice_date_match = re.search(r"Issued\s*Date\s*(\d{2}/\d{2}/\d{4})", full_text, re.I)
             invoice_date = _normalize_date(invoice_date_match.group(1)) if invoice_date_match else None
             return products, None, invoice_date
-        # Never fall through to the generic row parser on Form-T. Without a
-        # verified primary table it could import the dispatch copy as a sale.
+        # Empty/header-only Form-T is valid evidence but not a purchase.
+        # Reject only when there are table rows that might otherwise be
+        # misinterpreted as dispatch purchases.
+        if not any(table for _page_no, _page_text, tables in pages for table in tables):
+            date_match = re.search(r"Issued\s*Date\s*(\d{2}/\d{2}/\d{4})", full_text, re.I)
+            return [], None, _normalize_date(date_match.group(1)) if date_match else None
         raise ValueError("Jharkhand Form-T canonical INVOICE DETAIL table not found")
 
     for page_no, _page_text, page_tables in pages:
