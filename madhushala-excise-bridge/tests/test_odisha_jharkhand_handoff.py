@@ -265,3 +265,35 @@ async def test_jharkhand_distinct_permit_replaces_duplicated_bill(monkeypatch):
          "purchaseAccCode": "P", "userCode": "U"}, strict=False)
     assert result["docNo"] == invoice
     assert result["tpPassNo"] == "DHA-2026-2027/6267"
+
+
+def test_form_t_repeated_dispatch_rows_are_not_purchase_items():
+    from app.modules.document_import.pdf_extractor import _extract_jharkhand
+    header = ["INVOICE DETAIL", None, None, None, None, None, None, None]
+    row_header = ["Comodity Group", "Kind Of Intoxicant", "Label Name",
+                  "Unit", "Physical Qty", "StockQty", "Qty", "Strength Of"]
+    line1 = ["1", "Beer", "GODFATHER STRONG BEER", "650ML", "0", "932", "15.00", "7.80-BL"]
+    line2 = ["2", "Whisky", "STERLING RESERVE", "375ML", "0", "744", "4.00", "9.00-BL"]
+    duplicate_header = ["DETAILS OF DISPATCHED QUANTITY", None, None]
+    dispatch1 = ["1", "Beer", "GODFATHER STRONG BEER", "650ML", "15.00", "7.80-BL"]
+    dispatch2 = ["2", "Whisky", "STERLING RESERVE", "375ML", "4.00", "9.00-BL"]
+    pages = [
+        (1, "Form-T(Transport) Excise Permit No: DHA-2026-2027/6267", []),
+        (2, "INVOICE DETAIL", [[header, row_header, line1, line2]]),
+        (3, "Total Quantity: 19.00\\nDETAILS OF DISPATCHED QUANTITY",
+         [[duplicate_header, dispatch1, dispatch2]]),
+    ]
+    items, bill, date = _extract_jharkhand(
+        "Issued Date 01/09/2026 Form-T(Transport) Total Quantity: 19.00", pages)
+    assert bill is None
+    assert len(items) == 2
+    assert [int(row.box) for row in items] == [15, 4]
+
+
+def test_form_t_total_quantity_mismatch_fails_closed():
+    from app.modules.document_import.pdf_extractor import _extract_jharkhand
+    pages = [(1, "Form-T(Transport)", [[
+        ["INVOICE DETAIL"], ["1", "Beer", "GODFATHER STRONG", "650ML", "0", "932", "15.00"]
+    ]])]
+    with pytest.raises(ValueError, match="total cases"):
+        _extract_jharkhand("Form-T(Transport) Total Quantity: 25.00", pages)

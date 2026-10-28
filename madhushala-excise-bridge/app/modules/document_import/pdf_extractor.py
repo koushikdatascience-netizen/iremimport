@@ -544,6 +544,61 @@ def _extract_jharkhand(
     products: list[ExtractedProduct] = []
     column_map: tuple[int, int, int] | None = None
 
+    # Form-T repeats the same consignment in INVOICE DETAIL and DETAILS OF
+    # DISPATCHED QUANTITY. Only the first table is canonical. Continuation
+    # rows on the next page have no repeated table heading.
+    is_form_t = bool(re.search(r"form\s*[-–]?\s*t\s*\(\s*transport\s*\)|pass for transport within", full_text, re.I))
+    if is_form_t:
+        canonical_rows: list[tuple[int, list[str]]] = []
+        started = False
+        expected_serial = 1
+        for page_no, _text, page_tables in pages:
+            for table in page_tables:
+                for cells in table:
+                    clean = [_clean(cell) for cell in cells]
+                    joined = " ".join(clean).casefold()
+                    if "details of dispatched quantity" in joined or "transport detail" in joined:
+                        started = False
+                        break
+                    if "invoice detail" in joined:
+                        started = True
+                        continue
+                    if not started:
+                        continue
+                    if not clean or not re.fullmatch(r"\d{1,3}", clean[0]):
+                        continue
+                    serial = int(clean[0])
+                    if serial != expected_serial:
+                        raise ValueError("Jharkhand Form-T invoice serial order is incomplete")
+                    if len(clean) < 7:
+                        raise ValueError("Jharkhand Form-T invoice row is incomplete")
+                    case_loose = _jharkhand_case_loose(clean[6])
+                    if not _clean(clean[2]) or case_loose == (0, 0):
+                        raise ValueError("Jharkhand Form-T invoice product/quantity missing")
+                    canonical_rows.append((page_no, clean))
+                    expected_serial += 1
+        if canonical_rows:
+            for page_no, cells in canonical_rows:
+                boxes, loose = _jharkhand_case_loose(cells[6])
+                product = _product(
+                    name=cells[2], ml=cells[3], box=boxes, loose=loose,
+                    raw={"Label Name": cells[2], "Unit": cells[3],
+                         "Qty": cells[6], "Quantity (Cases)": cells[6],
+                         "sourceRowNumber": int(cells[0]), "sourceDocumentRole": "FORM_T_INVOICE_DETAIL"},
+                    state="JHARKHAND", page=page_no,
+                    semantics="jharkhand_cases_dot_loose",
+                )
+                if product:
+                    products.append(product)
+            reported = re.search(r"Total\s+Quantity\s*:\s*(\d+(?:\.\d+)?)", full_text, re.I)
+            if reported:
+                case_sum = sum(_jharkhand_case_loose(cells[6])[0] for _, cells in canonical_rows)
+                if case_sum != int(float(reported.group(1))):
+                    raise ValueError("Jharkhand Form-T total cases disagree with invoice detail")
+            invoice_date_match = re.search(r"Issued\s*Date\s*(\d{2}/\d{2}/\d{4})", full_text, re.I)
+            invoice_date = _normalize_date(invoice_date_match.group(1)) if invoice_date_match else None
+            return products, None, invoice_date
+
     for page_no, _page_text, page_tables in pages:
         for rows in page_tables:
             for cells in rows:
@@ -1426,6 +1481,14 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         products, invoice_number, invoice_date = extractor(full_text, pages)
         candidate_rows = _candidate_row_count(profile, pages)
         product_count = len(products)
+        # Form-T has two printed copies of each of the same 27 rows. The
+        # second dispatch section is verification evidence, not a reason to
+        # trigger OCR fallback or import extra purchase rows.
+        if profile == "JHARKHAND_EXCISE" and (
+            "form-t(transport)" in full_text.casefold() or
+            "pass for transport within" in full_text.casefold()
+        ) and products and not invoice_number:
+            candidate_rows = product_count
         west_bengal_validation = (
             _west_bengal_total_validation(products, pages)
             if profile in {"WEST_BENGAL_FORM3", "WEST_BENGAL_FORM5"}
