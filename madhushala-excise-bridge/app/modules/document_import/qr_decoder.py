@@ -3,6 +3,8 @@ from __future__ import annotations
 from io import BytesIO
 
 import zxingcpp
+import cv2
+import numpy as np
 from fastapi import HTTPException, UploadFile
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter, UnidentifiedImageError
 
@@ -107,7 +109,19 @@ def decode_qr_image_bytes(data: bytes) -> str:
             if value:
                 return value
 
-    raise HTTPException(status_code=422, detail="No QR code detected after enhanced photo decoding")
+    # OpenCV uses a distinct QR finder / decoder and can recover real Haryana
+    # WhatsApp photographs that ZXing rejects. Keep this fallback after ZXing
+    # to minimize routine decode latency.
+    try:
+        bgr = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+        detector = cv2.QRCodeDetector()
+        value, _points, _straight = detector.detectAndDecode(bgr)
+        if value:
+            return str(value).strip()
+    except (cv2.error, ValueError, TypeError):
+        pass
+
+    raise HTTPException(status_code=422, detail="QR could not be decoded from this photo. Upload a closer, sharper QR crop or paste the QR link.")
 
 
 async def decode_qr_upload(file: UploadFile) -> str:
