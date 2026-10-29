@@ -61,3 +61,44 @@ def test_reference_six_page_invoice_line_amounts_reconcile_to_printed_issue_pric
     assert round(730822 + 4463.89 + 15738.72 + 76968, 2) == 827992.61
     assert round(827992.61 + 16560, 2) == 844552.61
     assert round(844747.65 - 844552.61, 2) == 195.04
+
+
+def test_wrapped_source_charges_read_from_separate_ruled_panel_cells():
+    from app.modules.document_import.ap_icdc.main import panel_summary_from_boxes
+    def b(text, x, y):
+        return {"text": text, "x0": x, "x1": x+65, "y0": y, "y1": y+12}
+    # OCR boxes may split AP summary labels across three separate lines.
+    boxes = [
+        b("Issue Price", 840, 120), b("730,822.00", 1050, 120),
+        b("CESS", 840, 170), b("4,463.89", 1050, 170),
+        b("Additional", 840, 210), b("Previlage Fee", 840, 230),
+        b("15,738.72", 1050, 235),
+        b("Additional", 840, 260), b("Retail Excise", 840, 280),
+        b("Tax", 840, 300), b("76,968.00", 1050, 285),
+        b("Previlage Fee", 840, 330), b("for Clubs", 840, 350),
+        b("0.00", 1050, 350),
+        b("ICDC Value", 840, 390), b("827,992.61", 1050, 390),
+        b("TCS", 840, 430), b("16560", 1050, 430),
+        b("Sub Total", 840, 470), b("844,747.65", 1050, 470),
+    ]
+    bands = [110, 155, 195, 250, 315, 380, 420, 460, 500]
+    found = panel_summary_from_boxes(boxes, 1200, bands, 600)
+    assert found["issue_price"] == 730822
+    assert found["cess"] == 4463.89
+    assert found["additional_previlage_fee"] == 15738.72
+    assert found["additional_retail_excise_tax"] == 76968
+    assert found["previlage_fee_clubs"] == 0
+    assert found["icdc_value"] == 827992.61
+    assert found["tcs"] == 16560
+    assert found["sub_total"] == 844747.65
+
+
+def test_three_printed_quantity_cells_are_reconciled_without_guessing():
+    from app.modules.document_import.ap_icdc.main import invoice_qty_from_boxes
+    def b(text, x, y):
+        return {"text": text, "x0": x, "x1": x+55, "y0": y, "y1": y+16}
+    boxes = [b("Total Cartons:", 250, 123), b("58/0", 390, 130),
+             b("132/0", 540, 130), b("190/0", 690, 130)]
+    assert invoice_qty_from_boxes(boxes, 1200) == (58, 132, 190)
+    boxes[-1]["text"] = "191/0"
+    assert invoice_qty_from_boxes(boxes, 1200) is None
