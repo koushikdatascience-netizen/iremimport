@@ -56,6 +56,20 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
             continue
 
         if document_source:
+            # AP alone preserves the separately printed source line amount.
+            # This remains evidence, never a Calculate input or replacement
+            # for Item Master rates; WB and other states are unchanged.
+            if str(getattr(document, "sourceState", "") or "").upper() == "ANDHRA_PRADESH":
+                source_amount = _float(getattr(item, "invoiceAmount", None))
+                if source_amount is None:
+                    source_amount = _float(getattr(item, "printedAmount", None))
+                if source_amount is None:
+                    source_amount = _float(item.amount if item.amount is not None else item.itemAmount)
+                if source_amount is not None:
+                    raw["invoiceAmount"] = source_amount
+                financials = getattr(document, "invoiceFinancials", None)
+                if isinstance(financials, dict):
+                    raw["invoiceFinancials"] = financials
             # PDF/image canonical contract:
             #   box   = explicitly printed cases/cartons
             #   loose = explicitly printed single bottles/units
@@ -95,7 +109,7 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
                     quantity=float(box + loose) if (box or loose) else None,
                     rate=None,
                     mrp=None,
-                    amount=None,
+                    amount=(raw.get("invoiceAmount") if str(getattr(document, "sourceState", "") or "").upper() == "ANDHRA_PRADESH" else None),
                     batchNo=_clean_text(item.batchNo),
                     box=box or None,
                     loose=loose or None,
