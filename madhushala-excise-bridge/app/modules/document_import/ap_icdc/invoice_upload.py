@@ -6,6 +6,8 @@ fully-reconciled invoices. Printed money is evidence, not Calculate output.
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 import tempfile
 from pathlib import Path
 from fastapi import HTTPException, UploadFile
@@ -37,6 +39,21 @@ def invoice_financials(summary: dict) -> dict:
     }
 
 
+
+
+def validation_failure_detail(result: dict) -> dict:
+    """Safe AP diagnostics: only counts and check names, never invoice contents."""
+    validation = result.get("validation") or {}
+    checks = validation.get("checks") or {}
+    return {
+        "message": "AP ICDC OCR reconciliation failed; import was blocked",
+        "failedChecks": sorted(key for key, passed in checks.items() if not passed),
+        "reason": validation.get("reason"),
+        "ocrRowCount": len(result.get("items") or []),
+        "gridColumnsDetected": (result.get("diagnostics") or {}).get("grid_columns_detected"),
+        "pageCount": (result.get("diagnostics") or {}).get("page_count"),
+        "ocrSeconds": (result.get("diagnostics") or {}).get("ocr_elapsed_seconds"),
+    }
 
 
 def verified_document_from_result(result: dict) -> ExtractedDocument:
@@ -77,9 +94,10 @@ def verified_document_from_result(result: dict) -> ExtractedDocument:
         invoiceFinancials=financials,
     )
 
-async def process_icdc_invoice_upload(service, session, file: UploadFile):
+async def process_icdc_invoice_upload(service, session, file: UploadFile, *, first_page=None):
     if not str(file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="AP ICDC invoice accepts PDF files only")
+    started = time.perf_counter()
     data = await file.read()
     service._validate_file(file, data)
     job_id = service._create_job(session, "DOCUMENT_PDF", Path(file.filename).name)
@@ -91,7 +109,13 @@ async def process_icdc_invoice_upload(service, session, file: UploadFile):
             source = Path(handle.name)
         from app.modules.document_import.ap_icdc.main import extract_pdf
         try:
-            result = await asyncio.to_thread(extract_pdf, source, document_type="icdc")
+            options = {"document_type": "icdc"}
+            if first_page is not None:
+                import hashlib
+                if first_page.get("sha256") != hashlib.sha256(data).hexdigest():
+                    raise HTTPException(status_code=422, detail="AP identification evidence does not match the uploaded file")
+                options["first_page"] = first_page
+            result = await asyncio.to_thread(extract_pdf, source, **options)
         except ImportError as exc:
             raise HTTPException(status_code=503, detail="ICDC invoice OCR runtime not installed") from exc
         validation = result.get("validation") or {}
@@ -107,7 +131,7 @@ async def process_icdc_invoice_upload(service, session, file: UploadFile):
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         normalized = normalize_extracted_document(doc, "DOCUMENT_PDF")
-        if len(normalized) != len(products):
+        if len(normalized) != len(doc.items):
             raise HTTPException(status_code=422, detail="AP invoice rows did not fully normalize")
         service._persist_items(job_id, normalized)
         service._update_job(job_id, status="REVIEW_REQUIRED",
@@ -116,6 +140,13 @@ async def process_icdc_invoice_upload(service, session, file: UploadFile):
                             invoice_date=doc.invoiceDate,
                             extracted_count=len(normalized), mapped_count=0, error=None)
         review = service.get_review_items(session, job_id)
+        diagnostics = {**result.get("diagnostics", {}),
+                       "identificationMs": (first_page or {}).get("elapsed_ms", 0),
+                       "uploadPipelineMs": round((time.perf_counter() - started) * 1000, 2)}
+        logging.getLogger("madhushala-excise-bridge.document-import").info(
+            "ap_icdc_extraction jobId=%s rows=%s status=%s identificationMs=%s pipelineMs=%s pageCount=%s",
+            job_id, len(doc.items), validation.get("status"), diagnostics["identificationMs"],
+            diagnostics["uploadPipelineMs"], diagnostics.get("page_count"))
         return {
             "job": service.get_job(session, job_id),
             "source": "DOCUMENT_PDF", "provider": "AP_ICDC_INVOICE",
@@ -130,6 +161,7 @@ async def process_icdc_invoice_upload(service, session, file: UploadFile):
             "normalizedItems": [x.model_dump() for x in normalized],
             "reviewItems": review,
             "invoiceValidation": validation,
+            "extraction": diagnostics,
         }
     except HTTPException as exc:
         service._update_job(job_id, status="FAILED", error=str(exc.detail)[:400])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import asyncio
 import logging
 import time
 
@@ -18,7 +19,7 @@ from app.modules.document_import.purchase_required import resolve_required_purch
 from app.modules.document_import.qr_decoder import decode_qr_upload
 from app.modules.document_import.ap_icdc.bar_upload import process_bar_indent_upload
 from app.modules.document_import.ap_icdc.invoice_upload import process_icdc_invoice_upload
-from app.modules.document_import.ap_icdc.detect_invoice import is_ap_icdc_invoice_pdf
+from app.modules.document_import.ap_icdc.detect_invoice import is_ap_icdc_invoice_pdf, scanned_ap_icdc_evidence
 from app.modules.document_import.document_mapping import save_document_row_mappings
 from app.modules.document_import.up_excise_qr import (
     extract_up_transport_pass,
@@ -66,6 +67,9 @@ def create_router(service: DocumentImportService) -> APIRouter:
             await file.seek(0)
             if is_ap_icdc_invoice_pdf(data):
                 return await process_icdc_invoice_upload(service, session, file)
+            evidence = await asyncio.to_thread(scanned_ap_icdc_evidence, data, file.filename)
+            if evidence:
+                return await process_icdc_invoice_upload(service, session, file, first_page=evidence)
         return await service.process_upload(session, file)
 
     @router.post("/upload/pdf")
@@ -78,6 +82,9 @@ def create_router(service: DocumentImportService) -> APIRouter:
         await file.seek(0)
         if is_ap_icdc_invoice_pdf(data):
             return await process_icdc_invoice_upload(service, session, file)
+        evidence = await asyncio.to_thread(scanned_ap_icdc_evidence, data, file.filename)
+        if evidence:
+            return await process_icdc_invoice_upload(service, session, file, first_page=evidence)
         return await service.process_upload(session, file)
 
     @router.post("/upload/ap/icdc-invoice")
@@ -124,6 +131,9 @@ def create_router(service: DocumentImportService) -> APIRouter:
             await files[0].seek(0)
             if is_ap_icdc_invoice_pdf(data):
                 return await process_icdc_invoice_upload(service, session, files[0])
+            evidence = await asyncio.to_thread(scanned_ap_icdc_evidence, data, files[0].filename)
+            if evidence:
+                return await process_icdc_invoice_upload(service, session, files[0], first_page=evidence)
         return await service.process_uploads(session, files)
 
     @router.get("/jobs/{job_id}")

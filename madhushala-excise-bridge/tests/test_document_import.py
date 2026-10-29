@@ -3110,3 +3110,66 @@ def test_haryana_qr_review_mapping_and_universal_handoff(client, monkeypatch):
         assert (item['box'], item['loose'], item['qnty']) == (cases, loose, cases * pack + loose)
         assert item['batchNo'] == f'B{i}'
         assert item['amount'] is None
+
+
+def test_ap_real_invoice_normal_upload_persistence_mapping_and_handoff(client, monkeypatch):
+    import hashlib
+    from test_ap_icdc_real_invoice import replay_invoice, assert_invoice, AMOUNTS
+    from app.modules.document_import.ap_icdc import main, detect_invoice
+    from app.modules.document_import import purchase_required, service as service_module
+    from app.services.reference_data_service import reference_data_service
+    from app.db import conn
+    with monkeypatch.context() as geometry:
+        result = replay_invoice(geometry)
+    assert_invoice(result)
+    data = b'%PDF controlled-route-input'
+    evidence = {'sha256': hashlib.sha256(data).hexdigest()}
+    import app.modules.document_import.routes as routes
+    monkeypatch.setattr(routes, 'scanned_ap_icdc_evidence', lambda *a: evidence)
+    def extract(path, **kwargs):
+        assert kwargs['first_page'] is evidence
+        return result
+    monkeypatch.setattr(main, 'extract_pdf', extract)
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('Confirmed AP invoice must not call generic cloud extraction')
+    monkeypatch.setattr(service_module.LlamaCloudClient,'extract_scanned_pdf_pages',forbidden)
+    async def context(*args, **kwargs): return {'defaults': {}}
+    async def catalogue(session):
+        return [{'itemCode': f'TEST{i}', 'itemName': row['brand_name'], 'packing':12,
+                 'purchaseRate':1,'purchaseRateCase':12,'salesRate':2}
+                for i,row in enumerate(result['items'])]
+    monkeypatch.setattr(purchase_required,'build_purchase_context',context)
+    monkeypatch.setattr(reference_data_service,'fresh_catalogue',catalogue)
+    session = create_session(client)
+    response = client.post('/api/v1/document-import/upload',headers=auth(session),
+                           files={'file':('andra2(1).pdf',data,'application/pdf')})
+    assert response.status_code == 200, response.text
+    body = response.json(); job = body['job']['id']
+    assert body['summary']['detected'] == 41
+    assert all(body['invoiceValidation']['checks'].values())
+    rows = client.get(f'/api/v1/document-import/jobs/{job}/items',headers=auth(session)).json()['items']
+    assert len(rows) == 41
+    with conn() as db:
+        for row in rows:
+            raw = json.loads(row['raw_data_json']); serial = raw['sourceSerial']
+            assert Decimal(str(raw['invoiceAmount'])) == Decimal(AMOUNTS[serial-1])
+            assert raw['invoiceFinancials']['challanAmount'] == 844548
+            db.execute("UPDATE import_items SET mapped_item_code=?,mapping_status='MAPPED' WHERE id=?",
+                       (f'TEST{serial-1}',row['id']))
+    response = client.get(f'/api/v1/document-import/jobs/{job}/purchase/handoff',headers=auth(session))
+    assert response.status_code == 200, response.text
+    payload = response.json()['purchasePayload']
+    assert len(payload['items']) == 41
+    assert payload['docNo'] == 'ICDC08326281144107'
+    assert payload['tpPassNo'] == 'TP08326281144107'
+    assert Decimal(str(payload['totalAmount'])) == Decimal('730822.00')
+    assert Decimal(str(payload['totalNet'])) == Decimal('844552.61')
+    assert Decimal(str(payload['challanAmount'])) == Decimal('844548.00')
+    assert Decimal(str(payload['previousCreditLeftover'])) == Decimal('199.65')
+    assert Decimal(str(payload['subTotal'])) == Decimal('844747.65')
+    assert Decimal(str(payload['amountCredited'])) == Decimal('195.04')
+    assert payload['taxes']['vat'] is None and payload['roundedOff'] is None
+    assert sum(Decimal(str(i['amount'])) for i in payload['items']) == Decimal('730822.00')
+    assert sum(i['box'] for i in payload['items']) == 190
+    for i in payload['items']:
+        assert Decimal(str(i['amount'])) == Decimal(AMOUNTS[int(i['itemCode'][4:])])

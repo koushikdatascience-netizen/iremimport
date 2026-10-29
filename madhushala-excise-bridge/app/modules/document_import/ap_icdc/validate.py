@@ -49,5 +49,10 @@ def validate_document(items, summary):
     checks["less_this_invoice_value"] = icdc is not None and tcs is not None and less is not None and icdc + tcs == less
     sub, credited = money(summary.get("sub_total")), money(summary.get("amount_credited"))
     checks["amount_credited"] = sub is not None and less is not None and credited is not None and sub - less == credited
+    if "challan_amount" in summary or "previous_credit_leftover" in summary:
+        challan = money(summary.get("challan_amount"))
+        previous = money(summary.get("previous_credit_leftover"))
+        checks["funds_subtotal"] = (challan is not None and previous is not None and sub is not None
+                                    and challan + previous == sub)
     status = "FAILED" if not all(checks.values()) else ("REVIEW_REQUIRED" if review else "PASSED")
     return {"status": status, "checks": checks, "row_arithmetic_errors": row_errors, "rows_needing_review": sorted(set(x for x in review if x is not None))}

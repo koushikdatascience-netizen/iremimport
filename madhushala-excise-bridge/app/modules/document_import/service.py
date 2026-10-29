@@ -972,7 +972,18 @@ class DocumentImportService:
                 handle.write(data)
                 temp_path = Path(handle.name)
 
+            evidence = None
             if ext == "pdf":
+                from app.modules.document_import.ap_icdc.detect_invoice import scanned_ap_icdc_evidence
+                import asyncio
+                evidence = await asyncio.to_thread(scanned_ap_icdc_evidence, data, filename)
+            if evidence is not None:
+                from app.modules.document_import.ap_icdc.main import extract_pdf as extract_ap_icdc
+                from app.modules.document_import.ap_icdc.invoice_upload import verified_document_from_result
+                ap_result = await asyncio.to_thread(extract_ap_icdc, temp_path, document_type="icdc", first_page=evidence)
+                extracted = verified_document_from_result(ap_result)
+                meta = {"profile": "AP_ICDC_INVOICE", "engine": "verified-ap-icdc-ocr", "needsFallback": False}
+            elif ext == "pdf":
                 extracted, meta = extract_pdf_locally(temp_path)
                 if extracted is None and meta.get("profile") == "WEST_BENGAL_BEVCO_INVOICE":
                     raise ValueError(
@@ -1067,16 +1078,23 @@ class DocumentImportService:
                     and "ANDHRA PRADESH" in str(extracted.supplierName or "").upper()
                     and str(extracted.invoiceNumber or "").upper().startswith("ICDC")):
                 from app.modules.document_import.ap_icdc.main import extract_pdf as extract_ap_icdc
-                from app.modules.document_import.ap_icdc.invoice_upload import verified_document_from_result
+                from app.modules.document_import.ap_icdc.invoice_upload import verified_document_from_result, validation_failure_detail
                 import asyncio
                 ap_result = await asyncio.to_thread(extract_ap_icdc, temp_path, document_type="icdc")
                 try:
                     verified = verified_document_from_result(ap_result)
                 except ValueError as exc:
+                    details = validation_failure_detail(ap_result)
+                    logger.warning(
+                        "ap_icdc_reconciliation_failed checks=%s rows=%s grid=%s elapsed=%s",
+                        details["failedChecks"], details["ocrRowCount"],
+                        details["gridColumnsDetected"], details["ocrSeconds"],
+                    )
                     raise ValueError(
-                        "Andhra Pradesh ICDC invoice: printed amounts and charges "
-                        "did not reconcile. The import is blocked rather than "
-                        "sending null financials; review invoice OCR."
+                        "Andhra Pradesh ICDC OCR failed verification: "
+                        + ",".join(details["failedChecks"] or [str(details.get("reason") or "missing_verified_fields")])
+                        + f" (rows={details['ocrRowCount']}, grid={details['gridColumnsDetected']}). "
+                        "No unverified amounts were imported."
                     ) from exc
                 if (str(verified.invoiceNumber or "").casefold()
                         != str(extracted.invoiceNumber or "").casefold()):
