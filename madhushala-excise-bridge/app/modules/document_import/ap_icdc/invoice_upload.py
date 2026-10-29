@@ -42,7 +42,9 @@ def invoice_financials(summary: dict) -> dict:
 def verified_document_from_result(result: dict) -> ExtractedDocument:
     """Convert fully reconciled OCR evidence into source financials; never infer prices."""
     validation = result.get("validation") or {}
-    if validation.get("status") != "PASSED":
+    checks = validation.get("checks") or {}
+    if (validation.get("status") not in {"PASSED", "REVIEW_REQUIRED"}
+            or not checks or not all(checks.values())):
         raise ValueError("AP ICDC invoice financial/row reconciliation failed")
     summary = result.get("summary") or {}
     financials = invoice_financials(summary)
@@ -93,7 +95,9 @@ async def process_icdc_invoice_upload(service, session, file: UploadFile):
         except ImportError as exc:
             raise HTTPException(status_code=503, detail="ICDC invoice OCR runtime not installed") from exc
         validation = result.get("validation") or {}
-        if validation.get("status") != "PASSED":
+        if (validation.get("status") not in {"PASSED", "REVIEW_REQUIRED"}
+                or not (validation.get("checks") or {})
+                or not all((validation.get("checks") or {}).values())):
             raise HTTPException(status_code=422, detail={
                 "message": "AP ICDC invoice cannot be reconciled; purchase is blocked",
                 "validation": validation, "rowCount": len(result.get("items") or []),
