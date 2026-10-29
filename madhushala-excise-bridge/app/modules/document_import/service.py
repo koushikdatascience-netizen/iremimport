@@ -151,6 +151,12 @@ def _qr_meta_from_payload(payload: dict[str, Any]) -> dict[str, str]:
         "invoiceNo": r"Invoice\s*No\.?\s*[:\-]?\s*([A-Z0-9\-/]+)",
         "invoiceDate": r"Dated\s*[:\-]?\s*(\d{1,2}[-/]\w{3}[-/]\d{4}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}-\d{2}-\d{2})",
     }
+    pass_match = re.search(r"\bPass\s*No\.?\s*[:\-]?\s*([A-Z0-9/\-]+)", text, re.I)
+    if pass_match:
+        meta["passNo"] = pass_match.group(1)
+    permit_match = re.search(r"\bPermit\s*(?:Number|No\.?)\s*[:\-]?\s*([A-Z0-9/\-]+)", text, re.I)
+    if permit_match:
+        meta["permitNo"] = permit_match.group(1)
     for key, pattern in patterns.items():
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
@@ -168,6 +174,10 @@ def _qr_meta_from_payload(payload: dict[str, Any]) -> dict[str, str]:
 
 def _table_dict_rows(tables: list[list[list[str]]]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
+    # HTMLParser returns flat rows, while older JSON providers return
+    # grouped tables. Accept both without changing existing UP behavior.
+    if tables and isinstance(tables[0], list) and tables[0] and isinstance(tables[0][0], str):
+        tables = [tables]
     for table in tables or []:
         header: list[str] | None = None
         for raw_row in table:
@@ -1352,11 +1362,11 @@ class DocumentImportService:
         meta = _qr_meta_from_payload(payload)
         items: list[ExtractedProduct] = []
         for index, row in enumerate(_table_dict_rows(payload.get("tables") or []), start=1):
-            name = _clean_cell(_first_present(row, "Description", "Description of Goods", "Brand", "Item Name", "Product Name"))
+            name = _clean_cell(_first_present(row, "Description", "Description of Goods", "Brand", "Brand Name", "Item Name", "Product Name"))
             if not name:
                 continue
-            brand = _clean_cell(_first_present(row, "Brand") or name)
-            package_type = _clean_cell(_first_present(row, "Packaging Type", "Package Type", "Packing Type"))
+            brand = _clean_cell(_first_present(row, "Brand", "Brand Name") or name)
+            package_type = _clean_cell(_first_present(row, "Packaging Type", "Package Type", "Packing Type", "Pack Type"))
             ml = _parse_ml_value(
                 _first_present(row, "Packaging Size", "Packing Size", "Size", "ML", "Measure ML", "Pack Type"),
                 name,
@@ -1423,7 +1433,8 @@ class DocumentImportService:
         return ExtractedDocument(
             documentType="stock_list",
             supplierName=None,
-            invoiceNumber=meta.get("indentNo") or meta.get("invoiceNo"),
+            invoiceNumber=meta.get("indentNo") or meta.get("invoiceNo") or meta.get("passNo"),
+            transportPassNo=meta.get("passNo"),
             invoiceDate=meta.get("indentDate") or meta.get("invoiceDate"),
             items=items,
         )
