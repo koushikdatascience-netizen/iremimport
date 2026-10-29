@@ -33,6 +33,106 @@ LABEL_PATTERNS = {
 }
 AMOUNT = re.compile(r"(?<![\w/])\d[\d,]*(?:\.\d{1,2})?(?![\w/])")
 
+def summary_panel_lines(image):
+    """Horizontal boundaries in the right-hand financial summary panel only.
+
+    The general product grid does not include these short horizontal rules.
+    Geometry is source evidence; no values are inferred from arithmetic.
+    """
+    import cv2
+    import numpy as np
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+    left, right = int(w * .68), int(w * .985)
+    mask = cv2.threshold(gray[:, left:right], 190, 255, cv2.THRESH_BINARY_INV)[1]
+    lines = cv2.morphologyEx(
+        mask, cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (max(80, w // 15), 1))
+    )
+    y_values = np.flatnonzero((lines > 0).sum(axis=1) > (right - left) * .30)
+    groups = []
+    for y in map(int, y_values):
+        if not groups or y - groups[-1][-1] > max(7, h // 220):
+            groups.append([y])
+        else:
+            groups[-1].append(y)
+    return [round(sum(g) / len(g)) for g in groups]
+
+
+def panel_summary_from_boxes(boxes, w, boundaries, image_height):
+    """Read printed values in independently ruled AP financial-summary cells.
+
+    Wrapped OCR labels are joined within a bounded cell. Ambiguous monetary
+    cells stay null; the separate document reconciliation remains mandatory.
+    """
+    out = {field: None for field in FIELDS}
+    if not boundaries or len(boundaries) < 3:
+        return out
+    bounds = sorted(set(boundaries))
+    bounds.append(int(image_height * .97))
+    for lo, hi in zip(bounds, bounds[1:]):
+        if hi <= lo + 7 or hi - lo > image_height * .15:
+            continue
+        inside = [b for b in boxes
+                  if lo + 1 <= (b["y0"] + b["y1"]) / 2 < hi - 1
+                  and (b["x0"] + b["x1"]) / 2 >= w * .68]
+        labels = [b for b in inside
+                  if b["x0"] < w * .83 and re.search(r"[A-Za-z]", b["text"])]
+        label_text = " ".join(b["text"] for b in sorted(labels, key=lambda b: (b["y0"], b["x0"])))
+        label_text = " ".join(label_text.split())
+        found_fields = [key for key, pattern in LABEL_PATTERNS.items()
+                        if re.search(pattern, label_text, re.I)]
+        if len(found_fields) != 1:
+            continue
+        field = found_fields[0]
+        values = []
+        for b in inside:
+            if (b["x0"] + b["x1"]) / 2 < w * .81:
+                continue
+            text = str(b["text"]).strip()
+            if re.search("[A-Za-z]", text):
+                continue
+            numbers = AMOUNT.findall(text)
+            if field == "challan_amount" and len(numbers) == 2:
+                # The printed cell includes a long Challan No before '& amount'.
+                numbers = numbers[-1:]
+            if len(numbers) == 1:
+                values.append(float(numbers[0].replace(",", "")))
+        if len(values) == 1:
+            out[field] = values[0]
+    return out
+
+
+def invoice_qty_from_boxes(boxes, w):
+    """Read the separate printed three-part IMFL/Beer/Total quantity row."""
+    groups = []
+    eligible = [b for b in boxes
+                if w * .27 < (b["x0"] + b["x1"]) / 2 < w * .70
+                and re.fullmatch(r"\s*\d+\s*/\s*\d+\s*", b["text"])]
+    for b in sorted(eligible, key=lambda b: (b["y0"], b["x0"])):
+        y = (b["y0"] + b["y1"]) / 2
+        placed = next((g for g in groups if abs(g[0][0] - y) < 25), None)
+        if placed is None:
+            placed = []
+            groups.append(placed)
+        placed.append((y, b))
+    totals = []
+    for group in groups:
+        ordered = sorted((box for _y, box in group), key=lambda b: b["x0"])
+        if len(ordered) != 3:
+            continue
+        vals = [tuple(map(int, re.findall(r"\d+", b["text"]))) for b in ordered]
+        if (all(len(v) == 2 and v[1] == 0 for v in vals)
+                and vals[0][0] + vals[1][0] == vals[2][0]):
+            y = sum((b["y0"] + b["y1"]) / 2 for b in ordered) / 3
+            # Only accept the printed invoice/total-cartons row, not breakage.
+            label = " ".join(b["text"] for b in boxes
+                             if b["x0"] < w * .33 and abs((b["y0"] + b["y1"])/2 - y) < 58)
+            if re.search(r"invoice\s*qty|total\s*cartons", label, re.I):
+                totals.append((vals[0][0], vals[1][0], vals[2][0]))
+    return totals[0] if len(set(totals)) == 1 and totals else None
+
+
 def summary_from_boxes(boxes, w):
     """Labels + proximity only. Missing/ambiguous values remain None."""
     result = {key: None for key in FIELDS}
@@ -99,6 +199,8 @@ def _extract_pdf(path, dpi, threads, ocr_mode, document_type, engine):
     for page, img in render_pages(path, dpi=dpi):
         xs, ys = grid(img)
         boxes, optimization = ocr_page(engine, img, page, page_count, mode=ocr_mode)
+        if document_type == 'icdc':
+            optimization['summary_panel_lines'] = summary_panel_lines(img)
         rendered.append((page, boxes, xs, ys, img.shape[1], img.shape[0], optimization))
     boundaries = (select_bar_columns if document_type == 'bar_indent' else choose_columns)([(p,x,y) for p,_,x,y,_,_,_ in rendered])
     if document_type == 'bar_indent':
@@ -150,10 +252,26 @@ def _extract_pdf(path, dpi, threads, ocr_mode, document_type, engine):
     for page, boxes, _, _, width, _, optimization in rendered:
         if page >= max(1, len(rendered)-1):
             values = summary_from_boxes(boxes,width)
+            ruled = panel_summary_from_boxes(
+                boxes, width, optimization.get("summary_panel_lines", []),
+                rendered[page-1][5],
+            )
+            for key, val in ruled.items():
+                if val is not None:
+                    # An OCR disagreement is ambiguous evidence, not a choice
+                    # between two numbers. Strict validation rejects null.
+                    if values.get(key) is not None and values[key] != val:
+                        values[key] = None
+                    else:
+                        values[key] = val
             for key, val in values.items():
                 if val is not None:
                     summary[key] = val
-            # Total quantity is accepted only from a single OCR box containing all 3 fields.
+            # Accept three independently OCRed quantity cells only when the
+            # displayed IMFL + Beer = Total and the row is explicitly labeled.
+            quantity_parts = invoice_qty_from_boxes(boxes, width)
+            if quantity_parts:
+                summary.update(zip(("invoice_qty_imfl_fl", "invoice_qty_beer", "invoice_qty_total"), quantity_parts))
             for b in boxes:
                 m = re.search(r"(\d+)\s*/\s*0\s+(\d+)\s*/\s*0\s+(\d+)\s*/\s*0",b["text"])
                 if m:
