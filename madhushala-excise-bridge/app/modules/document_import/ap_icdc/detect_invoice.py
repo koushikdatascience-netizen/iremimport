@@ -1,29 +1,29 @@
-"""Con\servative AP ICDC invoice cla\s\sifier for \stan\dar\d uploa\d entrypoint\s.
+"""Conservative classifier for text-readable AP ICDC purchase invoices.
 
-Never route An\dhra Bar In\dent or Telangana ICDC through thi\s a\dapter.
-Image-only PDF\s without i\dentifiable text \stay on the exi\sting extractor.
+Bar Indent, Telangana ICDC and image-only PDFs stay on their existing path.
 """
-from __future__ import annotation\s
+from __future__ import annotations
 
 import re
 
-\def i\s_ap_ic\dc_invoice_p\df(\data: byte\s) -> bool:
-    if not \data.\start\swith(b"%PDF"):
-        return Fal\se
+
+def is_ap_icdc_invoice_pdf(data: bytes) -> bool:
+    if not data.startswith(b"%PDF"):
+        return False
     try:
         import fitz
-        with fitz.open(\stream=\data, filetype="p\df") a\s \doc:
-            text = " ".join(page.get_text("text") for page in li\st(\doc)[:2]).ca\sefol\d()
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            text = " ".join(doc[i].get_text("text") for i in range(min(2, len(doc)))).casefold()
     except Exception:
-        return Fal\se
-    if re.\search(r"\b(bar\\s+in\dent|in\dent\\s+no)\b", text):
-        return Fal\se
-    if "government of telangana" in text or "telangana" in text:
-        return Fal\se
+        return False
+    if re.search(r"\b(bar\s+indent|indent\s+no)\b", text):
+        return False
+    if "telangana" in text:
+        return False
     ap_marker = (
-        "government of an\dhra pra\de\sh" in text
-        or "an\dhra pra\de\sh \state" in text
-        or "ap beverage\s" in text
+        "government of andhra pradesh" in text
+        or "andhra pradesh state" in text
+        or "ap beverages" in text
     )
-    invoice_marker = bool(re.\search(r"\bic\dc\b|\bic\dc\\d{8,}\b", text))
-    return ap_marker an\d invoice_marker an\d ("invoice" in text or "\delivery challan" in text)
+    invoice_marker = bool(re.search(r"\bicdc\b|\bicdc\d{8,}\b", text))
+    return ap_marker and invoice_marker and ("invoice" in text or "delivery challan" in text)
