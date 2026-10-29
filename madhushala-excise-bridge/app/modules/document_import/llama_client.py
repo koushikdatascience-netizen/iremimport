@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -147,8 +148,13 @@ class LlamaCloudClient:
         self.headers = {"Authorization": f"Bearer {settings.LLAMA_CLOUD_API_KEY}", "accept": "application/json"}
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.request(method, f"{self.base_url}{path}", headers={**self.headers, **kwargs.pop("headers", {})}, **kwargs)
+        request_headers = {**self.headers, **kwargs.pop("headers", {})}
+        shared = getattr(self, "_page_http_client", None)
+        if shared is not None:
+            response = await shared.request(method, f"{self.base_url}{path}", headers=request_headers, **kwargs)
+        else:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.request(method, f"{self.base_url}{path}", headers=request_headers, **kwargs)
         text = response.text
         try:
             payload = response.json() if text else None
@@ -160,12 +166,18 @@ class LlamaCloudClient:
         return payload
 
     async def upload_file(self, file_path: Path, filename: str) -> str:
+        uploaded = getattr(self, "_page_uploads", None)
+        key = str(file_path)
+        if uploaded is not None and key in uploaded:
+            return uploaded[key]
         data = file_path.read_bytes()
         files = {"file": (filename, data, "application/octet-stream")}
         response = await self._request("POST", "/api/v1/beta/files", data={"purpose": "extract"}, files=files)
         file_id = response.get("id") or response.get("file_id") if isinstance(response, dict) else None
         if not file_id:
             raise LlamaCloudError("LlamaCloud did not return a file id")
+        if uploaded is not None:
+            uploaded[key] = str(file_id)
         return str(file_id)
 
     async def start_extraction(
@@ -227,6 +239,19 @@ class LlamaCloudClient:
 
 
     async def extract_scanned_pdf_pages(self, file_path: Path, filename: str) -> ExtractedDocument:
+        # One connection pool and one uploaded file per page for both independent
+        # passes. Inputs and accuracy prompts are unchanged; cache lives only for
+        # this call and is discarded even when extraction fails.
+        async with httpx.AsyncClient(timeout=60) as client:
+            self._page_http_client = client
+            self._page_uploads = {}
+            try:
+                return await self._extract_scanned_pdf_pages(file_path, filename)
+            finally:
+                self._page_http_client = None
+                self._page_uploads = None
+
+    async def _extract_scanned_pdf_pages(self, file_path: Path, filename: str) -> ExtractedDocument:
         """Extract every scanned PDF page independently, then merge results.
 
         Some multi-page scanned invoices are visually clear but a PER_DOC
@@ -255,37 +280,60 @@ class LlamaCloudClient:
         async def extract_page(page_number: int, page_path: Path) -> tuple[int, ExtractedDocument]:
             async with semaphore:
                 page_name = f"{Path(filename).stem}-page-{page_number}.pdf"
+                started = time.perf_counter()
                 result = await self.extract_products(
                     page_path,
                     page_name,
                     extraction_mode=settings.DOCUMENT_IMPORT_SCANNED_EXTRACTION_MODE,
                 )
+                logging.getLogger("madhushala-excise-bridge.document-import").info(
+                    "document_page_extraction page=%s stage=products elapsedMs=%s itemCount=%s",
+                    page_number, round((time.perf_counter() - started) * 1000), len(result.items))
                 return page_number, result
 
         financial_pages = []
+        financial_tasks: list[asyncio.Task] = []
+        # Once any page establishes Jharkhand, start the same independent
+        # financial pass while slower product pages finish. Keep the existing
+        # three-request limit and all page/financial reconciliation unchanged.
+        async def financial_page(number, path):
+            try:
+                async with semaphore:
+                    started = time.perf_counter()
+                    data = await self.extract_jharkhand_financial_page(path, number)
+                    logging.getLogger("madhushala-excise-bridge.document-import").info(
+                        "document_page_extraction page=%s stage=financials elapsedMs=%s",
+                        number, round((time.perf_counter() - started) * 1000))
+                return {"page": number, "data": data}
+            except Exception:
+                logging.getLogger("madhushala-excise-bridge.document-import").exception(
+                    "jharkhand_financial_page_failed page=%s", number)
+                return {"page": number, "data": {"items": []}}
+
+        product_tasks = [asyncio.create_task(extract_page(i + 1, path))
+                         for i, path in enumerate(page_paths)]
+        page_results = []
         try:
-            page_results = await asyncio.gather(
-                *(extract_page(i + 1, path) for i, path in enumerate(page_paths))
-            )
-            is_jharkhand = any(
-                str(getattr(doc, "documentProfile", "") or "").upper() == "JHARKHAND_STATE_BEVERAGES"
-                or "jharkhand state beverages" in str(doc.supplierName or "").casefold()
-                for _, doc in page_results
-            )
-            if is_jharkhand:
-                async def financial_page(number, path):
-                    try:
-                        async with semaphore:
-                            data = await self.extract_jharkhand_financial_page(path, number)
-                        return {"page": number, "data": data}
-                    except Exception:
-                        logging.getLogger("madhushala-excise-bridge.document-import").exception(
-                            "jharkhand_financial_page_failed page=%s", number)
-                        return {"page": number, "data": {"items": []}}
-                financial_pages = await asyncio.gather(
-                    *(financial_page(i + 1, path) for i, path in enumerate(page_paths))
+            for completed in asyncio.as_completed(product_tasks):
+                page_number, doc = await completed
+                page_results.append((page_number, doc))
+                is_jharkhand = (
+                    str(getattr(doc, "documentProfile", "") or "").upper() == "JHARKHAND_STATE_BEVERAGES"
+                    or "jharkhand state beverages" in str(doc.supplierName or "").casefold()
                 )
+                if is_jharkhand and not financial_tasks:
+                    financial_tasks = [asyncio.create_task(financial_page(i + 1, path))
+                                       for i, path in enumerate(page_paths)]
+            if financial_tasks:
+                financial_pages = await asyncio.gather(*financial_tasks)
         finally:
+            # Drain running requests before unlinking their page inputs, even
+            # after one request fails or the caller disconnects.
+            tasks = product_tasks + financial_tasks
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             for path in page_paths:
                 path.unlink(missing_ok=True)
 
