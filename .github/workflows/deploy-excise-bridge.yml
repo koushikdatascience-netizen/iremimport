@@ -3,13 +3,11 @@ name: Deploy Excise Bridge
 on:
   pull_request:
     branches: [master]
+  # Every merge to master must create a verified production release.
+  # Path filters previously allowed a master merge to have no deploy run.
   push:
-    branches:
-      - master
-    paths:
-      - "madhushala-excise-bridge/**"
-      - ".github/workflows/deploy-excise-bridge.yml"
-  workflow_dispatch:
+    branches: [master]
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -51,6 +49,9 @@ jobs:
           cp .env.example .env
           docker compose -f docker-compose.prod.yml -f docker-compose.observability.yml config >/dev/null
           rm -f .env
+
+      - name: Verify photographed QR decoder regression
+        run: pytest -q tests/test_haryana_qr_photo_decode.py tests/test_haryana_qr_l34.py
 
       - name: Run tests
         run: pytest -q
