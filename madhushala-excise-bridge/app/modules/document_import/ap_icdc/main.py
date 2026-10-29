@@ -28,7 +28,9 @@ LABEL_PATTERNS = {
     "challan_amount": r"challan\s*(?:no\.?\s*&\s*)?amount",
     "previous_credit_leftover": r"previous\s*credit",
     "sub_total": r"sub\s*total",
-    "less_this_invoice_value": r"less\s*(?:this\s*)?invoice\s*value",
+    # Last financial row is broken by a physical page boundary: page 5 has
+    # "(-)Less this" and its printed value; page 6 says "Invoice Value".
+    "less_this_invoice_value": r"\b(?:less\s*this|less\s*invoice\s*value)\b",
     "amount_credited": r"amount\s*credited",
 }
 AMOUNT = re.compile(r"(?<![\w/])\d[\d,]*(?:\.\d{1,2})?(?![\w/])")
