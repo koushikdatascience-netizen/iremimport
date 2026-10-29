@@ -1,4 +1,4 @@
-name: Deploy Excise Bridge
+name: Deploy Excise Bridge (default-branch dispatcher)
 
 on:
   # GitHub only exposes manual workflow dispatch when the workflow exists
