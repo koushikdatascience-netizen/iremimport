@@ -61,19 +61,49 @@ def decode_qr_image_bytes(data: bytes) -> str:
         if crop.width >= 100 and crop.height >= 100:
             variants.append(crop)
 
-    for candidate in variants:
+    # WhatsApp photographs often contain a tiny, compressed QR within a full
+    # page. Re-sample focused windows before giving up. Keep a strict bound
+    # on candidate size and number of reads to avoid decode DoS.
+    def _decode(candidate):
         try:
             barcodes = zxingcpp.read_barcodes(candidate)
         except Exception:
-            continue
+            return None
         for barcode in barcodes:
             value = str(getattr(barcode, "text", "") or "").strip()
             if value and getattr(barcode, "format", None) == zxingcpp.BarcodeFormat.QRCode:
                 return value
-        # Older ZXing builds may expose QR formats differently. The URL
-        # validator downstream still decides whether a decoded link is safe.
         for barcode in barcodes:
             value = str(getattr(barcode, "text", "") or "").strip()
+            if value:
+                return value
+        return None
+
+    for candidate in variants:
+        value = _decode(candidate)
+        if value:
+            return value
+
+    # The QR can occupy less than 200 source pixels. Bicubic/Lanczos resizing
+    # and thresholding often rescue photographed codes; do not enlarge an
+    # already large image or turn the entire original into many huge variants.
+    for candidate in variants[1:]:
+        if candidate.width < 70 or candidate.height < 70:
+            continue
+        if max(candidate.size) > 2200:
+            continue
+        scale = min(3, max(1, 800 // max(candidate.size)))
+        if scale > 1:
+            enlarged = candidate.resize((candidate.width * scale, candidate.height * scale),
+                                         Image.Resampling.LANCZOS)
+            value = _decode(enlarged)
+            if value:
+                return value
+        else:
+            enlarged = candidate
+        for threshold in (110, 150, 190):
+            binary = enlarged.point(lambda p, t=threshold: 255 if p > t else 0)
+            value = _decode(binary)
             if value:
                 return value
 
