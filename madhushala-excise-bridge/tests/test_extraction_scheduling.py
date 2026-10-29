@@ -68,18 +68,6 @@ def test_ap_ocr_engine_reused_and_serialized_without_changing_resolution(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_local_pdf_extraction_does_not_block_other_requests(monkeypatch):
-    from app.modules.document_import import service
-    main_thread = threading.get_ident()
-    observed = []
-    def extract(path):
-        observed.append(threading.get_ident())
-        return ExtractedDocument(items=[]), {'needsFallback': False}
-    monkeypatch.setattr(service, 'extract_pdf_locally', extract)
-    await service.DocumentImportService(None)._extract_upload_part(b'%PDF test', 'pdf', 'odisha.pdf', 1)
-    assert observed and observed[0] != main_thread
-
-@pytest.mark.asyncio
 async def test_financial_second_pass_reuses_identical_uploaded_page(monkeypatch, tmp_path):
     path = tmp_path / 'page.pdf'
     path.write_bytes(b'%PDF identical-page')

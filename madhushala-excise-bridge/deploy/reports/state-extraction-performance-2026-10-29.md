@@ -1,4 +1,4 @@
-# State document extraction performance â€” 29 October 2026
+# State document extraction performance — 29 October 2026
 
 Accuracy takes priority. No DPI reduction, crop activation, cheaper cloud mode, prompt change, row omission, reconciliation relaxation, Calculate or Save change is included.
 
@@ -15,11 +15,11 @@ Accuracy takes priority. No DPI reduction, crop activation, cheaper cloud mode, 
 - Reuse the same uploaded page file ID for the independent Jharkhand financial pass. No data or financial pass is omitted. Upload reuse lasts only for the current extraction call.
 - Start Jharkhand financial verification as soon as a completed page identifies the profile, overlapping slower product pages rather than waiting for the entire first round. Preserve the existing three-request cap, page order, merge rules and financial reconciliation. Cancel and drain tasks before removing temporary inputs on failure.
 - Reuse one serialized RapidOCR engine per API process, with bounded ONNX threads. Keep 250 DPI, full-page OCR and the same parser/validation. This avoids repeated initialization and competing mutable inference sessions; concurrent OCR calls queue rather than corrupting shared state or exhausting the VPS.
-- Run synchronous local PDF parsing in a worker thread, so readable Odisha imports do not block the API event loop behind other local extraction work. Odisha parsing and all arithmetic checks are untouched.
+- Preserve synchronous local PDF parsing. A proposed worker-thread change was removed before deployment because PyMuPDF explicitly does not support multithreaded use. Odisha is already fast on the readable reference layout; its execution and arithmetic checks remain untouched.
 - Add sanitized per-page product/financial timing diagnostics, without document contents, file names, credentials or amounts.
 
 ## Tests and limits
 
-Local suite: 358 passed, 7 skipped. Added regressions establish product/financial overlap, unchanged concurrency cap, financial upload reuse, safe cancellation and cleanup, OCR serialization/reuse at unchanged resolution, and local parsing off the API event loop. Existing state extraction and universal handoff regressions remain in the full suite. CI also runs the production Dockerfile image.
+Local suite before the safety correction: 358 passed, 7 skipped. The correction removes one scheduling test alongside the unsupported worker-thread change. Added regressions establish product/financial overlap, unchanged concurrency cap, financial upload reuse, safe cancellation and cleanup, OCR serialization/reuse at unchanged resolution. Existing state extraction and universal handoff regressions remain in the full suite. CI also runs the production Dockerfile image.
 
 Image-only AP documents on the generic cloud path still depend on provider response time. Odisha already extracts the known readable layout quickly. There is no promise that every large scan finishes under one minute; such a promise would require changing accuracy mode or bypassing verification, which this release does not do. No real Purchase Save is performed.
