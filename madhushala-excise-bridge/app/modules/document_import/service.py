@@ -1478,6 +1478,50 @@ class DocumentImportService:
             body = parser.payload()
 
         extracted = self._qr_document_from_html(body)
+        # Haryana's PassDetails endpoint can return a JavaScript-rendered
+        # shell rather than the populated L-34 table to plain HTTP clients.
+        # Attempt a bounded browser render only for this verified official
+        # endpoint. Never reinterpret the blank shell as a valid zero-item pass.
+        is_haryana_pass = (
+            host == "portal.haryanatax.gov.in"
+            and parsed.path.rstrip("/").casefold()
+            == "/department/qrgeneration/passdetails"
+        )
+        if is_haryana_pass and not extracted.items:
+            try:
+                from playwright.async_api import async_playwright
+                async with async_playwright() as playwright:
+                    browser = await playwright.chromium.launch(headless=True)
+                    try:
+                        page = await browser.new_page()
+                        await page.goto(clean_url, wait_until="domcontentloaded", timeout=18000)
+                        await page.wait_for_timeout(1600)
+                        rendered_url = urlparse(page.url)
+                        if (rendered_url.scheme != "https"
+                                or rendered_url.hostname != "portal.haryanatax.gov.in"):
+                            raise ValueError("Haryana pass page redirected outside the official portal")
+                        rendered_html = await page.content()
+                    finally:
+                        await browser.close()
+                rendered_parser = _ReadableHtmlParser()
+                rendered_parser.feed(rendered_html[:500000])
+                rendered_body = rendered_parser.payload()
+                rendered = self._qr_document_from_html(rendered_body)
+                if rendered.items:
+                    body = rendered_body
+                    extracted = rendered
+            except Exception as exc:
+                # Do not leak private response body or browser internals.
+                logger.warning("Haryana QR browser render did not produce pass rows: %s", type(exc).__name__)
+        if is_haryana_pass and not extracted.items:
+            self._update_job(
+                job_id, status="FAILED",
+                error="Haryana pass webpage returned no readable item rows after HTTP and browser rendering",
+            )
+            raise HTTPException(
+                status_code=422,
+                detail="Haryana QR link opened, but the government pass page returned no readable product table. Try opening the QR link in your browser or upload a clear full L-34 pass image.",
+            )
         self._update_job(
             job_id,
             status="NORMALIZING",
