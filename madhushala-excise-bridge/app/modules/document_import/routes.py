@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import asyncio
 import logging
 import time
 
@@ -18,7 +19,7 @@ from app.modules.document_import.purchase_required import resolve_required_purch
 from app.modules.document_import.qr_decoder import decode_qr_upload
 from app.modules.document_import.ap_icdc.bar_upload import process_bar_indent_upload
 from app.modules.document_import.ap_icdc.invoice_upload import process_icdc_invoice_upload
-from app.modules.document_import.ap_icdc.detect_invoice import is_ap_icdc_invoice_pdf
+from app.modules.document_import.ap_icdc.detect_invoice import is_ap_icdc_invoice_pdf, is_scanned_ap_icdc_pdf
 from app.modules.document_import.document_mapping import save_document_row_mappings
 from app.modules.document_import.up_excise_qr import (
     extract_up_transport_pass,
@@ -64,7 +65,7 @@ def create_router(service: DocumentImportService) -> APIRouter:
         if str(file.filename or "").lower().endswith(".pdf"):
             data = await file.read()
             await file.seek(0)
-            if is_ap_icdc_invoice_pdf(data):
+            if (is_ap_icdc_invoice_pdf(data) or await asyncio.to_thread(is_scanned_ap_icdc_pdf, data, file.filename)):
                 return await process_icdc_invoice_upload(service, session, file)
         return await service.process_upload(session, file)
 
@@ -76,7 +77,7 @@ def create_router(service: DocumentImportService) -> APIRouter:
         session = session_service.from_request(request)
         data = await file.read()
         await file.seek(0)
-        if is_ap_icdc_invoice_pdf(data):
+        if (is_ap_icdc_invoice_pdf(data) or await asyncio.to_thread(is_scanned_ap_icdc_pdf, data, file.filename)):
             return await process_icdc_invoice_upload(service, session, file)
         return await service.process_upload(session, file)
 
@@ -122,7 +123,7 @@ def create_router(service: DocumentImportService) -> APIRouter:
         if normalized_kind == "pdf" and len(files) == 1:
             data = await files[0].read()
             await files[0].seek(0)
-            if is_ap_icdc_invoice_pdf(data):
+            if (is_ap_icdc_invoice_pdf(data) or await asyncio.to_thread(is_scanned_ap_icdc_pdf, data, files[0].filename)):
                 return await process_icdc_invoice_upload(service, session, files[0])
         return await service.process_uploads(session, files)
 
