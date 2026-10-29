@@ -85,6 +85,29 @@ async def test_financial_second_pass_reuses_identical_uploaded_page(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_concurrent_product_and_financial_pass_share_one_page_upload(monkeypatch, tmp_path):
+    path = tmp_path / 'shared-page.pdf'
+    path.write_bytes(b'%PDF same page, concurrent requests')
+    client = object.__new__(LlamaCloudClient)
+    client._page_uploads = {}
+    client._page_upload_locks = {}
+    uploaded = []
+
+    async def request(method, endpoint, **kwargs):
+        uploaded.append(kwargs['files']['file'][1])
+        await asyncio.sleep(0.01)
+        return {'id': 'shared-upload'}
+
+    monkeypatch.setattr(client, '_request', request)
+    results = await asyncio.gather(
+        client.upload_file(path, 'products-page-1.pdf'),
+        client.upload_file(path, 'financial-page-1.pdf'),
+    )
+    assert results == ['shared-upload', 'shared-upload']
+    assert uploaded == [b'%PDF same page, concurrent requests']
+
+
+@pytest.mark.asyncio
 async def test_failed_page_cancels_requests_before_removing_page_files(monkeypatch, tmp_path):
     source = fitz.open(); source.new_page(); source.new_page()
     path = tmp_path / 'failure.pdf'; source.save(path); source.close()
