@@ -898,6 +898,20 @@ class DocumentImportService:
             if not isinstance(financials, dict):
                 continue
             taxes = financials.get("taxes") if isinstance(financials.get("taxes"), dict) else {}
+            if str(raw.get("sourceState") or "").upper() == "ANDHRA_PRADESH":
+                return {
+                    "taxes": {
+                        "vat": taxes.get("vat"),
+                        "tcs": taxes.get("tcs", financials.get("tcs")),
+                        "cess": taxes.get("cess", financials.get("cess")),
+                        "additionalPrivilegeFee": taxes.get("additionalPrivilegeFee", financials.get("additionalPrivilegeFee")),
+                        "additionalRetailExciseTax": taxes.get("additionalRetailExciseTax", financials.get("additionalRetailExciseTax")),
+                        "privilegeFeeForClubs": taxes.get("privilegeFeeForClubs", financials.get("privilegeFeeForClubs")),
+                    },
+                    "roundedOff": financials.get("roundedOff"),
+                    "totalAmount": financials.get("totalAmount", financials.get("issuePrice")),
+                    "totalNet": financials.get("totalNet", financials.get("amountCredited")),
+                }
             if str(raw.get("sourceState") or "").upper() == "JHARKHAND":
                 return {
                     "taxes": {
