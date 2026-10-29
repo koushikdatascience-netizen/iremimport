@@ -50,6 +50,7 @@ async def process_bar_indent_upload(service, session, file: UploadFile):
                 sourceBrandCode=row.get("brand_number"),
                 sourceSerial=row.get("sl_no"),
                 printedAmount=row.get("total"),
+                invoiceAmount=row.get("total"),
                 sourcePages=row.get("pages"),
                 quantitySemantics="explicit_cases_and_bottles",
             ) for row in result["items"]
@@ -60,6 +61,12 @@ async def process_bar_indent_upload(service, session, file: UploadFile):
             sourceState="ANDHRA_PRADESH", sourceDocumentType="AP_BAR_INDENT",
             extractionDiagnostics=result.get("diagnostics"),
             barIndentTotals=result.get("summary"),
+            invoiceFinancials={
+                "totalAmount": (result.get("summary") or {}).get("issue_price"),
+                "totalNet": None,
+                "taxes": {"vat": None, "tcs": None},
+                "sourceDocumentType": "AP_BAR_INDENT",
+            },
         )
         normalized = normalize_extracted_document(doc, "DOCUMENT_PDF")
         if len(normalized) != len(items):
