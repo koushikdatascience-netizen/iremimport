@@ -89,8 +89,8 @@ class _ReadableHtmlParser(HTMLParser):
         text = " ".join(self.text_parts)
         return {
             "title": self.title,
-            "text": text[:12000],
-            "tables": self.rows[:50],
+            "text": text[:50000],
+            "tables": self.rows[:2000],
         }
 
 
@@ -1493,7 +1493,7 @@ class DocumentImportService:
                 body = {"text": response.text[:12000], "tables": []}
         else:
             parser = _ReadableHtmlParser()
-            parser.feed(response.text[:500000])
+            parser.feed(response.text[:2000000])
             body = parser.payload()
 
         extracted = self._qr_document_from_html(body)
@@ -1514,7 +1514,13 @@ class DocumentImportService:
                     try:
                         page = await browser.new_page()
                         await page.goto(clean_url, wait_until="domcontentloaded", timeout=18000)
-                        await page.wait_for_timeout(1600)
+                        try:
+                            await page.wait_for_function(
+                                "() => document.querySelectorAll('table tr td').length > 3",
+                                timeout=9000,
+                            )
+                        except Exception:
+                            await page.wait_for_timeout(1000)
                         rendered_url = urlparse(page.url)
                         if (rendered_url.scheme != "https"
                                 or rendered_url.hostname != "portal.haryanatax.gov.in"):
@@ -1523,7 +1529,7 @@ class DocumentImportService:
                     finally:
                         await browser.close()
                 rendered_parser = _ReadableHtmlParser()
-                rendered_parser.feed(rendered_html[:500000])
+                rendered_parser.feed(rendered_html[:2000000])
                 rendered_body = rendered_parser.payload()
                 rendered = self._qr_document_from_html(rendered_body)
                 if rendered.items:

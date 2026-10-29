@@ -39,3 +39,17 @@ def test_older_grouped_qr_tables_still_supported():
     rows = _table_dict_rows(tables)
     assert len(rows) == 1
     assert rows[0]["Brand"] == "Example Spirit"
+
+
+def test_haryana_product_rows_beyond_legacy_fifty_row_cutoff():
+    noise = "".join("<tr><td>Document metadata</td><td>Entry</td></tr>" for _ in range(55))
+    html = ("<table>" + noise +
+            "<tr><th>Brand Name</th><th>Pack Type</th><th>Number of Cases</th></tr>"
+            "<tr><td>ROYAL STAG WHISKY</td><td>750(12)</td><td>20</td></tr></table>")
+    parser = _ReadableHtmlParser()
+    parser.feed(html)
+    payload = parser.payload()
+    assert len(payload["tables"]) > 50
+    doc = DocumentImportService._qr_document_from_html(None, payload)
+    assert len(doc.items) == 1
+    assert int(doc.items[0].box) == 20
