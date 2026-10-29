@@ -9,6 +9,7 @@ import json
 import re
 import time
 from pathlib import Path
+from threading import Lock
 from .extract import render_pages, ocr_boxes, grid, choose_columns, table_rows
 from .performance import ocr_page
 from .bar_indent import select_bar_columns, parse_bar_rows, validate_bar_items, parse_bar_summary
@@ -73,12 +74,24 @@ def bar_indent_header_from_boxes(boxes):
         "indent_date": match(r"Indent\\s*Date\\s*[:#-]?\\s*(\\d{1,2}[-/]\\d{1,2}[-/]\\d{4})"),
     }
 
+# RapidOCR owns mutable inference buffers. Serialize reuse instead of sharing
+# one engine between concurrent uploads; initialization is paid once per worker.
+_ocr_lock = Lock()
+_ocr_engine = None
+
+
 def extract_pdf(path, dpi=250, threads=2, ocr_mode='full', document_type='icdc', engine=None):
-    # Legacy onnxruntime-backed version is intentional pending measured benchmark.
-    from rapidocr_onnxruntime import RapidOCR
-    import os
-    os.environ.setdefault("OMP_NUM_THREADS", str(threads))
-    engine = engine if engine is not None else RapidOCR()
+    if engine is not None:
+        return _extract_pdf(path, dpi, threads, ocr_mode, document_type, engine)
+    global _ocr_engine
+    with _ocr_lock:
+        from rapidocr_onnxruntime import RapidOCR
+        if _ocr_engine is None:
+            _ocr_engine = RapidOCR(intra_op_num_threads=threads, inter_op_num_threads=1)
+        return _extract_pdf(path, dpi, threads, ocr_mode, document_type, _ocr_engine)
+
+
+def _extract_pdf(path, dpi, threads, ocr_mode, document_type, engine):
     start = time.perf_counter()
     with __import__('fitz').open(str(path)) as _source:
         page_count = len(_source)

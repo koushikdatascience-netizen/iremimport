@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import mimetypes
 import re
@@ -973,7 +974,7 @@ class DocumentImportService:
                 temp_path = Path(handle.name)
 
             if ext == "pdf":
-                extracted, meta = extract_pdf_locally(temp_path)
+                extracted, meta = await asyncio.to_thread(extract_pdf_locally, temp_path)
                 if extracted is None and meta.get("profile") == "WEST_BENGAL_BEVCO_INVOICE":
                     raise ValueError(
                         "WB BEVCO invoice could not be extracted deterministically from its first copy"
