@@ -88,6 +88,17 @@ def panel_summary_from_boxes(boxes, w, boundaries, image_height):
             continue
         field = found_fields[0]
         values = []
+        if field == "challan_amount":
+            # The number and amount may be separate OCR boxes. The printed
+            # ampersand identifies the amount; the long challan ID is not money.
+            marked = [b for b in inside if "&" in b["text"]
+                      and (b["x0"] + b["x1"]) / 2 >= w * .81
+                      and not re.search("[A-Za-z]", b["text"])]
+            if len(marked) == 1:
+                amounts = AMOUNT.findall(marked[0]["text"].rsplit("&", 1)[-1])
+                if len(amounts) == 1:
+                    out[field] = float(amounts[0].replace(",", ""))
+                    continue
         for b in inside:
             if (b["x0"] + b["x1"]) / 2 < w * .81:
                 continue
@@ -182,25 +193,50 @@ _ocr_lock = Lock()
 _ocr_engine = None
 
 
-def extract_pdf(path, dpi=250, threads=2, ocr_mode='full', document_type='icdc', engine=None):
+def extract_pdf(path, dpi=250, threads=2, ocr_mode='full', document_type='icdc', engine=None, first_page=None):
     if engine is not None:
-        return _extract_pdf(path, dpi, threads, ocr_mode, document_type, engine)
+        return _extract_pdf(path, dpi, threads, ocr_mode, document_type, engine, **({"first_page": first_page} if first_page is not None else {}))
     global _ocr_engine
     with _ocr_lock:
         from rapidocr_onnxruntime import RapidOCR
         if _ocr_engine is None:
             _ocr_engine = RapidOCR(intra_op_num_threads=threads, inter_op_num_threads=1)
-        return _extract_pdf(path, dpi, threads, ocr_mode, document_type, _ocr_engine)
+        return _extract_pdf(path, dpi, threads, ocr_mode, document_type, _ocr_engine, **({"first_page": first_page} if first_page is not None else {}))
 
 
-def _extract_pdf(path, dpi, threads, ocr_mode, document_type, engine):
+def reread_serial(path, page_number, dpi, columns, band, engine):
+    """Bounded cell OCR at the original rendering resolution; no inferred digit."""
+    import fitz
+    import cv2
+    import numpy as np
+    with fitz.open(str(path)) as source:
+        pix = source[page_number - 1].get_pixmap(matrix=fitz.Matrix(dpi / 72, dpi / 72), alpha=False)
+        rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+        crop = cv2.cvtColor(rgb[max(0, band[0]+6):band[1]-6,
+                                columns[0]+6:columns[1]-6].copy(), cv2.COLOR_RGB2BGR)
+    if not crop.size:
+        return None
+    crop = cv2.copyMakeBorder(crop, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=(255,255,255))
+    for scale in (1, 2):
+        candidate = crop if scale == 1 else cv2.resize(crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        readings = ocr_boxes(engine, candidate)
+        if len(readings) == 1 and re.fullmatch(r"[0-9]{1,3}", readings[0]["text"].strip()) and readings[0]["confidence"] >= .8:
+            return {"text": readings[0]["text"].strip(), "confidence": readings[0]["confidence"], "scale": scale}
+    return None
+
+
+def _extract_pdf(path, dpi, threads, ocr_mode, document_type, engine, first_page=None):
     start = time.perf_counter()
     with __import__('fitz').open(str(path)) as _source:
         page_count = len(_source)
     rendered = []
     for page, img in render_pages(path, dpi=dpi):
         xs, ys = grid(img)
-        boxes, optimization = ocr_page(engine, img, page, page_count, mode=ocr_mode)
+        if (page == 1 and first_page is not None and first_page.get("dpi") == dpi
+                and (first_page.get("width"), first_page.get("height")) == (img.shape[1], img.shape[0])):
+            boxes, optimization = first_page["boxes"], {"mode": "full_reused_identification"}
+        else:
+            boxes, optimization = ocr_page(engine, img, page, page_count, mode=ocr_mode)
         if document_type == 'icdc':
             optimization['summary_panel_lines'] = summary_panel_lines(img)
         rendered.append((page, boxes, xs, ys, img.shape[1], img.shape[0], optimization))
@@ -234,15 +270,31 @@ def _extract_pdf(path, dpi, threads, ocr_mode, document_type, engine):
         master_width = rendered[0][4]
         cols = [round(x * width/master_width) for x in boundaries]
         # Repeated header is identified from the first few ruled bands.
+        in_products = False
         for band in table_rows(boxes, cols, ys, page, image_height=height):
             cells = band["cells"]
+            if ("brand" in cells[1].casefold() and "name" in cells[2].casefold()
+                    and "total" in cells[9].casefold()):
+                in_products = True
+                continue
+            if not in_products:
+                continue
             if not BRAND.fullmatch(cells[1].replace(" ","").upper()):
                 # Preserve only possible orphan continuations for manual inspection.
                 if cells[2] and not any(cells[i] for i in (0,1,3,4,5,6,7,8,9)):
                     candidates.append({"sl_no": None, "brand_number":"", "brand_name":clean_name(cells[2]),
                          "pages":[page], "flags":[], "continuation_position":"page_start" if band["band"][0] < height *.25 else "other"})
                 continue
+            serial_evidence = None
+            if not cells[0].strip():
+                # Recover an unread serial from its actual ruled image cell,
+                # never from the expected row sequence or document totals.
+                serial_evidence = reread_serial(path, page, dpi, cols, band["band"], engine)
+                if serial_evidence:
+                    cells[0] = serial_evidence["text"]
             item = parse_cells(cells,page,band["confidences"])
+            if serial_evidence:
+                item["audit"]["serialCellOcr"] = serial_evidence
             item["page_open_end"] = band["band"][1] > height * .78
             candidates.append(item)
     items = merge_continuation(candidates)
