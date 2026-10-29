@@ -39,6 +39,21 @@ def invoice_financials(summary: dict) -> dict:
 
 
 
+def validation_failure_detail(result: dict) -> dict:
+    """Safe AP diagnostics: only counts and check names, never invoice contents."""
+    validation = result.get("validation") or {}
+    checks = validation.get("checks") or {}
+    return {
+        "message": "AP ICDC OCR reconciliation failed; import was blocked",
+        "failedChecks": sorted(key for key, passed in checks.items() if not passed),
+        "reason": validation.get("reason"),
+        "ocrRowCount": len(result.get("items") or []),
+        "gridColumnsDetected": (result.get("diagnostics") or {}).get("grid_columns_detected"),
+        "pageCount": (result.get("diagnostics") or {}).get("page_count"),
+        "ocrSeconds": (result.get("diagnostics") or {}).get("ocr_elapsed_seconds"),
+    }
+
+
 def verified_document_from_result(result: dict) -> ExtractedDocument:
     """Convert fully reconciled OCR evidence into source financials; never infer prices."""
     validation = result.get("validation") or {}
