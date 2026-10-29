@@ -1496,16 +1496,24 @@ class DocumentImportService:
             parser.feed(response.text[:2000000])
             body = parser.payload()
 
-        extracted = self._qr_document_from_html(body)
-        # Haryana's PassDetails endpoint can return a JavaScript-rendered
-        # shell rather than the populated L-34 table to plain HTTP clients.
-        # Attempt a bounded browser render only for this verified official
-        # endpoint. Never reinterpret the blank shell as a valid zero-item pass.
+        # Haryana official PassDetails has card-based brand rows, not tables.
+        # Parse those directly before attempting Chromium: public portal loads
+        # slowly, and a successful HTTP response should not incur another load.
         is_haryana_pass = (
             host == "portal.haryanatax.gov.in"
             and parsed.path.rstrip("/").casefold()
             == "/department/qrgeneration/passdetails"
         )
+        if is_haryana_pass and "json" not in content_type:
+            from app.modules.document_import.haryana_pass_cards import haryana_card_payload
+            card_payload = haryana_card_payload(response.text[:2000000])
+            if card_payload:
+                body = card_payload
+        extracted = self._qr_document_from_html(body)
+        # Haryana's PassDetails endpoint can return a JavaScript-rendered
+        # shell rather than the populated L-34 table to plain HTTP clients.
+        # Attempt a bounded browser render only for this verified official
+        # endpoint. Never reinterpret the blank shell as a valid zero-item pass.
         if is_haryana_pass and not extracted.items:
             try:
                 from playwright.async_api import async_playwright
@@ -1531,6 +1539,10 @@ class DocumentImportService:
                 rendered_parser = _ReadableHtmlParser()
                 rendered_parser.feed(rendered_html[:2000000])
                 rendered_body = rendered_parser.payload()
+                from app.modules.document_import.haryana_pass_cards import haryana_card_payload
+                rendered_cards = haryana_card_payload(rendered_html[:2000000])
+                if rendered_cards:
+                    rendered_body = rendered_cards
                 rendered = self._qr_document_from_html(rendered_body)
                 if rendered.items:
                     body = rendered_body
