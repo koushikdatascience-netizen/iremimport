@@ -1371,6 +1371,11 @@ class DocumentImportService:
                 _first_present(row, "Packaging Size", "Packing Size", "Size", "ML", "Measure ML", "Pack Type"),
                 name,
             )
+            # Haryana Pack Type uses 750(12), 375(24), 180(48):
+            # first number is bottle ML; parenthesis is bottles per case.
+            haryana_pack = re.fullmatch(r"\s*(\d{2,5})\s*\(\s*(\d{1,3})\s*\)\s*", package_type)
+            if haryana_pack:
+                ml = int(haryana_pack.group(1))
             boxes = _first_present(
                 row,
                 "Number of Cases",
@@ -1386,7 +1391,7 @@ class DocumentImportService:
             amount = _first_present(row, "Amount", "Duty Fee", "DutyFee", "Total Amount")
             rate = _first_present(row, "Rate", "Box Rate", "Case Rate")
             mrp = _first_present(row, "MRP", "MRP Per Unit", "MrpPerUnit")
-            packing = None
+            packing = int(haryana_pack.group(2)) if haryana_pack else None
             bottle_count = _int_value(bottles)
             box_count = _int_value(boxes)
             extracted_box = box_count
