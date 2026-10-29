@@ -7,7 +7,7 @@ import json
 
 def test_ap_verified_document_retains_source_row_amount_and_financials():
     result = {
-      "validation": {"status": "PASSED"},
+      "validation": {"status": "PASSED", "checks": {"row_arithmetic": True, "case_quantity": True, "issue_price": True, "icdc_value": True, "less_this_invoice_value": True, "amount_credited": True}},
       "header": {"icdc_number": "ICDC08326281144107", "tp_number": "TP08326281144107"},
       "summary": {
         "issue_price": 730822.0, "cess": 4463.89,
@@ -104,3 +104,21 @@ def test_three_printed_quantity_cells_are_reconciled_without_guessing():
     assert invoice_qty_from_boxes(boxes, 1200) == (58, 132, 190)
     boxes[-1]["text"] = "191/0"
     assert invoice_qty_from_boxes(boxes, 1200) is None
+
+
+def test_review_flags_are_allowed_only_with_all_checks_passed():
+    result = {
+        "validation": {"status": "REVIEW_REQUIRED", "checks": {
+            "serial_sequence": True, "row_arithmetic": True, "case_quantity": True,
+            "issue_price": True, "icdc_value": True,
+            "less_this_invoice_value": True, "amount_credited": True,
+        }},
+        "items": [{"brand_name": "SAMPLE", "size_ml": 750,
+                   "qty_cases": 1, "qty_bottles": 0, "total": 50}],
+        "header": {}, "summary": {}
+    }
+    assert len(verified_document_from_result(result).items) == 1
+    result["validation"]["checks"]["issue_price"] = False
+    import pytest
+    with pytest.raises(ValueError, match="reconciliation"):
+        verified_document_from_result(result)
