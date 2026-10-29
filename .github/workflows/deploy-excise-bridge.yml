@@ -56,6 +56,15 @@ jobs:
       - name: Run tests
         run: pytest -q
 
+      - name: Verify regression suite in production Docker image
+        run: |
+          docker build --build-arg APP_GIT_SHA="$GITHUB_SHA" -t excise-bridge-ci .
+          docker run --rm --entrypoint python \
+            -e RUN_HARYANA_BROWSER_TEST=1 \
+            -v "$PWD/tests:/app/tests:ro" \
+            -v "$PWD/extension:/app/extension:ro" \
+            excise-bridge-ci -m pytest -q
+
   deploy:
     name: Deploy production
     if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'

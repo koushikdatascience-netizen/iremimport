@@ -43,7 +43,7 @@ def test_real_haryana_card_layout_preserves_four_rows_and_receipt_numbers():
     payload = haryana_card_payload(html)
     assert payload is not None
     doc = DocumentImportService._qr_document_from_html(None, payload)
-    assert doc.invoiceNumber == "PS26150809023"
+    assert doc.invoiceNumber == "PN261599433427"
     assert doc.transportPassNo == "PS26150809023"
     assert len(doc.items) == 4
     assert [(i.itemName, int(i.ml), int(i.box), int(i.loose)) for i in doc.items] == [

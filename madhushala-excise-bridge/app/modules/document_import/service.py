@@ -1457,8 +1457,11 @@ class DocumentImportService:
         return ExtractedDocument(
             documentType="stock_list",
             supplierName=None,
-            invoiceNumber=meta.get("indentNo") or meta.get("invoiceNo") or meta.get("passNo"),
+            invoiceNumber=(payload.get("permitNumber") if payload.get("sourceState") == "HARYANA" else
+                           meta.get("indentNo") or meta.get("invoiceNo") or meta.get("passNo")),
             transportPassNo=meta.get("passNo"),
+            **({"sourceState": "HARYANA", "permitNumber": payload.get("permitNumber")}
+               if payload.get("sourceState") == "HARYANA" else {}),
             invoiceDate=meta.get("indentDate") or meta.get("invoiceDate"),
             items=items,
         )
@@ -1472,107 +1475,50 @@ class DocumentImportService:
         if host in {"localhost", "127.0.0.1", "0.0.0.0"} or host.endswith(".local"):
             raise HTTPException(status_code=400, detail="QR link host is not allowed")
 
-        job_id = self._create_job(session, "QR_HTML", clean_url[:240])
-        try:
+        from app.modules.document_import.haryana_fetch import is_haryana_pass, fetch_haryana_pass, HaryanaFetchError
+        haryana = is_haryana_pass(clean_url)
+        job_id = self._create_job(session, "QR_HTML", clean_url if haryana else clean_url[:240])
+        if haryana:
             self._update_job(job_id, status="FETCHING_QR_LINK")
-            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-                response = await client.get(clean_url, headers={"accept": "text/html,application/json,*/*"})
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            self._update_job(job_id, status="FAILED", error=exc.response.text[:500] or "QR link request failed")
-            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text[:500] or "QR link request failed") from exc
-        except httpx.HTTPError as exc:
-            self._update_job(job_id, status="FAILED", error=str(exc))
-            raise HTTPException(status_code=502, detail=f"QR link could not be opened: {exc}") from exc
-
-        content_type = response.headers.get("content-type", "")
-        if "json" in content_type:
             try:
-                body: dict[str, Any] = response.json()
-            except ValueError:
-                body = {"text": response.text[:12000], "tables": []}
+                fetched = await fetch_haryana_pass(clean_url, job_id=job_id)
+            except HaryanaFetchError as exc:
+                self._update_job(job_id, status="FAILED", error=f"Haryana QR {exc.reason}")
+                raise HTTPException(status_code=502 if exc.reason in {
+                    "network_timeout", "network_error", "upstream_http_error", "browser_timeout", "browser_unavailable"
+                } else 422, detail=f"Haryana QR retrieval failed ({exc.reason}). Retry the scan or check the official pass page.") from exc
+            body = fetched["payload"]
+            content_type = fetched["contentType"]
+            final_url = fetched["finalUrl"]
+            status_code = fetched["statusCode"]
+            extracted = self._qr_document_from_html(body)
         else:
-            parser = _ReadableHtmlParser()
-            parser.feed(response.text[:2000000])
-            body = parser.payload()
-
-        # Haryana official PassDetails has card-based brand rows, not tables.
-        # Parse those directly before attempting Chromium: public portal loads
-        # slowly, and a successful HTTP response should not incur another load.
-        is_haryana_pass = (
-            host == "portal.haryanatax.gov.in"
-            and parsed.path.rstrip("/").casefold()
-            == "/department/qrgeneration/passdetails"
-        )
-        if is_haryana_pass and "json" not in content_type:
-            from app.modules.document_import.haryana_pass_cards import haryana_card_payload
-            card_payload = haryana_card_payload(response.text[:2000000])
-            if card_payload:
-                body = card_payload
-        extracted = self._qr_document_from_html(body)
-        # Haryana's PassDetails endpoint can return a JavaScript-rendered
-        # shell rather than the populated L-34 table to plain HTTP clients.
-        # Attempt a bounded browser render only for this verified official
-        # endpoint. Never reinterpret the blank shell as a valid zero-item pass.
-        if is_haryana_pass and not extracted.items:
             try:
-                from playwright.async_api import async_playwright
-                async with async_playwright() as playwright:
-                    browser = await playwright.chromium.launch(headless=True)
-                    try:
-                        page = await browser.new_page()
-                        await page.goto(clean_url, wait_until="domcontentloaded", timeout=18000)
-                        try:
-                            await page.wait_for_function(
-                                "() => document.querySelectorAll('.brand-card').length > 0 || document.querySelectorAll('table tr td').length > 3",
-                                timeout=9000,
-                            )
-                        except Exception:
-                            await page.wait_for_timeout(1000)
-                        rendered_url = urlparse(page.url)
-                        if (rendered_url.scheme != "https"
-                                or rendered_url.hostname != "portal.haryanatax.gov.in"):
-                            raise ValueError("Haryana pass page redirected outside the official portal")
-                        rendered_html = await page.content()
-                    finally:
-                        await browser.close()
-                rendered_parser = _ReadableHtmlParser()
-                rendered_parser.feed(rendered_html[:2000000])
-                rendered_body = rendered_parser.payload()
-                from app.modules.document_import.haryana_pass_cards import haryana_card_payload
-                rendered_cards = haryana_card_payload(rendered_html[:2000000])
-                if rendered_cards:
-                    rendered_body = rendered_cards
-                rendered = self._qr_document_from_html(rendered_body)
-                if rendered.items:
-                    body = rendered_body
-                    extracted = rendered
-            except Exception as exc:
-                # Do not leak private response body or browser internals.
-                logger.warning("Haryana QR browser render did not produce pass rows: %s", type(exc).__name__)
-        if is_haryana_pass and not extracted.items:
-            final_payload = rendered_body if "rendered_body" in locals() else body
-            http_rows = len(body.get("tables") or [])
-            rendered_rows = len(final_payload.get("tables") or [])
-            page_text = str(final_payload.get("text") or "").casefold()
-            if any(word in page_text for word in ("session expired", "please login", "sign in", "access denied", "captcha")):
-                failure_reason = "access_gate"
-            elif rendered_rows == 0:
-                failure_reason = "no_html_rows"
+                self._update_job(job_id, status="FETCHING_QR_LINK")
+                async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+                    response = await client.get(clean_url, headers={"accept": "text/html,application/json,*/*"})
+                    response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                self._update_job(job_id, status="FAILED", error=exc.response.text[:500] or "QR link request failed")
+                raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text[:500] or "QR link request failed") from exc
+            except httpx.HTTPError as exc:
+                self._update_job(job_id, status="FAILED", error=str(exc))
+                raise HTTPException(status_code=502, detail=f"QR link could not be opened: {exc}") from exc
+
+            content_type = response.headers.get("content-type", "")
+            if "json" in content_type:
+                try:
+                    body: dict[str, Any] = response.json()
+                except ValueError:
+                    body = {"text": response.text[:12000], "tables": []}
             else:
-                failure_reason = "unrecognized_table_headers"
-            logger.warning(
-                "haryana_qr_no_items jobId=%s reason=%s httpRows=%s browserRows=%s httpStatus=%s",
-                job_id, failure_reason, http_rows, rendered_rows, response.status_code,
-            )
-            self._update_job(
-                job_id, status="FAILED",
-                error=f"Haryana QR {failure_reason} (httpRows={http_rows}, browserRows={rendered_rows})",
-            )
-            raise HTTPException(
-                status_code=422,
-                detail=f"Haryana QR webpage has no extracted product rows ({failure_reason}). Open the QR URL in a browser and check whether the government product table appears.",
-            )
+                parser = _ReadableHtmlParser()
+                parser.feed(response.text[:2000000])
+                body = parser.payload()
+
+            extracted = self._qr_document_from_html(body)
+            final_url = str(response.url)
+            status_code = response.status_code
         self._update_job(
             job_id,
             status="NORMALIZING",
@@ -1598,8 +1544,8 @@ class DocumentImportService:
         return {
             "source": "QR_HTML",
             "url": clean_url,
-            "finalUrl": str(response.url),
-            "statusCode": response.status_code,
+            "finalUrl": final_url,
+            "statusCode": status_code,
             "contentType": content_type,
             "job": self.get_job(session, job_id),
             "summary": {

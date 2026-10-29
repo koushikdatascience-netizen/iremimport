@@ -48,3 +48,16 @@ def test_opencv_fallback_when_zxing_cannot_decode(monkeypatch):
     result = qr_decoder.decode_qr_image_bytes(stream.getvalue())
     assert "passheaderid=1010712" in result
     assert detector.detectAndDecode.called
+
+
+def test_actual_qr_pixels_decode_to_verified_haryana_url():
+    import cv2
+    from io import BytesIO
+    from PIL import Image
+    from app.modules.document_import.qr_decoder import decode_qr_image_bytes
+    url = 'https://portal.haryanatax.gov.in/Department/QRGeneration/PassDetails?passheaderid=1010712'
+    pixels = cv2.QRCodeEncoder_create().encode(url)
+    image = Image.fromarray(pixels).resize((600, 600), Image.Resampling.NEAREST)
+    stream = BytesIO()
+    image.save(stream, 'PNG')
+    assert decode_qr_image_bytes(stream.getvalue()) == url

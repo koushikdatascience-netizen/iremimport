@@ -45,6 +45,15 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
             if permit:
                 raw["sourceState"] = "JHARKHAND"
                 raw["transportPassNo"] = permit
+        if str(getattr(document, "sourceState", "") or "").upper() == "HARYANA":
+            raw["sourceState"] = "HARYANA"
+            raw["transportPassNo"] = document.transportPassNo
+            raw["permitNumber"] = getattr(document, "permitNumber", None)
+            # Haryana prints cases and loose bottles separately. Keep them on
+            # the existing canonical path, including when loose is nonzero.
+            raw["canonicalQuantityVersion"] = 2
+            raw["canonicalBox"] = parse_int(item.box) or 0
+            raw["canonicalLoose"] = parse_int(item.loose) or 0
         raw_name = (item.itemName or item.brand or "").strip()
         brand = (item.brand or raw_name).strip()
         ml = parse_ml(item.ml or raw_name) or None

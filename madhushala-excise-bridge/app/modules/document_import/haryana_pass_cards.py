@@ -70,7 +70,7 @@ def haryana_card_payload(html: str) -> dict | None:
             # Drop incomplete cards rather than create misleading amounts/quantities.
             continue
         parsed_pack = re.fullmatch(r"\s*(\d{2,5})\s*\(\s*(\d{1,3})\s*\)\s*(?:m\.?l\.?)?\s*", pack, re.I)
-        if not parsed_pack:
+        if not parsed_pack or int(parsed_pack.group(1)) <= 0 or int(parsed_pack.group(2)) <= 0:
             continue
         if not re.fullmatch(r"\d+", cases) or not re.fullmatch(r"\d+", loose):
             continue
@@ -80,5 +80,8 @@ def haryana_card_payload(html: str) -> dict | None:
         return None
     pass_no = parser.receipt.get("pass number") or parser.receipt.get("pass no", "")
     permit_no = parser.receipt.get("permit number") or parser.receipt.get("permit no", "")
+    if not pass_no or not permit_no:
+        return None
     metadata = f"Pass No: {pass_no} Permit Number: {permit_no}"
-    return {"title": "Haryana Pass Details", "text": metadata, "tables": [rows]}
+    return {"title": "Haryana Pass Details", "text": metadata, "tables": [rows],
+            "sourceState": "HARYANA", "permitNumber": permit_no, "passNumber": pass_no}

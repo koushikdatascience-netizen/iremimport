@@ -3060,3 +3060,53 @@ def test_real_jharkhand_scan_complete_ocr_persistence_and_handoff(client,monkeyp
     assert all(i["itemAmount"]==0 and i["boxRate"]==12 for i in p["items"])
     assert p["totalAmount"]=="282597.87" and p["totalNet"]=="288249.83"
     assert p["taxes"]["vat"]=="26038.93" and p["taxes"]["aed"]=="8544.25" and p["taxes"]["vatOnAed"]=="406.07"
+
+
+def test_haryana_qr_review_mapping_and_universal_handoff(client, monkeypatch):
+    from app.db import conn
+    from app.modules.document_import import haryana_fetch, purchase_required
+    from app.services.reference_data_service import reference_data_service
+    from app.modules.document_import.haryana_pass_cards import haryana_card_payload
+    products = [('BLENDERS PRIDE ULTRA PREMIUM WHISKY', 750, 12, 108, 0),
+                ('SEAGRAMS BLENDERS PRIDE FOUR ELEMENTS PREMIUM WHISKY', 750, 12, 50, 3),
+                ('ROYAL STAG PREMIER WHISKY', 375, 24, 350, 0),
+                ('ROYAL STAG PREMIER WHISKY', 180, 48, 200, 0)]
+    html = '<div class="receipt-card"><p>Permit Number: PN261599433427</p><p>Pass Number: PS26150809023</p></div>'
+    for index, (name, ml, pack, cases, loose) in enumerate(products):
+        html += f'<div class="brand-card"><p>Brand Name: {name}</p><p>Packing Type: {ml}({pack}) ml</p><p>No. of Cases: {cases}</p><p>Loose Bottles: {loose}</p><p>Liquor Quantity: 999.000 PL</p><p>Batch Number: B{index}</p></div>'
+    async def fetch(url, **kwargs):
+        return dict(payload=haryana_card_payload(html), finalUrl=url, statusCode=200, contentType='text/html')
+    async def context(*args, **kwargs): return {'defaults': {}}
+    async def catalogue(session):
+        return [{'itemCode': f'TEST{i}', 'itemName': name, 'packing': pack,
+                 'purchaseRate': 3, 'purchaseRateCase': 36, 'salesRate': 5}
+                for i, (name, ml, pack, cases, loose) in enumerate(products)]
+    monkeypatch.setattr(haryana_fetch, 'fetch_haryana_pass', fetch)
+    monkeypatch.setattr(purchase_required, 'build_purchase_context', context)
+    monkeypatch.setattr(reference_data_service, 'fresh_catalogue', catalogue)
+    session = create_session(client)
+    response = client.post('/api/v1/document-import/qr/extract', headers=auth(session), json={
+        'url': 'https://portal.haryanatax.gov.in/Department/QRGeneration/PassDetails?passheaderid=1010712'})
+    assert response.status_code == 200, response.text
+    job = response.json()['job']['id']
+    assert response.json()['summary']['detected'] == 4
+    rows = client.get(f'/api/v1/document-import/jobs/{job}/items', headers=auth(session)).json()['items']
+    by_identity = {(p[0], p[1]): i for i, p in enumerate(products)}
+    with conn() as db:
+        for row in rows:
+            index = by_identity[(row['raw_name'], row['ml'])]
+            db.execute("UPDATE import_items SET mapped_item_code=?, mapping_status='MAPPED' WHERE id=?", (f'TEST{index}', row['id']))
+    response = client.get(f'/api/v1/document-import/jobs/{job}/purchase/handoff', headers=auth(session))
+    assert response.status_code == 200, response.text
+    payload = response.json()['purchasePayload']
+    assert payload['docNo'] == 'PN261599433427'
+    assert payload['tpPassNo'] == 'PS26150809023'
+    assert all(payload[key] is None for key in ('totalAmount', 'totalNet', 'roundedOff'))
+    assert all(v is None for v in payload['taxes'].values())
+    assert len(payload['items']) == 4
+    for item in payload['items']:
+        i = int(item['itemCode'][4:])
+        name, ml, pack, cases, loose = products[i]
+        assert (item['box'], item['loose'], item['qnty']) == (cases, loose, cases * pack + loose)
+        assert item['batchNo'] == f'B{i}'
+        assert item['amount'] is None
