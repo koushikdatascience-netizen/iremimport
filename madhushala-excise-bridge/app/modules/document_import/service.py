@@ -1409,7 +1409,7 @@ class DocumentImportService:
                 key: value for key, value in raw.items()
                 if key not in {
                     "itemName", "brand", "ml", "packing", "quantity", "box", "rate", "mrp",
-                    "amount", "itemAmount", "confidence", "batchNo"
+                    "amount", "itemAmount", "confidence", "batchNo", "loose"
                 }
             }
             items.append(
