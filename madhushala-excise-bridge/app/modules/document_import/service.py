@@ -1539,13 +1539,27 @@ class DocumentImportService:
                 # Do not leak private response body or browser internals.
                 logger.warning("Haryana QR browser render did not produce pass rows: %s", type(exc).__name__)
         if is_haryana_pass and not extracted.items:
+            final_payload = rendered_body if "rendered_body" in locals() else body
+            http_rows = len(body.get("tables") or [])
+            rendered_rows = len(final_payload.get("tables") or [])
+            page_text = str(final_payload.get("text") or "").casefold()
+            if any(word in page_text for word in ("session expired", "please login", "sign in", "access denied", "captcha")):
+                failure_reason = "access_gate"
+            elif rendered_rows == 0:
+                failure_reason = "no_html_rows"
+            else:
+                failure_reason = "unrecognized_table_headers"
+            logger.warning(
+                "haryana_qr_no_items jobId=%s reason=%s httpRows=%s browserRows=%s httpStatus=%s",
+                job_id, failure_reason, http_rows, rendered_rows, response.status_code,
+            )
             self._update_job(
                 job_id, status="FAILED",
-                error="Haryana pass webpage returned no readable item rows after HTTP and browser rendering",
+                error=f"Haryana QR {failure_reason} (httpRows={http_rows}, browserRows={rendered_rows})",
             )
             raise HTTPException(
                 status_code=422,
-                detail="Haryana QR link opened, but the government pass page returned no readable product table. Try opening the QR link in your browser or upload a clear full L-34 pass image.",
+                detail=f"Haryana QR webpage has no extracted product rows ({failure_reason}). Open the QR URL in a browser and check whether the government product table appears.",
             )
         self._update_job(
             job_id,
