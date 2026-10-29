@@ -353,7 +353,7 @@ class DocumentPurchaseAdapter:
         )
 
     def non_wb_tp_pass(self, session: dict[str, Any], job_id: str) -> str:
-        """Prefill only verified Odisha tokens or Jharkhand permit numbers; never WB."""
+        """Prefill verified Odisha, Jharkhand and Haryana transport identifiers."""
         tokens: set[str] = set()
         for row in self.document_service.get_items(session, job_id):
             raw = row.get("raw_data_json") if isinstance(row, dict) else None
@@ -366,7 +366,7 @@ class DocumentPurchaseAdapter:
             if not isinstance(data, dict):
                 continue
             state = str(data.get("sourceState") or "").upper()
-            if state not in {"ODISHA", "JHARKHAND"}:
+            if state not in {"ODISHA", "JHARKHAND", "HARYANA"}:
                 continue
             source_row = data.get("rawPdfRow")
             if not isinstance(source_row, dict):
