@@ -1524,7 +1524,7 @@ class DocumentImportService:
                         await page.goto(clean_url, wait_until="domcontentloaded", timeout=18000)
                         try:
                             await page.wait_for_function(
-                                "() => document.querySelectorAll('table tr td').length > 3",
+                                "() => document.querySelectorAll('.brand-card').length > 0 || document.querySelectorAll('table tr td').length > 3",
                                 timeout=9000,
                             )
                         except Exception:
