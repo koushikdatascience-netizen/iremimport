@@ -213,6 +213,18 @@ def create_router(service: DocumentImportService) -> APIRouter:
         base = base_handoff.get("purchasePayload") if isinstance(base_handoff, dict) else {}
         job = service.get_job(session, job_id)
         invoice_financials = service.get_invoice_financials(session, job_id)
+        # Universal optional source-financial schema. Missing printed values
+        # must be JSON null, never inferred from Item Master / Calculate.
+        invoice_financials = {
+            **{key: None for key in ("roundedOff", "totalAmount", "totalNet",
+                                      "icdcValue", "challanAmount", "previousCreditLeftover",
+                                      "subTotal", "amountCredited")},
+            **invoice_financials,
+            "taxes": {
+                **{key: None for key in ("specialPurposeFee", "roundOffValueToGovt", "tcs", "vat", "cess", "aed", "vatOnAed", "liquorTransportation", "additionalPrivilegeFee", "additionalRetailExciseTax", "privilegeFeeForClubs")},
+                **(invoice_financials.get("taxes") or {}),
+            },
+        }
         purchase = {
             "shopCode": str(session.get("shop_code") or "").strip(),
             "companyCode": str(session.get("company_code") or "").strip(),
@@ -242,12 +254,10 @@ def create_router(service: DocumentImportService) -> APIRouter:
             "totalAmount": invoice_financials["totalAmount"],
             "totalNet": invoice_financials["totalNet"],
         }
-        # Additional printed AP ICDC financial evidence, not Calculate inputs.
-        # Never extend other states' handoff keys.
-        if "icdcValue" in invoice_financials:
-            for field in ("icdcValue", "challanAmount", "previousCreditLeftover",
-                          "subTotal", "amountCredited"):
-                purchase[field] = invoice_financials.get(field)
+        # Stable shape for every state; absent AP-specific amounts are null.
+        for field in ("icdcValue", "challanAmount", "previousCreditLeftover",
+                      "subTotal", "amountCredited"):
+            purchase[field] = invoice_financials.get(field)
         logging.getLogger("madhushala-excise-bridge.document-import").info(
             "document_handoff_timings job=%s headerMs=%.2f itemMasterAndEnrichmentMs=%.2f payloadMs=%.2f totalMs=%.2f",
             job_id, (header_done - started) * 1000, (master_done - header_done) * 1000,
