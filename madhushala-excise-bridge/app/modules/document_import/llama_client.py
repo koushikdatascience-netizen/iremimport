@@ -168,8 +168,19 @@ class LlamaCloudClient:
     async def upload_file(self, file_path: Path, filename: str) -> str:
         uploaded = getattr(self, "_page_uploads", None)
         key = str(file_path)
-        if uploaded is not None and key in uploaded:
-            return uploaded[key]
+        if uploaded is None:
+            return await self._upload_page_once(file_path, filename)
+        locks = getattr(self, "_page_upload_locks", None)
+        if locks is None:
+            locks = self._page_upload_locks = {}
+        async with locks.setdefault(key, asyncio.Lock()):
+            if key in uploaded:
+                return uploaded[key]
+            return await self._upload_page_once(file_path, filename)
+
+    async def _upload_page_once(self, file_path: Path, filename: str) -> str:
+        uploaded = getattr(self, "_page_uploads", None)
+        key = str(file_path)
         data = file_path.read_bytes()
         files = {"file": (filename, data, "application/octet-stream")}
         response = await self._request("POST", "/api/v1/beta/files", data={"purpose": "extract"}, files=files)
@@ -245,11 +256,13 @@ class LlamaCloudClient:
         async with httpx.AsyncClient(timeout=60) as client:
             self._page_http_client = client
             self._page_uploads = {}
+            self._page_upload_locks = {}
             try:
                 return await self._extract_scanned_pdf_pages(file_path, filename)
             finally:
                 self._page_http_client = None
                 self._page_uploads = None
+                self._page_upload_locks = None
 
     async def _extract_scanned_pdf_pages(self, file_path: Path, filename: str) -> ExtractedDocument:
         """Extract every scanned PDF page independently, then merge results.

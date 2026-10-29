@@ -94,7 +94,7 @@ def verified_document_from_result(result: dict) -> ExtractedDocument:
         invoiceFinancials=financials,
     )
 
-async def process_icdc_invoice_upload(service, session, file: UploadFile, *, first_page=None):
+async def process_icdc_invoice_upload(service, session, file: UploadFile, *, first_page=None, cached_result=None):
     if not str(file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="AP ICDC invoice accepts PDF files only")
     started = time.perf_counter()
@@ -115,7 +115,12 @@ async def process_icdc_invoice_upload(service, session, file: UploadFile, *, fir
                 if first_page.get("sha256") != hashlib.sha256(data).hexdigest():
                     raise HTTPException(status_code=422, detail="AP identification evidence does not match the uploaded file")
                 options["first_page"] = first_page
-            result = await asyncio.to_thread(extract_pdf, source, **options)
+            if cached_result is None:
+                from app.modules.document_import.verified_cache import get_verified
+                cached = await get_verified(data, session)
+                if cached and cached.get("kind") == "AP_ICDC_INVOICE":
+                    cached_result = cached["result"]
+            result = cached_result if cached_result is not None else await asyncio.to_thread(extract_pdf, source, **options)
         except ImportError as exc:
             raise HTTPException(status_code=503, detail="ICDC invoice OCR runtime not installed") from exc
         validation = result.get("validation") or {}
@@ -130,6 +135,9 @@ async def process_icdc_invoice_upload(service, session, file: UploadFile, *, fir
             doc = verified_document_from_result(result)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if cached_result is None:
+            from app.modules.document_import.verified_cache import put_verified
+            await put_verified(data, session, result=result)
         normalized = normalize_extracted_document(doc, "DOCUMENT_PDF")
         if len(normalized) != len(doc.items):
             raise HTTPException(status_code=422, detail="AP invoice rows did not fully normalize")
@@ -143,6 +151,11 @@ async def process_icdc_invoice_upload(service, session, file: UploadFile, *, fir
         diagnostics = {**result.get("diagnostics", {}),
                        "identificationMs": (first_page or {}).get("elapsed_ms", 0),
                        "uploadPipelineMs": round((time.perf_counter() - started) * 1000, 2)}
+        diagnostics["verifiedCacheHit"] = cached_result is not None
+        if cached_result is not None:
+            diagnostics["originalOcrElapsedSeconds"] = diagnostics.get("ocr_elapsed_seconds")
+            diagnostics["ocr_elapsed_seconds"] = 0
+            diagnostics["ocr_modes"] = ["verified_source_cache"]
         logging.getLogger("madhushala-excise-bridge.document-import").info(
             "ap_icdc_extraction jobId=%s rows=%s status=%s identificationMs=%s pipelineMs=%s pageCount=%s",
             job_id, len(doc.items), validation.get("status"), diagnostics["identificationMs"],

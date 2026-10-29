@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from app.services.session_service import session_service
 from app.integrations.madhushala.client import MadhushalaApiError
 from app.modules.document_import.service import DocumentImportService
+from app.modules.document_import.verified_cache import get_verified
 from app.modules.document_import.purchase_adapter import DocumentPurchaseAdapter
 from app.modules.document_import.purchase_context import build_purchase_context, up_supplier_hint
 from app.modules.document_import.purchase_handoff import build_purchase_handoff
@@ -65,6 +66,9 @@ def create_router(service: DocumentImportService) -> APIRouter:
         if str(file.filename or "").lower().endswith(".pdf"):
             data = await file.read()
             await file.seek(0)
+            cached = await get_verified(data, session)
+            if cached and cached.get("kind") == "AP_ICDC_INVOICE":
+                return await process_icdc_invoice_upload(service, session, file, cached_result=cached["result"])
             if is_ap_icdc_invoice_pdf(data):
                 return await process_icdc_invoice_upload(service, session, file)
             evidence = await asyncio.to_thread(scanned_ap_icdc_evidence, data, file.filename)
@@ -80,6 +84,9 @@ def create_router(service: DocumentImportService) -> APIRouter:
         session = session_service.from_request(request)
         data = await file.read()
         await file.seek(0)
+        cached = await get_verified(data, session)
+        if cached and cached.get("kind") == "AP_ICDC_INVOICE":
+            return await process_icdc_invoice_upload(service, session, file, cached_result=cached["result"])
         if is_ap_icdc_invoice_pdf(data):
             return await process_icdc_invoice_upload(service, session, file)
         evidence = await asyncio.to_thread(scanned_ap_icdc_evidence, data, file.filename)
@@ -129,6 +136,9 @@ def create_router(service: DocumentImportService) -> APIRouter:
         if normalized_kind == "pdf" and len(files) == 1:
             data = await files[0].read()
             await files[0].seek(0)
+            cached = await get_verified(data, session)
+            if cached and cached.get("kind") == "AP_ICDC_INVOICE":
+                return await process_icdc_invoice_upload(service, session, files[0], cached_result=cached["result"])
             if is_ap_icdc_invoice_pdf(data):
                 return await process_icdc_invoice_upload(service, session, files[0])
             evidence = await asyncio.to_thread(scanned_ap_icdc_evidence, data, files[0].filename)

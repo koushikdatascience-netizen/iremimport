@@ -1159,7 +1159,19 @@ class DocumentImportService:
             file_timings: list[dict[str, Any]] = []
             for index, (data, ext, filename) in enumerate(parts, start=1):
                 part_started = time.perf_counter()
-                extracted, meta = await self._extract_upload_part(data, ext, filename, index)
+                from app.modules.document_import.verified_cache import get_verified, put_verified
+                cached = await get_verified(data, session) if ext == "pdf" else None
+                if cached is not None:
+                    payload = cached["document"]
+                    payload["items"] = [{**item, "sourceFilename": filename, "sourceFileIndex": index}
+                                        for item in payload["items"]]
+                    extracted = ExtractedDocument.model_validate(payload)
+                    meta = {"engine": "verified-source-cache", "verifiedCacheHit": True,
+                            "filename": filename, "sourceFileIndex": index}
+                else:
+                    extracted, meta = await self._extract_upload_part(data, ext, filename, index)
+                    if ext == "pdf" and str(getattr(extracted, "sourceState", "")) == "JHARKHAND":
+                        await put_verified(data, session, document=extracted)
                 file_timings.append({
                     "filename": filename,
                     "elapsedMs": round((time.perf_counter() - part_started) * 1000, 2),
