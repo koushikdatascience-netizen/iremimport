@@ -30,3 +30,11 @@ def test_telangana_excluded():
 def test_unverified_and_scanned_pdf_not_force_routed():
     assert not is_ap_icdc_invoice_pdf(_pdf_with_text("Generic invoice without state and ICDC"))
     assert not is_ap_icdc_invoice_pdf(b"%PDF-not-a-valid-pdf")
+
+
+def test_normal_upload_routes_use_detector():
+    import inspect
+    from app.modules.document_import.routes import create_router
+    code = inspect.getsource(create_router)
+    assert code.count("is_ap_icdc_invoice_pdf(data)") >= 3
+    assert code.count("process_icdc_invoice_upload(service, session, file)") >= 2
