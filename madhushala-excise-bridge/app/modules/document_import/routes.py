@@ -242,6 +242,12 @@ def create_router(service: DocumentImportService) -> APIRouter:
             "totalAmount": invoice_financials["totalAmount"],
             "totalNet": invoice_financials["totalNet"],
         }
+        # Additional printed AP ICDC financial evidence, not Calculate inputs.
+        # Never extend other states' handoff keys.
+        if "icdcValue" in invoice_financials:
+            for field in ("icdcValue", "challanAmount", "previousCreditLeftover",
+                          "subTotal", "amountCredited"):
+                purchase[field] = invoice_financials.get(field)
         logging.getLogger("madhushala-excise-bridge.document-import").info(
             "document_handoff_timings job=%s headerMs=%.2f itemMasterAndEnrichmentMs=%.2f payloadMs=%.2f totalMs=%.2f",
             job_id, (header_done - started) * 1000, (master_done - header_done) * 1000,
