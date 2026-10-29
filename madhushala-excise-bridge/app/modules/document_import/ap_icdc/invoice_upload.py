@@ -37,6 +37,46 @@ def invoice_financials(summary: dict) -> dict:
     }
 
 
+
+
+def verified_document_from_result(result: dict) -> ExtractedDocument:
+    """Convert fully reconciled OCR evidence into source financials; never infer prices."""
+    validation = result.get("validation") or {}
+    checks = validation.get("checks") or {}
+    if (validation.get("status") not in {"PASSED", "REVIEW_REQUIRED"}
+            or not checks or not all(checks.values())):
+        raise ValueError("AP ICDC invoice financial/row reconciliation failed")
+    summary = result.get("summary") or {}
+    financials = invoice_financials(summary)
+    header = result.get("header") or {}
+    products = []
+    for row in result.get("items") or []:
+        amount = row.get("total")
+        if amount is None:
+            raise ValueError("AP invoice row has no printed amount")
+        products.append(ExtractedProduct(
+            itemName=row["brand_name"], brand=row["brand_name"],
+            ml=row.get("size_ml"), box=row.get("qty_cases"),
+            loose=row.get("qty_bottles") or 0,
+            amount=amount, invoiceAmount=amount,
+            confidence=1, sourceState="ANDHRA_PRADESH",
+            sourceDocumentType="AP_ICDC_INVOICE",
+            sourceBrandCode=row.get("brand_number"),
+            sourceSerial=row.get("sl_no"),
+            sourcePages=row.get("pages"),
+            quantitySemantics="explicit_cases_and_bottles",
+        ))
+    if not products:
+        raise ValueError("AP invoice has no reconciled product rows")
+    return ExtractedDocument(
+        documentType="invoice", invoiceNumber=header.get("icdc_number"),
+        transportPassNo=header.get("tp_number"),
+        invoiceDate=header.get("invoice_date"),
+        items=products, sourceState="ANDHRA_PRADESH",
+        sourceDocumentType="AP_ICDC_INVOICE",
+        invoiceFinancials=financials,
+    )
+
 async def process_icdc_invoice_upload(service, session, file: UploadFile):
     if not str(file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="AP ICDC invoice accepts PDF files only")
@@ -55,39 +95,17 @@ async def process_icdc_invoice_upload(service, session, file: UploadFile):
         except ImportError as exc:
             raise HTTPException(status_code=503, detail="ICDC invoice OCR runtime not installed") from exc
         validation = result.get("validation") or {}
-        if validation.get("status") != "PASSED":
+        if (validation.get("status") not in {"PASSED", "REVIEW_REQUIRED"}
+                or not (validation.get("checks") or {})
+                or not all((validation.get("checks") or {}).values())):
             raise HTTPException(status_code=422, detail={
                 "message": "AP ICDC invoice cannot be reconciled; purchase is blocked",
                 "validation": validation, "rowCount": len(result.get("items") or []),
             })
-        summary = result.get("summary") or {}
-        financials = invoice_financials(summary)
-        header = result.get("header") or {}
-        products = []
-        for row in result.get("items") or []:
-            amount = row.get("total")
-            if amount is None:
-                raise HTTPException(status_code=422, detail="AP invoice row is missing printed amount")
-            products.append(ExtractedProduct(
-                itemName=row["brand_name"], brand=row["brand_name"],
-                ml=row.get("size_ml"), box=row.get("qty_cases"),
-                loose=row.get("qty_bottles") or 0,
-                amount=amount, invoiceAmount=amount,
-                confidence=1, sourceState="ANDHRA_PRADESH",
-                sourceDocumentType="AP_ICDC_INVOICE",
-                sourceBrandCode=row.get("brand_number"),
-                sourceSerial=row.get("sl_no"),
-                sourcePages=row.get("pages"),
-                quantitySemantics="explicit_cases_and_bottles",
-            ))
-        doc = ExtractedDocument(
-            documentType="invoice", invoiceNumber=header.get("icdc_number"),
-            transportPassNo=header.get("tp_number"),
-            invoiceDate=header.get("invoice_date"),
-            items=products, sourceState="ANDHRA_PRADESH",
-            sourceDocumentType="AP_ICDC_INVOICE",
-            invoiceFinancials=financials,
-        )
+        try:
+            doc = verified_document_from_result(result)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         normalized = normalize_extracted_document(doc, "DOCUMENT_PDF")
         if len(normalized) != len(products):
             raise HTTPException(status_code=422, detail="AP invoice rows did not fully normalize")

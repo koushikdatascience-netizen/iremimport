@@ -1059,6 +1059,31 @@ class DocumentImportService:
                 extracted = await LlamaCloudClient().extract_products(temp_path, filename)
                 meta = {"engine": "llamaparse"}
 
+            # Image-only AP ICDC invoices have no embedded PDF text. After the
+            # generic extractor identifies an AP invoice, verify its printed
+            # monetary evidence with the dedicated deterministic OCR pass.
+            # Never release a 41-item AP purchase with every amount null.
+            if (ext == "pdf"
+                    and "ANDHRA PRADESH" in str(extracted.supplierName or "").upper()
+                    and str(extracted.invoiceNumber or "").upper().startswith("ICDC")):
+                from app.modules.document_import.ap_icdc.main import extract_pdf as extract_ap_icdc
+                from app.modules.document_import.ap_icdc.invoice_upload import verified_document_from_result
+                import asyncio
+                ap_result = await asyncio.to_thread(extract_ap_icdc, temp_path, document_type="icdc")
+                try:
+                    verified = verified_document_from_result(ap_result)
+                except ValueError as exc:
+                    raise ValueError(
+                        "Andhra Pradesh ICDC invoice: printed amounts and charges "
+                        "did not reconcile. The import is blocked rather than "
+                        "sending null financials; review invoice OCR."
+                    ) from exc
+                if (str(verified.invoiceNumber or "").casefold()
+                        != str(extracted.invoiceNumber or "").casefold()):
+                    raise ValueError("AP invoice number disagrees between independent extractors")
+                extracted = verified
+                meta = {**meta, "profile": "AP_ICDC_INVOICE",
+                        "engine": "verified-ap-icdc-ocr"}
             tagged: list[ExtractedProduct] = []
             for item in extracted.items or []:
                 payload = item.model_dump()
@@ -1214,7 +1239,7 @@ class DocumentImportService:
                 state = str(getattr(doc, "sourceState", "") or "").upper()
                 is_odisha = state == "ODISHA"
                 is_jharkhand = state == "JHARKHAND"
-                source_financials = getattr(doc, "invoiceFinancials", None) if state in {"ODISHA", "JHARKHAND"} else None
+                source_financials = getattr(doc, "invoiceFinancials", None) if state in {"ODISHA", "JHARKHAND", "ANDHRA_PRADESH"} else None
                 if not isinstance(source_financials, dict):
                     source_financials = None
                 for item in (doc.items or []):
@@ -1238,6 +1263,14 @@ class DocumentImportService:
                         source_amount = payload.get("invoiceAmount", payload.get("amount"))
                         if source_amount not in (None, ""):
                             payload["invoiceAmount"] = source_amount
+                        merged_items.append(ExtractedProduct.model_validate(payload))
+                    elif state == "ANDHRA_PRADESH" and str(getattr(doc, "sourceDocumentType", "")) == "AP_ICDC_INVOICE":
+                        payload = item.model_dump()
+                        payload["sourceState"] = "ANDHRA_PRADESH"
+                        payload["sourceDocumentType"] = "AP_ICDC_INVOICE"
+                        payload["invoiceFinancials"] = source_financials
+                        if doc_tp_pass:
+                            payload["transportPassNo"] = doc_tp_pass
                         merged_items.append(ExtractedProduct.model_validate(payload))
                     elif doc_tp_pass:
                         payload = item.model_dump()
@@ -1274,7 +1307,7 @@ class DocumentImportService:
             # Do not alter the proven WB invoice-enrichment or Calculate flow.
             if not enrichment_parts and len(primary_parts) == 1:
                 primary_doc = primary_parts[0][0]
-                if str(getattr(primary_doc, "sourceState", "")).upper() in {"ODISHA", "JHARKHAND"}:
+                if str(getattr(primary_doc, "sourceState", "")).upper() in {"ODISHA", "JHARKHAND", "ANDHRA_PRADESH"}:
                     invoice_financials = getattr(primary_doc, "invoiceFinancials", None)
                     if invoice_financials and not isinstance(invoice_financials, dict):
                         invoice_financials = None
@@ -1291,6 +1324,10 @@ class DocumentImportService:
                 items=merged_items,
                 extractionEngine="batch",
                 invoiceFinancials=invoice_financials,
+                **({"sourceState": "ANDHRA_PRADESH", "sourceDocumentType": "AP_ICDC_INVOICE"}
+                   if len(primary_documents) == 1
+                   and str(getattr(primary_documents[0], "sourceDocumentType", "")) == "AP_ICDC_INVOICE"
+                   else {}),
                 extractionDiagnostics={
                     "sourceFiles": filenames,
                     "fileCount": len(filenames),
