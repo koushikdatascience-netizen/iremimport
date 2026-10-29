@@ -56,6 +56,21 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
             continue
 
         if document_source:
+            # Only verified AP ICDC invoices carry printed financial evidence.
+            # Never reuse for Bar Indent or any other state.
+            is_ap_invoice = (str(getattr(document, "sourceDocumentType", "") or "").upper() == "AP_ICDC_INVOICE"
+                             and str(getattr(document, "sourceState", "") or "").upper() == "ANDHRA_PRADESH")
+            source_amount = _float(getattr(item, "invoiceAmount", None) if is_ap_invoice else None)
+            if is_ap_invoice:
+                raw["sourceState"] = "ANDHRA_PRADESH"
+                raw["sourceDocumentType"] = "AP_ICDC_INVOICE"
+                raw["invoiceAmount"] = source_amount
+                financials = getattr(document, "invoiceFinancials", None)
+                if isinstance(financials, dict):
+                    raw["invoiceFinancials"] = financials
+                pass_no = str(getattr(document, "transportPassNo", "") or "").strip()
+                if pass_no:
+                    raw["transportPassNo"] = pass_no
             # PDF/image canonical contract:
             #   box   = explicitly printed cases/cartons
             #   loose = explicitly printed single bottles/units
@@ -95,7 +110,7 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
                     quantity=float(box + loose) if (box or loose) else None,
                     rate=None,
                     mrp=None,
-                    amount=None,
+                    amount=source_amount if is_ap_invoice else None,
                     batchNo=_clean_text(item.batchNo),
                     box=box or None,
                     loose=loose or None,

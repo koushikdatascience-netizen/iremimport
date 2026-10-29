@@ -17,6 +17,7 @@ from app.modules.document_import.purchase_preview import calculate_purchase_prev
 from app.modules.document_import.purchase_required import resolve_required_purchase_header
 from app.modules.document_import.qr_decoder import decode_qr_upload
 from app.modules.document_import.ap_icdc.bar_upload import process_bar_indent_upload
+from app.modules.document_import.ap_icdc.invoice_upload import process_icdc_invoice_upload
 from app.modules.document_import.document_mapping import save_document_row_mappings
 from app.modules.document_import.up_excise_qr import (
     extract_up_transport_pass,
@@ -68,6 +69,11 @@ def create_router(service: DocumentImportService) -> APIRouter:
             raise HTTPException(status_code=400, detail="PDF upload accepts .pdf files only")
         session = session_service.from_request(request)
         return await service.process_upload(session, file)
+
+    @router.post("/upload/ap/icdc-invoice")
+    async def upload_ap_icdc_invoice(request: Request, file: UploadFile = File(...)):
+        session = session_service.from_request(request)
+        return await process_icdc_invoice_upload(service, session, file)
 
     @router.post("/upload/ap/bar-indent")
     async def upload_ap_bar_indent(request: Request, file: UploadFile = File(...)):
@@ -236,6 +242,12 @@ def create_router(service: DocumentImportService) -> APIRouter:
             "totalAmount": invoice_financials["totalAmount"],
             "totalNet": invoice_financials["totalNet"],
         }
+        # Additional printed AP ICDC financial evidence, not Calculate inputs.
+        # Never extend other states' handoff keys.
+        if "icdcValue" in invoice_financials:
+            for field in ("icdcValue", "challanAmount", "previousCreditLeftover",
+                          "subTotal", "amountCredited"):
+                purchase[field] = invoice_financials.get(field)
         logging.getLogger("madhushala-excise-bridge.document-import").info(
             "document_handoff_timings job=%s headerMs=%.2f itemMasterAndEnrichmentMs=%.2f payloadMs=%.2f totalMs=%.2f",
             job_id, (header_done - started) * 1000, (master_done - header_done) * 1000,
