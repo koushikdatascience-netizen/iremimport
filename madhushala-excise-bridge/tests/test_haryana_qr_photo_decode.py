@@ -31,3 +31,20 @@ def test_empty_photo_fails_with_clear_decode_error():
         assert exc.status_code == 400
     else:
         raise AssertionError("Empty QR image should fail")
+
+
+def test_opencv_fallback_when_zxing_cannot_decode(monkeypatch):
+    from unittest.mock import Mock
+    image = Image.new("RGB", (720, 1280), "white")
+    stream = BytesIO()
+    image.save(stream, "JPEG")
+    monkeypatch.setattr(qr_decoder.zxingcpp, "read_barcodes", lambda _: [])
+    detector = Mock()
+    detector.detectAndDecode.return_value = (
+        "https://portal.haryanatax.gov.in/Department/QRGeneration/PassDetails?passheaderid=1010712",
+        None, None,
+    )
+    monkeypatch.setattr(qr_decoder.cv2, "QRCodeDetector", lambda: detector)
+    result = qr_decoder.decode_qr_image_bytes(stream.getvalue())
+    assert "passheaderid=1010712" in result
+    assert detector.detectAndDecode.called
