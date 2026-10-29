@@ -173,7 +173,7 @@ def _table_dict_rows(tables: list[list[list[str]]]) -> list[dict[str, str]]:
         for raw_row in table:
             cells = [_clean_cell(cell) for cell in raw_row]
             keys = [_cell_key(cell) for cell in cells]
-            has_name = any(key in {"brand", "description", "descriptionofgoods", "itemname", "productname"} for key in keys)
+            has_name = any(key in {"brand", "brandname", "description", "descriptionofgoods", "itemname", "productname"} for key in keys)
             has_item_shape = has_name and any("pack" in key or "quantity" in key or "bottle" in key or "amount" in key or "duty" in key or "rate" in key for key in keys)
             if has_item_shape:
                 header = cells
@@ -184,7 +184,7 @@ def _table_dict_rows(tables: list[list[list[str]]]) -> list[dict[str, str]]:
             if len(values) < len(header):
                 values.extend([""] * (len(header) - len(values)))
             row = {header[index] or f"column{index + 1}": values[index] for index in range(len(header))}
-            name = _first_present(row, "Description", "Description of Goods", "Brand", "Item Name", "Product Name")
+            name = _first_present(row, "Description", "Description of Goods", "Brand", "Brand Name", "Item Name", "Product Name")
             if name and not _cell_key(str(name)).startswith(("total", "tcspayable", "roundoff")):
                 rows.append(row)
     return rows
@@ -1358,11 +1358,12 @@ class DocumentImportService:
             brand = _clean_cell(_first_present(row, "Brand") or name)
             package_type = _clean_cell(_first_present(row, "Packaging Type", "Package Type", "Packing Type"))
             ml = _parse_ml_value(
-                _first_present(row, "Packaging Size", "Packing Size", "Size", "ML", "Measure ML"),
+                _first_present(row, "Packaging Size", "Packing Size", "Size", "ML", "Measure ML", "Pack Type"),
                 name,
             )
             boxes = _first_present(
                 row,
+                "Number of Cases",
                 "No of Cases / Mono Cartons Dispatched",
                 "No of Cases Dispatched",
                 "Cases Dispatched",
@@ -1371,7 +1372,7 @@ class DocumentImportService:
                 "Quantity",
                 "Qty",
             )
-            bottles = _first_present(row, "No of Bottles Dispatched", "Bottles Dispatched", "No of Bottles Requested", "Bottles Requested")
+            bottles = _first_present(row, "Number of Loose Bottle", "Number of Loose Bottles", "No of Bottles Dispatched", "Bottles Dispatched", "No of Bottles Requested", "Bottles Requested")
             amount = _first_present(row, "Amount", "Duty Fee", "DutyFee", "Total Amount")
             rate = _first_present(row, "Rate", "Box Rate", "Case Rate")
             mrp = _first_present(row, "MRP", "MRP Per Unit", "MrpPerUnit")
@@ -1384,6 +1385,7 @@ class DocumentImportService:
             raw = {
                 **meta,
                 **row,
+                "batchNo": _clean_cell(_first_present(row, "Batch Number", "Batch No")) or None,
                 "packageType": package_type,
                 "measureMl": ml,
                 "box": extracted_box,
@@ -1397,7 +1399,7 @@ class DocumentImportService:
                 key: value for key, value in raw.items()
                 if key not in {
                     "itemName", "brand", "ml", "packing", "quantity", "box", "rate", "mrp",
-                    "amount", "itemAmount", "confidence"
+                    "amount", "itemAmount", "confidence", "batchNo"
                 }
             }
             items.append(
@@ -1406,6 +1408,7 @@ class DocumentImportService:
                     brand=brand,
                     ml=ml,
                     packing=packing,
+                    batchNo=_clean_cell(_first_present(row, "Batch Number", "Batch No")) or None,
                     quantity=extracted_quantity,
                     box=extracted_box,
                     loose=extracted_loose,
