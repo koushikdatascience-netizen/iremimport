@@ -80,8 +80,9 @@ def test_wrapped_source_charges_read_from_separate_ruled_panel_cells():
         b("ICDC Value", 840, 390), b("827,992.61", 1050, 390),
         b("TCS", 840, 430), b("16560", 1050, 430),
         b("Sub Total", 840, 470), b("844,747.65", 1050, 470),
+        b("(-)Less this", 840, 520), b("844,552.61", 1050, 520),
     ]
-    bands = [110, 155, 195, 250, 315, 380, 420, 460, 500]
+    bands = [110, 155, 195, 250, 315, 380, 420, 460, 500, 550]
     found = panel_summary_from_boxes(boxes, 1200, bands, 600)
     assert found["issue_price"] == 730822
     assert found["cess"] == 4463.89
@@ -91,6 +92,7 @@ def test_wrapped_source_charges_read_from_separate_ruled_panel_cells():
     assert found["icdc_value"] == 827992.61
     assert found["tcs"] == 16560
     assert found["sub_total"] == 844747.65
+    assert found["less_this_invoice_value"] == 844552.61
 
 
 def test_three_printed_quantity_cells_are_reconciled_without_guessing():
