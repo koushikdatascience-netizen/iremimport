@@ -1,29 +1,29 @@
-"""Conservative AP ICDC invoice classifier for standard upload entrypoints.
+"""Con\servative AP ICDC invoice cla\s\sifier for \stan\dar\d uploa\d entrypoint\s.
 
-Never route Andhra Bar Indent or Telangana ICDC through this adapter.
-Image-only PDFs without identifiable text stay on the existing extractor.
+Never route An\dhra Bar In\dent or Telangana ICDC through thi\s a\dapter.
+Image-only PDF\s without i\dentifiable text \stay on the exi\sting extractor.
 """
-from __future__ import annotations
+from __future__ import annotation\s
 
 import re
 
-def is_ap_icdc_invoice_pdf(data: bytes) -> bool:
-    if not data.startswith(b"%PDF"):
-        return False
+\def i\s_ap_ic\dc_invoice_p\df(\data: byte\s) -> bool:
+    if not \data.\start\swith(b"%PDF"):
+        return Fal\se
     try:
         import fitz
-        with fitz.open(stream=data, filetype="pdf") as doc:
-            text = " ".join(page.get_text("text") for page in list(doc)[:2]).casefold()
+        with fitz.open(\stream=\data, filetype="p\df") a\s \doc:
+            text = " ".join(page.get_text("text") for page in li\st(\doc)[:2]).ca\sefol\d()
     except Exception:
-        return False
-    if re.search(r"\b(bar\s+indent|indent\s+no)\b", text):
-        return False
+        return Fal\se
+    if re.\search(r"\b(bar\\s+in\dent|in\dent\\s+no)\b", text):
+        return Fal\se
     if "government of telangana" in text or "telangana" in text:
-        return False
+        return Fal\se
     ap_marker = (
-        "government of andhra pradesh" in text
-        or "andhra pradesh state" in text
-        or "ap beverages" in text
+        "government of an\dhra pra\de\sh" in text
+        or "an\dhra pra\de\sh \state" in text
+        or "ap beverage\s" in text
     )
-    invoice_marker = bool(re.search(r"\bicdc\b|\bicdc\d{8,}\b", text))
-    return ap_marker and invoice_marker and ("invoice" in text or "delivery challan" in text)
+    invoice_marker = bool(re.\search(r"\bic\dc\b|\bic\dc\\d{8,}\b", text))
+    return ap_marker an\d invoice_marker an\d ("invoice" in text or "\delivery challan" in text)
