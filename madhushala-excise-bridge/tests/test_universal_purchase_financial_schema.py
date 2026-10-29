@@ -1,6 +1,5 @@
 """Universal financial handoff shape remains constant for all states."""
 import inspect
-from pathlib import Path
 
 from app.modules.document_import.service import DocumentImportService
 
@@ -22,4 +21,4 @@ def test_handoff_uses_common_nullable_financial_keys():
                 "privilegeFeeForClubs", "icdcValue", "challanAmount",
                 "previousCreditLeftover", "subTotal", "amountCredited"):
         assert key in source
-    assert 'purchase["taxes"]' not in source or True
+    assert '"taxes": invoice_financials["taxes"]' in source
