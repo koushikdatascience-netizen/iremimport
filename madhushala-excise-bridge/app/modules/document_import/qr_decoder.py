@@ -92,7 +92,7 @@ def decode_qr_image_bytes(data: bytes) -> str:
             continue
         if max(candidate.size) > 2200:
             continue
-        scale = min(3, max(1, 800 // max(candidate.size)))
+        scale = min(3, max(1, 1500 // max(candidate.size)))
         if scale > 1:
             enlarged = candidate.resize((candidate.width * scale, candidate.height * scale),
                                          Image.Resampling.LANCZOS)
