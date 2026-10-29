@@ -31,7 +31,7 @@ LABEL_PATTERNS = {
     "less_this_invoice_value": r"less\s*(?:this\s*)?invoice\s*value",
     "amount_credited": r"amount\s*credited",
 }
-AMOUNT = re.compile(r"(?<!\w)\d[\d,]*\.\d{2}(?!\w)")
+AMOUNT = re.compile(r"(?<![\w/])\d[\d,]*(?:\.\d{1,2})?(?![\w/])")
 
 def summary_from_boxes(boxes, w):
     """Labels + proximity only. Missing/ambiguous values remain None."""
