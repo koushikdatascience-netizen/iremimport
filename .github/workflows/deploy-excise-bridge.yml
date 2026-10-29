@@ -62,6 +62,7 @@ jobs:
           docker run --rm --entrypoint python \
             -e RUN_HARYANA_BROWSER_TEST=1 \
             -v "$PWD/tests:/app/tests:ro" \
+            -v "$PWD/extension:/app/extension:ro" \
             excise-bridge-ci -m pytest -q
 
   deploy:
