@@ -1474,7 +1474,6 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
     assert products[1].loose == 0
 
 
-
     mp_rows = [[
         "Sl", "Label Name", "Batch", "Capacity", "Quantity in Cases",
         "Duty", "Mfg Amount", "VAT",
@@ -1522,6 +1521,98 @@ def test_pymupdf_state_adapters_emit_canonical_box_loose():
     assert products[0].model_dump()["quantitySemantics"] == "west_bengal_case_field_only"
     assert products[0].model_dump()["rawPdfRow"]["In Bottles"] == "144"
     assert products[0].batchNo == "265-1 & July,2026"
+
+
+def test_jharkhand_form_t_compact_section_headings_keep_only_invoice_rows():
+    from app.modules.document_import.pdf_extractor import _extract_jharkhand
+
+    def product(serial, name, qty):
+        return [str(serial), "Beer", name, "650ML", "0", "754", qty,
+                "9.00-BL", "", "1498.24"]
+
+    header = ["Comodity Group", "Kind Of Intoxicant", "Label Name", "Unit",
+              "Physical Qty", "StockQty", "Qty", "Strength", "LPL", "BL"]
+    first_page = [[
+        ["INVOICEDETAIL"], header, product(1, "KINGFISHER PREMIUM BEER", "1.00"),
+        product(2, "ROYAL STAG DELUXE WHISKY", "1.00"),
+    ]]
+    continuation_and_dispatch = [[
+        product(3, "SIGNATURE PREMIER WHISKY", "1.00"),
+        ["DETAILSOFDISPATCHEDQUANTITY"], header,
+        product(1, "KINGFISHER PREMIUM BEER", "1.00"),
+    ]]
+    dispatch_continuation = [[product(2, "ROYAL STAG DELUXE WHISKY", "1.00")]]
+
+    full_text = (
+        "Government Of Jharkhand\nForm-T(Transport)\n"
+        "PASS FOR TRANSPORT WITHIN THE PROVINCE\nTotal Quantity: 3.00"
+    )
+    products, _, _ = _extract_jharkhand(full_text, [
+        (2, "", first_page),
+        (3, "", continuation_and_dispatch),
+        (4, "", dispatch_continuation),
+    ])
+
+    assert [item.model_dump()["rawPdfRow"]["sourceRowNumber"] for item in products] == [1, 2, 3]
+    assert [item.itemName for item in products] == [
+        "KINGFISHER PREMIUM BEER", "ROYAL STAG DELUXE WHISKY", "SIGNATURE PREMIER WHISKY"
+    ]
+
+
+def test_jharkhand_form_t_uses_glyph_rebuild_for_decimal_quantity_cells(monkeypatch):
+    import app.modules.document_import.pdf_extractor as extractor
+
+    header = ["Comodity Group", "Kind Of Intoxicant", "Label Name", "Unit",
+              "Physical Qty", "StockQty", "Qty", "Strength", "LPL", "BL"]
+
+    def row(serial, name, qty):
+        return [str(serial), "Beer", name, "650ML", "0", "754", qty,
+                "9.00-BL", "", "1498.24"]
+
+    invoice_rows = [["INVOICEDETAIL"], header,
+                    row(1, "KINGFISHER PREMIUM BEER", "15.00"),
+                    row(2, "ROYAL STAG DELUXE WHISKY", "15.00")]
+    wrong_table_extract_rows = [["INVOICEDETAIL"], header,
+                                row(1, "KINGFISHER PREMIUM BEER", "1500 ."),
+                                row(2, "ROYAL STAG DELUXE WHISKY", "1500 .")]
+    document_text = (
+        "Government Of Jharkhand Form-T(Transport) PASS FOR TRANSPORT WITHIN THE PROVINCE "
+        "Jharkhand State Beverages Corporation Limited Invoice Detail Total Quantity: 30.00 "
+        "Product detail and printed permit information " * 3
+    )
+
+    class Page:
+        def get_text(self, kind):
+            return document_text if kind == "text" else [(0, 0, 1, 1, "word")] * 25
+
+    class Document:
+        def __init__(self):
+            self.page = Page()
+
+        def __len__(self):
+            return 1
+
+        def __iter__(self):
+            return iter([self.page])
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(extractor.fitz, "open", lambda _path: Document())
+    calls = []
+
+    def fake_page_tables(_page, *, horizontal_only=False, diagnostics=None):
+        calls.append(horizontal_only)
+        return [invoice_rows if horizontal_only else wrong_table_extract_rows]
+
+    monkeypatch.setattr(extractor, "_page_tables", fake_page_tables)
+    document, meta = extractor.extract_pdf_locally(Path("jharkhand-form-t-test.pdf"))
+
+    assert calls == [True]
+    assert len(document.items) == 2
+    assert [item.box for item in document.items] == [15, 15]
+    assert [item.model_dump()["rawPdfRow"]["Qty"] for item in document.items] == ["15.00", "15.00"]
+    assert meta["needsFallback"] is False
 
 
 
