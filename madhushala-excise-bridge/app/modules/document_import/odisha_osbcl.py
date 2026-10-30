@@ -45,6 +45,50 @@ def _capture(text: str, expr: str) -> str:
     return match.group(1).strip()
 
 
+def _osbcl_rows(rows: list[list[str]]) -> list[list[str]] | None:
+    """Return canonical nine-column rows for either printed OSBCL grid layout.
+
+    The final page of some invoices repeats the grid with the serial and
+    category merged, plus blank spacer cells. Keep this narrowly structural:
+    all labels and spacer positions must match before any values are remapped.
+    """
+    if not rows:
+        return None
+    if len(rows[0]) == 9 and tuple(_key(x) for x in rows[0]) == HEADERS:
+        return rows[1:]
+    if len(rows[0]) != 10:
+        return None
+    header = [_key(x) for x in rows[0]]
+    if not (header[0].startswith("slproductno") and header[0].endswith("category")
+            and header[2] == "itemname" and header[3] == "packsize"
+            and header[4] == "ratecase" and header[5] == "qtyincases"
+            and header[7] == "qtyinlooseunits" and header[8] == "mgervalueinrs"
+            and header[9] == "amountinrs" and not header[1] and not header[6]):
+        return None
+    normalized: list[list[str]] = []
+    for row in rows[1:]:
+        if len(row) != 10:
+            raise ValueError("Odisha continuation table has unexpected column layout")
+        if _key(row[5]) in {"subtotal", "vat", "tcs", "total"}:
+            continue
+        if _key(row[4]) == "subtotal":
+            if row[2] or row[6]:
+                raise ValueError("Odisha continuation subtotal has unexpected column layout")
+            normalized.append(["", "", "", "", "Sub Total", row[5], row[7], row[8], row[9]])
+            continue
+        match = re.fullmatch(r"\s*(\d{1,3})\s*(.+?)\s*", row[0])
+        if not match:
+            # Printed LPL/MGER metadata appears below the product grid.
+            if not row[0].strip() or _key(row[0]).startswith(("totallpl", "monthlymger", "mgerachieved", "mgervalue")):
+                continue
+            raise ValueError("Odisha continuation table contains an unrecognized row")
+        if row[2] or row[6]:
+            raise ValueError("Odisha continuation product has unexpected column layout")
+        normalized.append([match.group(1), match.group(2), row[1], row[3], row[4],
+                           row[5], row[7], row[8], row[9]])
+    return normalized
+
+
 def _financials(text: str) -> dict[str, Decimal]:
     # Total summary is printed after the product grid. Match the LABEL then
     # the immediately following amount, not a product-row field.
@@ -95,9 +139,10 @@ def extract_osbcl(document, page_texts=None) -> tuple[ExtractedDocument, dict[st
             rows = [[_horizontal_cell_text(cell, chars, centres_y).strip() if cell else ""
                      for cell in row.cells] for row in table.rows]
             cell_ms += (time.perf_counter() - cell_started) * 1000
-            if not rows or tuple(_key(x) for x in rows[0]) != HEADERS:
+            canonical_rows = _osbcl_rows(rows)
+            if canonical_rows is None:
                 continue
-            for row in rows[1:]:
+            for row in canonical_rows:
                 if len(row) != 9:
                     raise ValueError("Odisha table has unexpected column count")
                 if _key(row[4]) == "subtotal":
