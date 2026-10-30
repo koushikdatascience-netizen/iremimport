@@ -22,7 +22,10 @@ FIELDS = ("issue_price", "cess", "additional_previlage_fee", "additional_retail_
 LABEL_PATTERNS = {
     "issue_price": r"issue\s*price", "cess": r"\bcess\b",
     "additional_previlage_fee": r"additional\s*pr[eiv]+l[ea]ge\s*fee",
-    "additional_retail_excise_tax": r"additional\s*retail\s*excise\s*tax",
+    # The ruled summary cell provides the disambiguating geometry. OCR may
+    # lose the final word under the portal watermark while the amount remains
+    # independently readable from that same cell.
+    "additional_retail_excise_tax": r"additional\s*retail\s*excise(?:\s*tax)?",
     "previlage_fee_clubs": r"pr[eiv]+l[ea]ge\s*fee\s*for\s*clubs",
     "icdc_value": r"icdc\s*value", "tcs": r"\btcs\b",
     "challan_amount": r"challan\s*(?:no\.?\s*&\s*)?amount",

@@ -1237,7 +1237,13 @@ async function uploadDocuments(files, kind = "pdf") {
             method: "POST",
             body: form,
         });
-        if (!payload?.job) throw new Error(payload.detail || payload.error || "Document import failed");
+        if (!payload?.job) {
+            const detail = payload?.detail;
+            const message = detail && typeof detail === "object"
+                ? (detail.message || detail.error || JSON.stringify(detail))
+                : (detail || payload?.error || "Document import failed");
+            throw new Error(message);
+        }
         renderDocumentReview(payload);
         setText(
             document.getElementById("document-action-summary"),
