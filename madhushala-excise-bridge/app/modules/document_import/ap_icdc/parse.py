@@ -56,7 +56,18 @@ def parse_cells(cells, page, confidences=None, name_alternative=None):
     if category not in TYPES:
         flags.append("invalid_product_type")
     pack = pack[-1:] if pack else ""
-    rate = RATE.search(c[8].replace("O", "0"))
+    rate_text = c[8].replace("O", "0")
+    rate = RATE.search(rate_text)
+    if not rate:
+        # RapidOCR can omit the thin slash in the stacked Case Rate / Btl
+        # Rate cell while retaining both printed amounts (for example
+        # "2675 222.92"). This geometrically assigned rate column has exactly
+        # two printed money values; preserve their order and never derive them
+        # from quantity or total arithmetic.
+        rate = re.fullmatch(
+            r"\s*([\d,]+(?:\.\d{1,2})?)\s+([\d,]+(?:\.\d{1,2})?)\s*",
+            rate_text,
+        )
     case_rate = dec(rate.group(1)) if rate else None
     btl_rate = dec(rate.group(2)) if rate else None
     if not rate:

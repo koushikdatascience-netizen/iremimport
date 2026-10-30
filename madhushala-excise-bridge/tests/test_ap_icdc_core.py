@@ -39,6 +39,13 @@ def test_money_and_row_validation():
     assert all(result["checks"].values())
     assert result["status"]=="PASSED"
 
+def test_rate_pair_survives_ocr_dropping_the_slash():
+    item = parse_cells(["1", "C021", "BUDWEISER MAGNUM BEER", "BEER", "G", "650", "9", "0", "2675 222.92", "24075"], 1)
+    assert item["case_rate"] == 2675.0
+    assert item["btl_rate"] == 222.92
+    assert item["qty_cases"] == 9
+    assert "manual_check" not in item["flags"]
+
 def test_zero_missing_not_equal():
     item=parse_cells(["1","C021","Test","BEER","G","650","","0","2675 / 222.92","10700"],1)
     assert "manual_review" in item["flags"]

@@ -95,6 +95,20 @@ def test_wrapped_source_charges_read_from_separate_ruled_panel_cells():
     assert found["less_this_invoice_value"] == 844552.61
 
 
+def test_watermark_loss_of_final_summary_label_word_keeps_same_cell_value():
+    from app.modules.document_import.ap_icdc.main import panel_summary_from_boxes
+    boxes = [
+        {"text": "Additional", "x0": 1500, "y0": 110, "x1": 1700, "y1": 140},
+        {"text": "Retail Excise", "x0": 1500, "y0": 145, "x1": 1740, "y1": 175},
+        {"text": "XL", "x0": 1500, "y0": 178, "x1": 1584, "y1": 195},
+        {"text": "63,784.00", "x0": 1780, "y0": 145, "x1": 1960, "y1": 175},
+    ]
+    # The row geometry scopes this partial label and the amount to the same
+    # printed summary cell; no arithmetic is used to supply the value.
+    found = panel_summary_from_boxes(boxes, 2100, [100, 200, 300], 2750)
+    assert found["additional_retail_excise_tax"] == 63784.0
+
+
 def test_three_printed_quantity_cells_are_reconciled_without_guessing():
     from app.modules.document_import.ap_icdc.main import invoice_qty_from_boxes
     def b(text, x, y):
