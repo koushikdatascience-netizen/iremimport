@@ -556,11 +556,15 @@ def _extract_jharkhand(
             for table in page_tables:
                 for cells in table:
                     clean = [_clean(cell) for cell in cells]
-                    joined = " ".join(clean).casefold()
-                    if "details of dispatched quantity" in joined or "transport detail" in joined:
+                    # PyMuPDF may rebuild a ruled heading as one compact cell
+                    # ("DETAILSOFDISPATCHEDQUANTITY") or several word cells.
+                    # Normalize geometry-dependent spacing before matching so
+                    # canonical and repeated Form-T sections remain distinct.
+                    joined = _key(" ".join(clean))
+                    if "detailsofdispatchedquantity" in joined or "transportdetail" in joined:
                         started = False
                         break
-                    if "invoice detail" in joined:
+                    if "invoicedetail" in joined:
                         started = True
                         continue
                     if not started:
@@ -1430,19 +1434,26 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
 
         # WB repeats the same document as ORIGINAL/DUPLICATE/TRIPLICATE/
         # QUADRUPLICATE. Detect copies from the cheap text pass and perform
-        # expensive table reconstruction only for ORIGINAL pages.
-        horizontal_only = profile in {"WEST_BENGAL_FORM3", "WEST_BENGAL_FORM5"}
+        # expensive table reconstruction only for ORIGINAL pages. Jharkhand
+        # Form-T uses the same glyph-based cell rebuild to preserve decimal
+        # punctuation: table.extract() can move the decimal point in Qty cells.
+        is_jharkhand_form_t = (
+            profile == "JHARKHAND_EXCISE"
+            and bool(re.search(r"form\s*[-–]?\s*t\s*\(\s*transport\s*\)|pass for transport within", full_text, re.I))
+        )
+        horizontal_only = profile in {"WEST_BENGAL_FORM3", "WEST_BENGAL_FORM5"} or is_jharkhand_form_t
+        west_bengal_copies = profile in {"WEST_BENGAL_FORM3", "WEST_BENGAL_FORM5"}
         west_bengal_original_pages = {
             index
             for index, text in enumerate(page_texts, start=1)
-            if _west_bengal_copy_label(text) == "ORIGINAL"
-        }
-        if horizontal_only and not west_bengal_original_pages and page_texts:
+            if west_bengal_copies and _west_bengal_copy_label(text) == "ORIGINAL"
+        } if west_bengal_copies else set()
+        if west_bengal_copies and not west_bengal_original_pages and page_texts:
             west_bengal_original_pages = {1}
         for page_index, page in enumerate(document, start=1):
             if page_index > len(page_texts):
                 break
-            should_extract_tables = not horizontal_only or page_index in west_bengal_original_pages
+            should_extract_tables = not west_bengal_copies or page_index in west_bengal_original_pages
             if should_extract_tables:
                 try:
                     page_tables = _page_tables(
