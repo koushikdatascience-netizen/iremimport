@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from app.modules.document_import.purchase_handoff import build_purchase_handoff
 
 
@@ -57,3 +61,15 @@ def test_purchase_handoff_needs_only_mapping_not_purchase_masters():
     assert purchase["items"][0]["batchNo"] == "B-1"
     assert purchase["items"][0]["box"] == 2
     assert purchase["items"][0]["loose"] == 3
+
+
+@pytest.mark.parametrize("raw", [{}, {"batchNo": None}, {"batchNo": ""}, {"batchNo": "   "}])
+def test_purchase_handoff_sends_na_for_missing_batch(raw):
+    class MissingBatchService(FakeService):
+        def get_items(self, session, job_id):
+            rows = super().get_items(session, job_id)
+            rows[0]["raw_data_json"] = json.dumps(raw)
+            return rows
+
+    result = build_purchase_handoff(MissingBatchService(), {"shop_code": "SHOP-1"}, "job-1")
+    assert result["purchasePayload"]["items"][0]["batchNo"] == "NA"

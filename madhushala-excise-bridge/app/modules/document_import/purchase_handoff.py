@@ -81,7 +81,7 @@ def build_purchase_handoff(
                 "itemCode": mapped,
                 "itemName": _text(row.get("raw_name") or row.get("normalized_name")),
                 "exciseItemCode": _text(row.get("excise_item_code")),
-                "batchNo": _text(_first(raw, "batchNo", "batch")),
+                "batchNo": _text(_first(raw, "batchNo", "batch")) or "NA",
                 "box": box,
                 "loose": loose,
                 "qnty": quantity,

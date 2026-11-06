@@ -18,8 +18,12 @@ class _Service:
         }
 
 
+@pytest.mark.parametrize("batch,master_batch,expected", [
+    (None, None, "NA"), ("", "", "NA"), ("   ", "\t", "NA"),
+    ("B-1", "MASTER-1", "B-1"), (None, "MASTER-1", "MASTER-1"),
+])
 @pytest.mark.asyncio
-async def test_extracted_bottle_quantity_stays_in_loose(monkeypatch):
+async def test_extracted_bottle_quantity_stays_in_loose(monkeypatch, batch, master_batch, expected):
     adapter = DocumentPurchaseAdapter(_Service())
 
     row = {
@@ -28,7 +32,7 @@ async def test_extracted_bottle_quantity_stays_in_loose(monkeypatch):
         "excise_item_code": "E1",
         "raw_name": "Test Item",
         "normalized_name": "Test Item",
-        "raw_data_json": json.dumps({"No of Bottles Dispatched": 18}),
+        "raw_data_json": json.dumps({"No of Bottles Dispatched": 18, "batchNo": batch}),
         "packing": 12,
         "quantity": 18,
         "created_at": "2026-09-18T00:00:00",
@@ -53,6 +57,7 @@ async def test_extracted_bottle_quantity_stays_in_loose(monkeypatch):
         return {
             "100003": {
                 "itemCode": "100003",
+                "batchNo": master_batch,
                 "packing": 12,
                 "purchaseRate": 0,
                 "purchaseRateCase": 0,
@@ -75,6 +80,12 @@ async def test_extracted_bottle_quantity_stays_in_loose(monkeypatch):
     assert items[0]["box"] == 0
     assert items[0]["loose"] == 18
     assert items[0]["qnty"] == 18
+    assert items[0]["batchNo"] == expected
+    from app.services.purchase_orchestrator import PurchaseOrchestrator
+    snapshots = PurchaseOrchestrator._source_owned_item_fields(items)
+    items[0]["batchNo"] = ""  # Calculate must not erase the outgoing batch.
+    PurchaseOrchestrator._restore_source_owned_item_fields(items, snapshots)
+    assert items[0]["batchNo"] == expected
 
 
 @pytest.mark.asyncio

@@ -308,7 +308,7 @@ Request:
 }
 ```
 
-`batchNo` is preserved by the backend when an older frontend omits it.
+`batchNo` is preserved by the backend when an older frontend omits it. Purchase handoff uses the document batch first, then the mapped Item Master batch where available. If neither supplies a nonblank batch, the outgoing `batchNo` is `"NA"`; it is never an empty string.
 
 Response:
 

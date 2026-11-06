@@ -287,7 +287,9 @@ class DocumentPurchaseAdapter:
             item = {
                 "itemCode": mapped,
                 "itemName": item_name,
-                "batchNo": str(raw_value("batchNo", "batch") or _dict_value(master, "batchNo", "batch") or ""),
+                "batchNo": (str(raw_value("batchNo", "batch") or "").strip()
+                            or str(_dict_value(master, "batchNo", "batch") or "").strip()
+                            or "NA"),
                 "box": box,
                 "loose": loose,
                 "qnty": qnty,
