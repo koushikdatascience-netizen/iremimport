@@ -4,6 +4,7 @@ import bisect
 import re
 import time
 import unicodedata
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -277,6 +278,7 @@ def _page_tables(
     *,
     horizontal_only: bool = False,
     diagnostics: dict[str, float] | None = None,
+    ruled_only: bool = False,
 ) -> list[list[list[str]]]:
     finder = getattr(page, "find_tables", None)
     if not callable(finder):
@@ -284,7 +286,18 @@ def _page_tables(
 
     find_started = time.perf_counter()
     try:
-        found = finder()
+        if ruled_only:
+            try:
+                # PyMuPDF's layout analyzer can merge the eleven Form-5
+                # columns or add phantom invoice continuation columns. These
+                # identified WB documents have authoritative printed rules.
+                found = finder(use_layout=False)
+            except TypeError as exc:
+                if "use_layout" not in str(exc):
+                    raise
+                found = finder()  # Older PyMuPDF versions have no layout gate.
+        else:
+            found = finder()
     except Exception:
         return []
     finally:
@@ -719,16 +732,22 @@ def _clean_west_bengal_case(value: Any) -> str:
 
 
 
-def _west_bengal_bevco_table(
+def _west_bengal_office_pages(
     pages: list[tuple[int, str, list[list[list[str]]]]],
-) -> tuple[list[list[str]], int, dict[str, int]] | None:
-    """Return the first authoritative WBSC invoice item/summary table.
+) -> Iterator[tuple[int, str, list[list[list[str]]]]]:
+    """Keep the complete first copy, stopping before repeated commercial data."""
+    for entry in pages:
+        labels = {_key(line) for line in entry[1].splitlines()[:25]}
+        if labels.intersection({"buyerscopy", "depotmanagerscopy"}):
+            break
+        yield entry
 
-    WBSC/BEVCO invoices repeat the same commercial document as Office Copy,
-    Buyer's Copy and Depot Manager's Copy. The first page is authoritative for
-    import purposes, so never aggregate repeated copies.
-    """
-    for _page_no, _page_text, page_tables in pages[:1]:
+
+def _west_bengal_bevco_tables(
+    pages: list[tuple[int, str, list[list[list[str]]]]],
+) -> Iterator[tuple[list[list[str]], int, dict[str, int], int]]:
+    """Map each Office-Copy table's own headers, including continuation pages."""
+    for page_no, _page_text, page_tables in _west_bengal_office_pages(pages):
         for rows in page_tables:
             for row_index, cells in enumerate(rows):
                 keys = [_key(cell) for cell in cells]
@@ -746,15 +765,23 @@ def _west_bengal_bevco_table(
                 mrp_idx = next((i for i, value in enumerate(keys) if value.startswith("mrpbot")), None)
                 mrp_value_idx = next((i for i, value in enumerate(keys) if value.startswith("mrpvalue")), None)
                 alt_idx = next((i for i, value in enumerate(keys) if value.startswith("altquantity")), None)
-                return rows, row_index, {
+                yield rows, row_index, {
                     "name": int(name_idx),
                     "amount": int(amount_idx),
                     "quantity": int(quantity_idx),
                     "mrp": int(mrp_idx) if mrp_idx is not None else -1,
                     "mrpValue": int(mrp_value_idx) if mrp_value_idx is not None else -1,
                     "altQuantity": int(alt_idx) if alt_idx is not None else -1,
-                }
-    return None
+                }, page_no
+                break
+
+
+def _west_bengal_bevco_table(
+    pages: list[tuple[int, str, list[list[list[str]]]]],
+) -> tuple[list[list[str]], int, dict[str, int]] | None:
+    """Compatibility helper returning the first mapped Office-Copy table."""
+    return next(((rows, header, indexes) for rows, header, indexes, _ in
+                 _west_bengal_bevco_tables(pages)), None)
 
 
 def _optional_money(value: Any) -> float | None:
@@ -766,11 +793,9 @@ def _extract_west_bengal_bevco_invoice(
     full_text: str,
     pages: list[tuple[int, str, list[list[list[str]]]]],
 ) -> tuple[list[ExtractedProduct], str | None, str | None]:
-    """Extract WBSC/BEVCO invoice line items from the first (Office) copy only."""
+    """Extract all pages of the Office Copy, never Buyer/Depot repeats."""
     products: list[ExtractedProduct] = []
-    table = _west_bengal_bevco_table(pages)
-    if table:
-        rows, header_index, indexes = table
+    for rows, header_index, indexes, page_no in _west_bengal_bevco_tables(pages):
         for cells in rows[header_index + 1 :]:
             if len(cells) <= max(indexes["name"], indexes["amount"], indexes["quantity"]):
                 continue
@@ -828,7 +853,7 @@ def _extract_west_bengal_bevco_invoice(
                 loose=loose,
                 raw=raw,
                 state="WEST_BENGAL",
-                page=1,
+                page=page_no,
                 semantics="west_bengal_bevco_invoice_case_bot",
             )
             if item:
@@ -859,7 +884,7 @@ def _west_bengal_bevco_financials(
     pages: list[tuple[int, str, list[list[list[str]]]]],
     products: list[ExtractedProduct],
 ) -> dict[str, Any]:
-    """Extract and reconcile invoice-level commercial values from page one."""
+    """Read printed financials across the Office Copy and reconcile them."""
     values: dict[str, Any] = {
         "taxes": {
             "specialPurposeFee": None,
@@ -870,33 +895,16 @@ def _west_bengal_bevco_financials(
         "totalAmount": None,
         "totalNet": None,
     }
-    table = _west_bengal_bevco_table(pages)
-    if not table:
+    tables = list(_west_bengal_bevco_tables(pages))
+    if not tables:
         return {**values, "reconciled": False, "itemSubtotal": None}
 
-    rows, header_index, indexes = table
     summary_started = False
-    # The authoritative Office Copy may span two or more PDF pages.
-    # Continue across its continuation pages only, stopping before the
-    # Buyer's Copy / Depot Manager's Copy repeats the same commercial data.
-    office_pages = []
-    for entry in pages:
-        page_header = [line.strip().casefold() for line in entry[1].splitlines()[:18] if line.strip()]
-        if any(line in {"buyer's copy", "buyers copy", "depot manager's copy", "depot managers copy"} for line in page_header):
-            break
-        office_pages.append(entry)
-    summary_rows = list(rows[header_index + 1 :])
-    for _page_no, _page_text, continuation_tables in office_pages[1:]:
-        for continuation in continuation_tables:
-            if not continuation:
-                continue
-            first_row = [_key(cell) for cell in continuation[0]]
-            if "descriptionofgoods" not in first_row or "amountrs" not in first_row:
-                continue
-            summary_rows.extend(continuation[1:])
-            break
-
-    for cells in summary_rows:
+    # Column counts can change on a continuation page. In particular, the
+    # bottle total must never be read through page one's Amount column index.
+    summary_rows = ((cells, indexes) for rows, header, indexes, _page in tables
+                    for cells in rows[header + 1:])
+    for cells, indexes in summary_rows:
         if not cells:
             continue
         label_text = _clean(cells[indexes["name"]]) if len(cells) > indexes["name"] else ""
@@ -1276,21 +1284,32 @@ def _candidate_row_count(
     # Count those independently so partial find_tables() output cannot be
     # mistaken for a complete extraction.
     if profile == "WEST_BENGAL_BEVCO_INVOICE":
-        table = _west_bengal_bevco_table(selected_pages)
-        if table:
-            rows, header_index, indexes = table
-            count = 0
+        text_count = 0
+        for _page, text, _tables in _west_bengal_office_pages(pages):
+            in_table = False
+            for line in text.splitlines():
+                label = _key(line)
+                if label == "descriptionofgoods":
+                    in_table = True
+                if label in {"lessrebate", "specialpurposefee", "roundedoff", "total"}:
+                    in_table = False
+                if in_table and re.fullmatch(r"\s*\d+\s*[-–]\s*\d+\s*", line):
+                    text_count += 1
+        table_count = 0
+        for rows, header_index, indexes, _page in _west_bengal_bevco_tables(pages):
             for cells in rows[header_index + 1 :]:
                 if len(cells) <= max(indexes["name"], indexes["amount"], indexes["quantity"]):
                     continue
                 name = _clean(cells[indexes["name"]])
+                if _key(name) in {"lessrebate", "specialpurposefee", "roundedoff", "total"}:
+                    break
                 if (
-                    _ml(name)
+                    name
                     and _optional_money(cells[indexes["amount"]]) is not None
                     and _clean_west_bengal_case(cells[indexes["quantity"]])
                 ):
-                    count += 1
-            return count
+                    table_count += 1
+        return max(text_count, table_count)
 
     if profile == "TELANGANA_ICDC":
         text_serials: set[tuple[int, int]] = set()
@@ -1455,21 +1474,23 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
                 break
             should_extract_tables = not west_bengal_copies or page_index in west_bengal_original_pages
             if should_extract_tables:
-                try:
-                    page_tables = _page_tables(
-                        page,
-                        horizontal_only=horizontal_only,
-                        diagnostics=timings,
-                    )
-                except TypeError as exc:
-                    # Preserve compatibility with test/extension monkeypatches
-                    # that still implement the pre-diagnostics signature.
-                    if "diagnostics" not in str(exc):
-                        raise
-                    page_tables = _page_tables(
-                        page,
-                        horizontal_only=horizontal_only,
-                    )
+                options = {"horizontal_only": horizontal_only or profile == "WEST_BENGAL_BEVCO_INVOICE",
+                           "diagnostics": timings}
+                if profile in {"WEST_BENGAL_BEVCO_INVOICE", "WEST_BENGAL_FORM5"}:
+                    options["ruled_only"] = True
+                while True:
+                    try:
+                        page_tables = _page_tables(page, **options)
+                        break
+                    except TypeError as exc:
+                        # Keep compatibility with earlier extension signatures;
+                        # never swallow a TypeError raised inside extraction.
+                        unsupported = next((key for key in ("ruled_only", "diagnostics")
+                                            if key in options and f"'{key}'" in str(exc)
+                                            and "unexpected keyword" in str(exc)), None)
+                        if unsupported is None:
+                            raise
+                        options.pop(unsupported)
             else:
                 page_tables = []
             table_count += len(page_tables)
