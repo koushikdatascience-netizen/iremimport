@@ -842,3 +842,16 @@ After/while Save is active these fields contain the recorded purchase transactio
 - Madhushala Item Master owns: packing, purchase case rate, purchase loose rate, MRP/sales rate, commercial/tax master values.
 - Madhushala Calculate owns: final rate, itemAmount, calculated tax amounts, gross/tax/net totals.
 - Browser owns only editable Purchase header selections and explicit review edits.
+
+
+## MP Delivery Challan printed financials
+
+MP payment-summary financials are optional source evidence. They are populated only when a printed payment footer exists. Missing values are not inferred from Item Master or Calculate.
+
+`totalAmount` and `subTotal` carry the printed Manufacturing Amount, `taxes.vat` carries the printed VAT Amount, `taxes.incomeTax` carries the printed Income Tax, and `totalNet` carries the printed payment Grand Total. `roundedOff` stays null because no rounding amount is printed. `taxes.tcs` stays null: Income Tax is not automatically renamed to TCS.
+
+`sourceFinancials.dutyAmount` retains the liquor-table duty total separately. Never add that duty again to the payment Grand Total. Product sums and table totals must agree with the payment footer, and Manufacturing Amount + VAT + Income Tax must exactly equal payment Grand Total. Financial discrepancies mark rows for review and block financial handoff. Documents without a payment footer retain the previous nullable-financial behavior.
+
+The handoff adds `sourceFinancials` and `calculationMappingRequired: ["incomeTax"]` for this MP source. These are source/validation fields, not authorization to add a tax to a calculated purchase. The inspected upstream Calculate schema has no incomeTax field and the active company tax-tag lookup returns HTTP 403; an upstream supported field or confirmed ledger mapping is still required. The frontend must handle this requirement before applying source Income Tax in Calculate/Save, and must avoid adding it again if the calculated result already includes it. This bridge does not silently populate TCS, overwrite Item Master tax amounts, or add a second tax adjustment.
+
+Earlier import jobs retain their original stored source data; re-upload the PDF after deploying this feature to obtain the financial evidence.
