@@ -256,7 +256,7 @@ def create_router(service: DocumentImportService) -> APIRouter:
                                       "subTotal", "amountCredited")},
             **invoice_financials,
             "taxes": {
-                **{key: None for key in ("specialPurposeFee", "roundOffValueToGovt", "tcs", "vat", "cess", "aed", "vatOnAed", "liquorTransportation", "additionalPrivilegeFee", "additionalRetailExciseTax", "privilegeFeeForClubs")},
+                **{key: None for key in ("specialPurposeFee", "roundOffValueToGovt", "specialExciseCess", "tcs", "vat", "cess", "aed", "vatOnAed", "liquorTransportation", "additionalPrivilegeFee", "additionalRetailExciseTax", "privilegeFeeForClubs")},
                 **(invoice_financials.get("taxes") or {}),
             },
         }

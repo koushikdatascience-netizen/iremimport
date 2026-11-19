@@ -111,15 +111,24 @@ class Settings:
     )
     DOCUMENT_IMPORT_DEBUG: bool = _env_bool("DOCUMENT_IMPORT_DEBUG", False)
     CORS_ORIGINS: list[str] = field(
-        default_factory=lambda: _env_list(
-            "CORS_ORIGINS",
-            [
-                "http://localhost:8091",
-                "http://127.0.0.1:8091",
-                "http://localhost:4200",
-                "http://127.0.0.1:4200",
-                "https://report.madhushalasoftware.com",
-            ],
+        default_factory=lambda: list(
+            dict.fromkeys(
+                [
+                    *_env_list(
+                        "CORS_ORIGINS",
+                        [
+                            "http://localhost:8091",
+                            "http://127.0.0.1:8091",
+                            "http://localhost:4200",
+                            "http://127.0.0.1:4200",
+                            "https://report.madhushalasoftware.com",
+                        ],
+                    ),
+                    # Madhushala ERP uses the bridge API from its browser app.
+                    # Keep this allowed even when production supplies its own list.
+                    "https://erp.madhushalasoftware.com",
+                ]
+            )
         )
     )
     CORS_ORIGIN_REGEX: str | None = os.getenv("CORS_ORIGIN_REGEX", r"chrome-extension://.*")
