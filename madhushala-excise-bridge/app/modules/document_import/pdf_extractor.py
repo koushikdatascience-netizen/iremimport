@@ -1553,8 +1553,9 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         )
         mp_financials = None
         if profile == "MADHYA_PRADESH_DELIVERY_CHALLAN":
-            from app.modules.document_import.mp_financials import extract_mp_financials
+            from app.modules.document_import.mp_financials import extract_mp_financials, attach_mp_line_amounts
             mp_financials = extract_mp_financials(page_texts, product_count, sum(item.box or 0 for item in products))
+            products = attach_mp_line_amounts(page_texts, products, mp_financials)
         if west_bengal_validation and west_bengal_validation["status"] == "passed":
             # The printed case/loose and bottle totals independently prove that
             # every ORIGINAL product row was captured. The broad text-layer

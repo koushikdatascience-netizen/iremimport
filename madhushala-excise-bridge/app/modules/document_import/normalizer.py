@@ -75,7 +75,10 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
             # Never reuse for Bar Indent or any other state.
             is_ap_invoice = (str(getattr(document, "sourceDocumentType", "") or "").upper() == "AP_ICDC_INVOICE"
                              and str(getattr(document, "sourceState", "") or "").upper() == "ANDHRA_PRADESH")
-            source_amount = _float(getattr(item, "invoiceAmount", None) if is_ap_invoice else None)
+            is_verified_mp = (str(raw.get("sourceState") or "").upper() == "MADHYA_PRADESH"
+                              and isinstance(raw.get("sourceFinancialValidation"), dict)
+                              and raw["sourceFinancialValidation"].get("status") == "verified")
+            source_amount = _float(getattr(item, "invoiceAmount", None) if is_ap_invoice or is_verified_mp else None)
             if is_ap_invoice:
                 raw["sourceState"] = "ANDHRA_PRADESH"
                 raw["sourceDocumentType"] = "AP_ICDC_INVOICE"
@@ -125,7 +128,7 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
                     quantity=float(box + loose) if (box or loose) else None,
                     rate=None,
                     mrp=None,
-                    amount=source_amount if is_ap_invoice else None,
+                    amount=source_amount if is_ap_invoice or is_verified_mp else None,
                     batchNo=_clean_text(item.batchNo),
                     box=box or None,
                     loose=loose or None,

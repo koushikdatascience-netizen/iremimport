@@ -53,7 +53,7 @@ def test_no_payment_footer_keeps_older_mp_documents_compatible():
 
 def install_mp(monkeypatch, invalid=False):
     header = ["Sl", "Label Name", "Batch", "Capacity", "Quantity in Cases", "Duty", "Mfg Amount", "VAT"]
-    products = [[str(n), f"Synthetic Product {n}", "", "750 (Glass Bottle)", "1", "5.00", "10.00", "2.00"] for n in range(1, 28)]
+    products = [[str(n), f"Synthetic Product {n} [FL/2000-2001/{n:04d}]", "", "750 (Glass Bottle)", "1", "5.00", "10.00", "2.00"] for n in range(1, 28)]
     table_pages = [[1, "", [[header, *products[:7]]]], [2, "", [products[7:17]]], [3, "", [products[17:]]]]
     texts = financial_text()
     if invalid: texts[2] = texts[2].replace("330.48", "331.48")
@@ -91,6 +91,9 @@ def test_mp_upload_persistence_review_and_handoff(client, monkeypatch, invalid):
     job = body["job"]["id"]
     rows = client.get(f"/api/v1/document-import/jobs/{job}/items", headers=auth(session)).json()["items"]
     assert all(json.loads(r["raw_data_json"])["sourceState"] == "MADHYA_PRADESH" for r in rows)
+    if not invalid:
+        assert all(row["amount"] == 10 for row in rows)
+        assert all(json.loads(row["raw_data_json"])["invoiceAmount"] == "10.00" for row in rows)
     with conn() as db:
         for i, row in enumerate(rows):
             db.execute("UPDATE import_items SET mapped_item_code=?,mapping_status='MAPPED' WHERE id=?", (f"MP{i}", row["id"]))
@@ -109,4 +112,50 @@ def test_mp_upload_persistence_review_and_handoff(client, monkeypatch, invalid):
     assert purchase["taxes"]["tcs"] is None
     assert purchase["sourceFinancials"]["dutyAmount"] == "135.00"
     assert purchase["calculationMappingRequired"] == ["incomeTax"]
-    assert all(row["amount"] is None for row in purchase["items"])
+    from decimal import Decimal
+    assert all(row["amount"] == row["itemAmount"] == 10 for row in purchase["items"])
+    assert sum(Decimal(str(row["amount"])) for row in purchase["items"]) == Decimal("270.00")
+    assert all(row["sourceLineFinancials"]["dutyAmount"] == "5.00" for row in purchase["items"])
+    assert all(row["sourceLineFinancials"]["vat"] == "2.00" for row in purchase["items"])
+    assert all(row["rate"] == 1 and row["boxRate"] == 12 for row in purchase["items"])
+
+
+@pytest.mark.parametrize("change", [None, "wrong_ml", "wrong_cases", "wrong_registration", "duplicate", "wrong_subtotal"])
+def test_mp_line_amounts_match_identity_not_position_and_reject_ambiguity(change):
+    from app.modules.document_import.mp_financials import attach_mp_line_amounts
+    from app.modules.document_import.schemas import ExtractedProduct
+    text = ("[FL/2000-2001/0001]\n750\n(Glass Bottle)\n2\n3.00\n5.00\n1.00\n"
+            "[FL/2000-2001/0002]\n180\n(Pet Bottle)\n3\n4.00\n9.00\n2.00")
+    products = [
+        ExtractedProduct(itemName="Synthetic B [FL/2000-2001/0002]", ml=180, box=3, loose=0),
+        ExtractedProduct(itemName="Synthetic A [FL/2000-2001/0001]", ml=750, box=2, loose=0),
+    ]
+    financials = {"manufacturingAmount": "14.00", "reconciled": True,
+                  "validation": {"status": "verified", "errors": []}}
+    if change == "wrong_ml": products[0].ml = 500
+    elif change == "wrong_cases": products[0].box = 4
+    elif change == "wrong_registration": products[0].itemName = "Synthetic B [FL/2000-2001/0003]"
+    elif change == "duplicate": text += "\n" + text.split("[FL/2000-2001/0002]")[0]
+    elif change == "wrong_subtotal": financials["manufacturingAmount"] = "15.00"
+    rows = attach_mp_line_amounts([text], products, financials)
+    if change:
+        assert not financials["reconciled"]
+        assert financials["validation"]["errors"]
+        assert all(getattr(row, "invoiceAmount", None) is None for row in rows)
+    else:
+        assert [row.invoiceAmount for row in rows] == ["9.00", "5.00"]
+        assert rows[0].sourceLineFinancials["dutyAmount"] == "4.00"
+        assert rows[0].sourceLineFinancials["vat"] == "2.00"
+
+
+def test_mp_line_amounts_do_not_override_calculate_master_rates():
+    from app.modules.document_import.purchase_contract import build_item_master_calculation_request
+    request = build_item_master_calculation_request(
+        {"shopCode": "SYN", "companyCode": "2"},
+        [{"itemCode": "MP1", "box": 1, "loose": 0, "qnty": 12,
+          "_canonicalQuantityVersion": 2, "itemAmount": 1234, "amount": 1234}],
+        {"MP1": {"itemCode": "MP1", "packing": 12, "purchaseRate": 2, "purchaseRateCase": 24}},
+    )
+    item = request["items"][0]
+    assert item["boxRate"] == 24 and item["looseRate"] == 2
+    assert "itemAmount" not in item and "amount" not in item
