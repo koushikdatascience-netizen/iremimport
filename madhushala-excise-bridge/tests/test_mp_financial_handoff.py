@@ -28,10 +28,12 @@ def test_synthetic_mp_printed_amounts_reconcile_without_counting_duty_twice():
     assert "tcs" not in result["taxes"]
 
 
-@pytest.mark.parametrize("change", ["missing_tax", "wrong_net", "wrong_vat", "missing_rows", "conflicting_footer"])
+@pytest.mark.parametrize("change", ["missing_tax", "missing_manufacturing", "missing_vat", "wrong_net", "wrong_vat", "missing_rows", "conflicting_footer"])
 def test_invalid_mp_financials_require_review(change):
     texts = financial_text()
     if change == "missing_tax": texts[2] = texts[2].replace("Income Tax : \n6.48", "")
+    elif change == "missing_manufacturing": texts[2] = texts[2].replace("Manufacturing Amount :\n270.00", "")
+    elif change == "missing_vat": texts[2] = texts[2].replace("VAT Amount :\n54.00", "")
     elif change == "wrong_net": texts[2] = texts[2].replace("330.48", "331.48")
     elif change == "wrong_vat": texts[2] = texts[2].replace("54.00", "55.00")
     elif change == "missing_rows": texts[0] = ""

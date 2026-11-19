@@ -15,7 +15,7 @@ def extract_mp_financials(
     # The liquor table's Grand Total includes excise duty. The payment footer
     # has a different Grand Total; never use the former as the payable amount.
     footers = [text for text in page_texts if re.search(
-        r"Manufacturing\s+Amount\s*:", text, re.I,
+        r"(?:Manufacturing\s+Amount|VAT\s+Amount|Income\s+Tax)\s*:", text, re.I,
     )]
     if not footers:
         return None
