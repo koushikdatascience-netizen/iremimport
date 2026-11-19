@@ -70,7 +70,8 @@ else
 fi
 chmod 600 "$APP_DIR/.env" "$CONFIG_ENV" || true
 
-# Routine releases never migrate databases or rewrite production configuration.
+# Routine releases never migrate databases. The explicitly approved ERP
+# frame-ancestors allowlist is the only host Nginx policy updated here.
 CURRENT_DATABASE_URL="$(grep -E '^DATABASE_URL=' "$APP_DIR/.env" | tail -n 1 | cut -d= -f2- || true)"
 if ! printf '%s' "$CURRENT_DATABASE_URL" | grep -Eq '^postgres(ql)?://'; then
   echo "ERROR: PostgreSQL is required; database migration is a separate operation"
@@ -231,6 +232,100 @@ if ! grep -q "mapping-row-identity.js?v=$EXPECTED_ASSET_VERSION" <<<"$LOCAL_GATE
   || ! grep -q 'continueExtractedDocumentToMapping' <<<"$LOCAL_GATEWAY_HTML"; then
   echo "ERROR: 127.0.0.1:8091 is not serving deployment $DEPLOY_SHA"
   printf '%s' "$LOCAL_GATEWAY_HTML" | grep -oE '<script[^>]+src="[^"]+"' || true
+  exit 1
+fi
+
+echo "== Allow ERP in the production Nginx frame-ancestors policy =="
+NGINX_DUMP="$(sudo -n nginx -T 2>/dev/null)"
+CSP_CONFIG="$(awk '
+  /^# configuration file / {
+    config = $4
+    sub(/:$/, "", config)
+  }
+  active && /^[[:space:]]*add_header[[:space:]]+Content-Security-Policy[[:space:]]+"frame-ancestors/ {
+    print config
+    exit
+  }
+  /server_name[[:space:]]+integrations\.madhushalasoftware\.com[[:space:];]/ {
+    active = 1
+    next
+  }
+  active && /^[[:space:]]*server_name[[:space:]]+/ { active = 0 }
+' <<<"$NGINX_DUMP")"
+if [ -z "$CSP_CONFIG" ]; then
+  echo "ERROR: frame-ancestors directive for integrations.madhushalasoftware.com was not found"
+  exit 1
+fi
+CSP_CONFIG_REAL="$(readlink -f "$CSP_CONFIG")"
+if [[ "$CSP_CONFIG_REAL" != /etc/nginx/* ]]; then
+  echo "ERROR: refusing to update an Nginx config outside /etc/nginx: $CSP_CONFIG_REAL"
+  exit 1
+fi
+CSP_BACKUP="${CSP_CONFIG_REAL}.bak-${SHORT_SHA}-${STAMP}"
+if sudo -n python3 - "$CSP_CONFIG_REAL" "$CSP_BACKUP" <<'PY'
+from pathlib import Path
+import re
+import shutil
+import sys
+
+config_path = Path(sys.argv[1])
+backup_path = Path(sys.argv[2])
+origin = "https://erp.madhushalasoftware.com"
+text = config_path.read_text(encoding="utf-8")
+pattern = re.compile(
+    r'(?m)^(?P<indent>[ \t]*)add_header[ \t]+Content-Security-Policy[ \t]+'
+    r'"(?P<policy>frame-ancestors[^\"]*)"[ \t]+always;[ \t]*$'
+)
+matches = list(pattern.finditer(text))
+if not matches:
+    raise SystemExit("ERROR: no frame-ancestors Content-Security-Policy directive found in the active vhost")
+
+def add_origin(match: re.Match[str]) -> str:
+    policy = match.group("policy")
+    if origin in policy.split():
+        return match.group(0)
+    return f'{match.group("indent")}add_header Content-Security-Policy "{policy} {origin}" always;'
+
+updated = pattern.sub(add_origin, text)
+if updated == text:
+    print("ERP origin is already present in the active Nginx policy")
+else:
+    shutil.copy2(config_path, backup_path)
+    config_path.write_text(updated, encoding="utf-8")
+    print(f"Updated frame-ancestors policy in {config_path}; backup: {backup_path}")
+PY
+then
+  if ! sudo -n nginx -t; then
+    if [ -f "$CSP_BACKUP" ]; then
+      sudo -n cp -p "$CSP_BACKUP" "$CSP_CONFIG_REAL"
+      sudo -n nginx -t
+    fi
+    echo "ERROR: Nginx validation failed after the frame-ancestors update"
+    exit 1
+  fi
+  if ! sudo -n systemctl reload nginx; then
+    if [ -f "$CSP_BACKUP" ]; then
+      sudo -n cp -p "$CSP_BACKUP" "$CSP_CONFIG_REAL"
+      sudo -n nginx -t
+      sudo -n systemctl reload nginx || true
+    fi
+    echo "ERROR: Nginx reload failed after the frame-ancestors update"
+    exit 1
+  fi
+else
+  echo "ERROR: could not update the active Nginx frame-ancestors policy"
+  exit 1
+fi
+
+LOCAL_CSP_HEADERS="$(curl -kfsSL -D - -o /dev/null \
+  --resolve integrations.madhushalasoftware.com:443:127.0.0.1 \
+  -H 'Cache-Control: no-cache, no-store' \
+  "https://integrations.madhushalasoftware.com/excise-import/document-import?csp=$SHORT_SHA" \
+  | tr -d '\r')"
+if ! grep -qiF 'Content-Security-Policy:' <<<"$LOCAL_CSP_HEADERS" \
+  || ! grep -qiF 'https://erp.madhushalasoftware.com' <<<"$LOCAL_CSP_HEADERS"; then
+  echo "ERROR: local Nginx did not return the ERP frame-ancestors origin"
+  printf '%s\n' "$LOCAL_CSP_HEADERS" | grep -i 'Content-Security-Policy:' || true
   exit 1
 fi
 
