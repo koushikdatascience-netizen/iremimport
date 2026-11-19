@@ -371,7 +371,7 @@ class DocumentImportService:
 
         issues: list[str] = []
         financial_validation = raw.get("sourceFinancialValidation")
-        if str(raw.get("sourceState") or "").upper() == "JHARKHAND" and isinstance(financial_validation, dict):
+        if str(raw.get("sourceState") or "").upper() in {"JHARKHAND", "MADHYA_PRADESH"} and isinstance(financial_validation, dict):
             if financial_validation.get("status") != "verified":
                 issues.append("Printed invoice financials require review: " + "; ".join(financial_validation.get("errors") or []))
         if not name:
@@ -898,6 +898,18 @@ class DocumentImportService:
             if not isinstance(financials, dict):
                 continue
             taxes = financials.get("taxes") if isinstance(financials.get("taxes"), dict) else {}
+            if str(raw.get("sourceState") or "").upper() == "MADHYA_PRADESH":
+                if not financials.get("reconciled"):
+                    raise HTTPException(status_code=409, detail="MP printed financial totals require review before Purchase handoff")
+                return {
+                    "taxes": {"vat": taxes.get("vat"), "incomeTax": financials.get("incomeTax")},
+                    "totalAmount": financials.get("totalAmount"),
+                    "totalNet": financials.get("totalNet"),
+                    "subTotal": financials.get("subTotal"),
+                    "roundedOff": None,
+                    "sourceFinancials": financials,
+                    "calculationMappingRequired": financials.get("calculationMappingRequired", []),
+                }
             if (str(raw.get("sourceState") or "").upper() == "ANDHRA_PRADESH"
                     and str(raw.get("sourceDocumentType") or "").upper() == "AP_ICDC_INVOICE"):
                 return {
@@ -1269,7 +1281,7 @@ class DocumentImportService:
                 state = str(getattr(doc, "sourceState", "") or "").upper()
                 is_odisha = state == "ODISHA"
                 is_jharkhand = state == "JHARKHAND"
-                source_financials = getattr(doc, "invoiceFinancials", None) if state in {"ODISHA", "JHARKHAND", "ANDHRA_PRADESH"} else None
+                source_financials = getattr(doc, "invoiceFinancials", None) if state in {"ODISHA", "JHARKHAND", "ANDHRA_PRADESH", "MADHYA_PRADESH"} else None
                 if not isinstance(source_financials, dict):
                     source_financials = None
                 for item in (doc.items or []):
@@ -1293,6 +1305,15 @@ class DocumentImportService:
                         source_amount = payload.get("invoiceAmount", payload.get("amount"))
                         if source_amount not in (None, ""):
                             payload["invoiceAmount"] = source_amount
+                        merged_items.append(ExtractedProduct.model_validate(payload))
+                    elif state == "MADHYA_PRADESH":
+                        payload = item.model_dump()
+                        payload["sourceState"] = state
+                        if source_financials is not None:
+                            payload["invoiceFinancials"] = source_financials
+                            payload["sourceFinancialValidation"] = source_financials.get("validation")
+                        if doc_tp_pass:
+                            payload["transportPassNo"] = doc_tp_pass
                         merged_items.append(ExtractedProduct.model_validate(payload))
                     elif state == "ANDHRA_PRADESH" and str(getattr(doc, "sourceDocumentType", "")) == "AP_ICDC_INVOICE":
                         payload = item.model_dump()
@@ -1337,7 +1358,7 @@ class DocumentImportService:
             # Do not alter the proven WB invoice-enrichment or Calculate flow.
             if not enrichment_parts and len(primary_parts) == 1:
                 primary_doc = primary_parts[0][0]
-                if str(getattr(primary_doc, "sourceState", "")).upper() in {"ODISHA", "JHARKHAND", "ANDHRA_PRADESH"}:
+                if str(getattr(primary_doc, "sourceState", "")).upper() in {"ODISHA", "JHARKHAND", "ANDHRA_PRADESH", "MADHYA_PRADESH"}:
                     invoice_financials = getattr(primary_doc, "invoiceFinancials", None)
                     if invoice_financials and not isinstance(invoice_financials, dict):
                         invoice_financials = None

@@ -293,6 +293,9 @@ def create_router(service: DocumentImportService) -> APIRouter:
         for field in ("icdcValue", "challanAmount", "previousCreditLeftover",
                       "subTotal", "amountCredited"):
             purchase[field] = invoice_financials.get(field)
+        if invoice_financials.get("sourceFinancials") is not None:
+            purchase["sourceFinancials"] = invoice_financials["sourceFinancials"]
+            purchase["calculationMappingRequired"] = invoice_financials.get("calculationMappingRequired", [])
         logging.getLogger("madhushala-excise-bridge.document-import").info(
             "document_handoff_timings job=%s headerMs=%.2f itemMasterAndEnrichmentMs=%.2f payloadMs=%.2f totalMs=%.2f",
             job_id, (header_done - started) * 1000, (master_done - header_done) * 1000,
