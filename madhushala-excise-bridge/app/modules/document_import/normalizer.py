@@ -78,7 +78,16 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
             is_verified_mp = (str(raw.get("sourceState") or "").upper() == "MADHYA_PRADESH"
                               and isinstance(raw.get("sourceFinancialValidation"), dict)
                               and raw["sourceFinancialValidation"].get("status") == "verified")
-            source_amount = _float(getattr(item, "invoiceAmount", None) if is_ap_invoice or is_verified_mp else None)
+            is_verified_telangana = (
+                str(getattr(document, "sourceState", "") or "").upper() == "TELANGANA"
+                and isinstance(getattr(document, "invoiceFinancials", None), dict)
+                and getattr(document, "invoiceFinancials", {}).get("reconciled") is True
+            )
+            source_amount = _float(
+                getattr(item, "invoiceAmount", None)
+                if is_ap_invoice or is_verified_mp or is_verified_telangana
+                else None
+            )
             if is_ap_invoice:
                 raw["sourceState"] = "ANDHRA_PRADESH"
                 raw["sourceDocumentType"] = "AP_ICDC_INVOICE"
@@ -86,6 +95,15 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
                 financials = getattr(document, "invoiceFinancials", None)
                 if isinstance(financials, dict):
                     raw["invoiceFinancials"] = financials
+                pass_no = str(getattr(document, "transportPassNo", "") or "").strip()
+                if pass_no:
+                    raw["transportPassNo"] = pass_no
+            if is_verified_telangana:
+                raw["sourceState"] = "TELANGANA"
+                raw["sourceDocumentType"] = "TELANGANA_ICDC"
+                raw["invoiceAmount"] = source_amount
+                raw["invoiceFinancials"] = getattr(document, "invoiceFinancials", None)
+                raw["sourceFinancialValidation"] = getattr(document, "invoiceFinancials", {}).get("validation")
                 pass_no = str(getattr(document, "transportPassNo", "") or "").strip()
                 if pass_no:
                     raw["transportPassNo"] = pass_no
@@ -128,7 +146,7 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
                     quantity=float(box + loose) if (box or loose) else None,
                     rate=None,
                     mrp=None,
-                    amount=source_amount if is_ap_invoice or is_verified_mp else None,
+                    amount=source_amount if is_ap_invoice or is_verified_mp or is_verified_telangana else None,
                     batchNo=_clean_text(item.batchNo),
                     box=box or None,
                     loose=loose or None,

@@ -519,12 +519,15 @@ def _extract_telangana(
                     continue
                 name = max(name_candidates, key=len)
                 cases, loose = resolve_case_loose(integer_cells[0], integer_cells[1])
+                amount_cell = next((cell for cell in reversed(cells) if _clean(cell)), None)
+                invoice_amount = _optional_money(amount_cell)
                 raw = {f"column{index + 1}": value for index, value in enumerate(cells)}
                 raw.update(
                     {
                         "Pack Qty / Size (ml)": cells[pack_index],
                         "Qty(Cases Delivered)": cases,
                         "Qty(Bottles Delivered)": loose,
+                        "Invoice Amount": invoice_amount,
                     }
                 )
                 item = _product(
@@ -538,6 +541,10 @@ def _extract_telangana(
                     semantics="cases_plus_loose_bottles",
                 )
                 if item:
+                    if invoice_amount is not None:
+                        item.amount = invoice_amount
+                        item.itemAmount = invoice_amount
+                        item.invoiceAmount = invoice_amount
                     products.append(item)
 
     invoice_number = None
@@ -548,6 +555,114 @@ def _extract_telangana(
     date_match = re.search(r"Invoice\s*Date\s*:\s*([^\n\r]+)", full_text, re.IGNORECASE)
     invoice_date = _normalize_date(date_match.group(1)) if date_match else None
     return _dedupe(products), invoice_number, invoice_date
+
+
+def _telangana_invoice_financials(
+    pages: list[tuple[int, str, list[list[list[str]]]]],
+    products: list[ExtractedProduct],
+) -> dict[str, Any]:
+    """Extract printed Telangana ICDC totals and reconcile item amounts."""
+    values: dict[str, float | None] = {
+        "invoiceValue": None,
+        "mrpRoundingOff": None,
+        "netInvoiceValue": None,
+        "lessThisInvoiceValue": None,
+        "eChallanDDAmount": None,
+        "previousCredit": None,
+        "subTotal": None,
+        "specialExciseCess": None,
+        "tcs": None,
+        "retailerCreditBalance": None,
+    }
+    for _page_no, _page_text, page_tables in pages:
+        for rows in page_tables:
+            for cells in rows:
+                if not cells:
+                    continue
+                label = _key(" ".join(_clean(cell) for cell in cells[:-1]))
+                value_text = _clean(cells[-1])
+                if "invoicevaluemrproundingoffnetinvoicevalue" in label:
+                    amounts = [
+                        _optional_money(match.group(0))
+                        for match in re.finditer(r"[\d,]+\.\d{2}", value_text)
+                    ]
+                    if len(amounts) == 3:
+                        values["invoiceValue"], values["mrpRoundingOff"], values["netInvoiceValue"] = amounts
+                elif "echallanddamount" in label:
+                    values["eChallanDDAmount"] = _optional_money(value_text)
+                elif "previouscredit" in label:
+                    values["previousCredit"] = _optional_money(value_text)
+                elif label.endswith("subtotal"):
+                    values["subTotal"] = _optional_money(value_text)
+                elif "lessthisinvoicevalue" in label:
+                    values["lessThisInvoiceValue"] = _optional_money(value_text)
+                elif "specialexcisecess" in label:
+                    values["specialExciseCess"] = _optional_money(value_text)
+                elif label.endswith("tcs"):
+                    values["tcs"] = _optional_money(value_text)
+                elif "retailercreditbalance" in label:
+                    values["retailerCreditBalance"] = _optional_money(value_text)
+
+    invoice_value = values["invoiceValue"]
+    mrp_rounding_off = values["mrpRoundingOff"]
+    net_invoice_value = values["netInvoiceValue"]
+    less_this_invoice_value = values["lessThisInvoiceValue"]
+    e_challan_amount = values["eChallanDDAmount"]
+    previous_credit = values["previousCredit"]
+    sub_total = values["subTotal"]
+    special_excise_cess = values["specialExciseCess"]
+    tcs = values["tcs"]
+
+    line_amounts = [
+        _optional_money(item.model_dump().get("invoiceAmount", item.amount))
+        for item in products
+    ]
+    line_sum = round(sum(value for value in line_amounts if value is not None), 2)
+    reconciled = bool(
+        products
+        and all(value is not None for value in line_amounts)
+        and invoice_value is not None
+        and line_sum == invoice_value
+        and mrp_rounding_off is not None
+        and net_invoice_value is not None
+        and round(invoice_value + mrp_rounding_off, 2) == net_invoice_value
+        and less_this_invoice_value == net_invoice_value
+        and e_challan_amount is not None
+        and previous_credit is not None
+        and sub_total is not None
+        and round(e_challan_amount + previous_credit, 2) == sub_total
+        and special_excise_cess is not None
+        and tcs is not None
+    )
+    return {
+        "sourceDocumentType": "TELANGANA_ICDC",
+        "reconciled": reconciled,
+        "validation": {
+            "status": "verified" if reconciled else "review_required",
+            "itemCount": len(products),
+            "itemsWithPrintedAmount": sum(value is not None for value in line_amounts),
+            "itemAmountSum": line_sum,
+            "invoiceValue": invoice_value,
+            "netInvoiceValue": net_invoice_value,
+        },
+        "totalAmount": invoice_value,
+        "totalNet": net_invoice_value,
+        "roundedOff": None,
+        "invoiceValue": invoice_value,
+        "mrpRoundingOff": mrp_rounding_off,
+        "netInvoiceValue": net_invoice_value,
+        "lessThisInvoiceValue": less_this_invoice_value,
+        "eChallanDDAmount": e_challan_amount,
+        "previousCredit": previous_credit,
+        "subTotal": sub_total,
+        "retailerCreditBalance": values["retailerCreditBalance"],
+        "taxes": {
+            "cess": special_excise_cess,
+            "specialExciseCess": special_excise_cess,
+            "tcs": tcs,
+            "vat": None,
+        },
+    }
 
 
 def _extract_jharkhand(
@@ -1473,7 +1588,11 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             profile == "JHARKHAND_EXCISE"
             and bool(re.search(r"form\s*[-–]?\s*t\s*\(\s*transport\s*\)|pass for transport within", full_text, re.I))
         )
-        horizontal_only = profile in {"WEST_BENGAL_FORM3", "WEST_BENGAL_FORM5"} or is_jharkhand_form_t
+        horizontal_only = profile in {
+            "WEST_BENGAL_FORM3",
+            "WEST_BENGAL_FORM5",
+            "TELANGANA_ICDC",
+        } or is_jharkhand_form_t
         west_bengal_copies = profile in {"WEST_BENGAL_FORM3", "WEST_BENGAL_FORM5"}
         west_bengal_original_pages = {
             index
@@ -1556,6 +1675,11 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
             from app.modules.document_import.mp_financials import extract_mp_financials, attach_mp_line_amounts
             mp_financials = extract_mp_financials(page_texts, product_count, sum(item.box or 0 for item in products))
             products = attach_mp_line_amounts(page_texts, products, mp_financials)
+        telangana_financials = (
+            _telangana_invoice_financials(pages, products)
+            if profile == "TELANGANA_ICDC"
+            else None
+        )
         if west_bengal_validation and west_bengal_validation["status"] == "passed":
             # The printed case/loose and bottle totals independently prove that
             # every ORIGINAL product row was captured. The broad text-layer
@@ -1569,6 +1693,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
         needs_fallback = bool(
             (west_bengal_validation and west_bengal_validation["status"] == "failed")
             or (bevco_financials and not bevco_financials.get("reconciled"))
+            or (telangana_financials and not telangana_financials.get("reconciled"))
             or candidate_rows > product_count
         )
         timings["parseValidateMs"] = (time.perf_counter() - parse_started) * 1000
@@ -1611,7 +1736,12 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
                 if profile == "WEST_BENGAL_BEVCO_INVOICE"
                 else "primary"
             ),
-            invoiceFinancials=mp_financials if mp_financials is not None else bevco_financials,
+            invoiceFinancials=(
+                mp_financials
+                if mp_financials is not None
+                else bevco_financials if bevco_financials is not None
+                else telangana_financials
+            ),
             extractionDiagnostics={
                 "pageCount": len(document),
                 "processedPageCount": len(pages),
@@ -1623,6 +1753,7 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
                 "completeness": completeness,
                 "needsFallback": needs_fallback,
                 "totalValidation": west_bengal_validation,
+                "invoiceFinancialValidation": telangana_financials,
                 "timingsMs": {key: round(value, 2) for key, value in timings.items()},
             },
         )
@@ -1636,7 +1767,12 @@ def extract_pdf_locally(file_path: Path) -> tuple[ExtractedDocument | None, dict
                 if profile == "WEST_BENGAL_BEVCO_INVOICE"
                 else "primary"
             ),
-            "invoiceFinancials": mp_financials if mp_financials is not None else bevco_financials,
+            "invoiceFinancials": (
+                mp_financials
+                if mp_financials is not None
+                else bevco_financials if bevco_financials is not None
+                else telangana_financials
+            ),
             "pageCount": len(document),
             "processedPageCount": len(pages),
             "textChars": text_chars,

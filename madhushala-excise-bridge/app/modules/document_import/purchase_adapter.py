@@ -329,11 +329,13 @@ class DocumentPurchaseAdapter:
                 "t3Rate": _money(_dict_value(master, "t3Rate", "tax3Rate")),
                 "t4Rate": _money(_dict_value(master, "t4Rate", "tax4Rate")),
             }
-            if str(raw_value("sourceState") or "").upper() == "MADHYA_PRADESH":
+            if str(raw_value("sourceState") or "").upper() in {"MADHYA_PRADESH", "TELANGANA"}:
                 validation = raw_value("sourceFinancialValidation")
                 if isinstance(validation, dict) and validation.get("status") == "verified" and invoice_amount is not None:
                     item["itemAmount"] = invoice_amount
-                    item["sourceLineFinancials"] = raw_value("sourceLineFinancials")
+                    source_line_financials = raw_value("sourceLineFinancials")
+                    if source_line_financials is not None:
+                        item["sourceLineFinancials"] = source_line_financials
             items.append(item)
 
         if missing_document_quantities:

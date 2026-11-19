@@ -929,6 +929,26 @@ class DocumentImportService:
                     "subTotal": financials.get("subTotal"),
                     "amountCredited": financials.get("amountCredited"),
                 }
+            if str(raw.get("sourceState") or "").upper() == "TELANGANA":
+                return {
+                    "taxes": {
+                        "cess": taxes.get("cess"),
+                        "specialExciseCess": taxes.get("specialExciseCess"),
+                        "tcs": taxes.get("tcs"),
+                        "vat": taxes.get("vat"),
+                    },
+                    "roundedOff": None,
+                    "totalAmount": financials.get("invoiceValue"),
+                    "totalNet": financials.get("netInvoiceValue"),
+                    "sourceFinancials": {
+                        key: financials.get(key)
+                        for key in (
+                            "invoiceValue", "mrpRoundingOff", "netInvoiceValue",
+                            "lessThisInvoiceValue", "eChallanDDAmount", "previousCredit",
+                            "subTotal", "retailerCreditBalance",
+                        )
+                    },
+                }
             if str(raw.get("sourceState") or "").upper() == "JHARKHAND":
                 return {
                     "taxes": {
@@ -1029,6 +1049,13 @@ class DocumentImportService:
                         "engine": "pymupdf-state-adapter",
                         "needsFallback": False,
                     }
+                elif meta.get("profile") == "TELANGANA_ICDC":
+                    if meta.get("needsFallback"):
+                        raise ValueError(
+                            "Telangana ICDC item amounts and printed financial totals did not reconcile; "
+                            "no unverified amounts were imported"
+                        )
+                    meta = {**meta, "engine": "pymupdf-state-adapter", "needsFallback": False}
                 elif meta.get("needsFallback") and (
                     meta.get("profile") != "WEST_BENGAL_FORM3"
                     or (meta.get("totalValidation") or {}).get("status") == "failed"
@@ -1281,7 +1308,8 @@ class DocumentImportService:
                 state = str(getattr(doc, "sourceState", "") or "").upper()
                 is_odisha = state == "ODISHA"
                 is_jharkhand = state == "JHARKHAND"
-                source_financials = getattr(doc, "invoiceFinancials", None) if state in {"ODISHA", "JHARKHAND", "ANDHRA_PRADESH", "MADHYA_PRADESH"} else None
+                is_telangana = state == "TELANGANA"
+                source_financials = getattr(doc, "invoiceFinancials", None) if state in {"ODISHA", "JHARKHAND", "ANDHRA_PRADESH", "MADHYA_PRADESH", "TELANGANA"} else None
                 if not isinstance(source_financials, dict):
                     source_financials = None
                 for item in (doc.items or []):
@@ -1323,6 +1351,16 @@ class DocumentImportService:
                         if doc_tp_pass:
                             payload["transportPassNo"] = doc_tp_pass
                         merged_items.append(ExtractedProduct.model_validate(payload))
+                    elif is_telangana:
+                        payload = item.model_dump()
+                        payload["sourceState"] = "TELANGANA"
+                        payload["sourceDocumentType"] = "TELANGANA_ICDC"
+                        payload["invoiceFinancials"] = source_financials
+                        if source_financials is not None:
+                            payload["sourceFinancialValidation"] = source_financials.get("validation")
+                        if doc_tp_pass:
+                            payload["transportPassNo"] = doc_tp_pass
+                        merged_items.append(ExtractedProduct.model_validate(payload))
                     elif doc_tp_pass:
                         payload = item.model_dump()
                         payload["transportPassNo"] = doc_tp_pass
@@ -1358,7 +1396,7 @@ class DocumentImportService:
             # Do not alter the proven WB invoice-enrichment or Calculate flow.
             if not enrichment_parts and len(primary_parts) == 1:
                 primary_doc = primary_parts[0][0]
-                if str(getattr(primary_doc, "sourceState", "")).upper() in {"ODISHA", "JHARKHAND", "ANDHRA_PRADESH", "MADHYA_PRADESH"}:
+                if str(getattr(primary_doc, "sourceState", "")).upper() in {"ODISHA", "JHARKHAND", "ANDHRA_PRADESH", "MADHYA_PRADESH", "TELANGANA"}:
                     invoice_financials = getattr(primary_doc, "invoiceFinancials", None)
                     if invoice_financials and not isinstance(invoice_financials, dict):
                         invoice_financials = None
