@@ -237,32 +237,50 @@ fi
 
 echo "== Allow ERP in the production Nginx frame-ancestors policy =="
 NGINX_DUMP="$(sudo -n nginx -T 2>/dev/null)"
-CSP_CONFIG="$(awk '
+CSP_CONFIGS="$(awk '
   /^# configuration file / {
     config = $4
     sub(/:$/, "", config)
   }
-  active && /^[[:space:]]*add_header[[:space:]]+Content-Security-Policy[[:space:]]+"frame-ancestors/ {
-    print config
-    exit
+  {
+    line = $0
+    opens = gsub(/{/, "{", line)
+    closes = gsub(/}/, "}", line)
+    if ($0 ~ /^[[:space:]]*server[[:space:]]*\{/) {
+      candidate_depth = depth + opens - closes
+      candidate = 1
+      matched = 0
+    }
+    if (candidate && $0 ~ /server_name[[:space:]]+[^;]*integrations\.madhushalasoftware\.com([[:space:];]|$)/) {
+      matched = 1
+      matched_depth = candidate_depth
+    }
+    if (matched && $0 ~ /^[[:space:]]*add_header[[:space:]]+Content-Security-Policy[[:space:]]+"frame-ancestors/) {
+      print config
+    }
+    depth += opens - closes
+    if (candidate && depth < candidate_depth) {
+      candidate = 0
+      matched = 0
+    }
   }
-  /server_name[[:space:]]+integrations\.madhushalasoftware\.com[[:space:];]/ {
-    active = 1
-    next
-  }
-  active && /^[[:space:]]*server_name[[:space:]]+/ { active = 0 }
-' <<<"$NGINX_DUMP")"
-if [ -z "$CSP_CONFIG" ]; then
+' <<<"$NGINX_DUMP" | sort -u)"
+if [ -z "$CSP_CONFIGS" ]; then
   echo "ERROR: frame-ancestors directive for integrations.madhushalasoftware.com was not found"
+  echo "Active integrations server blocks and CSP directives from nginx -T:"
+  awk '/server_name[[:space:]]+[^;]*integrations\.madhushalasoftware\.com/ { print; show=1; left=8; next } show && left-- > 0 { print }' <<<"$NGINX_DUMP" || true
   exit 1
 fi
-CSP_CONFIG_REAL="$(readlink -f "$CSP_CONFIG")"
-if [[ "$CSP_CONFIG_REAL" != /etc/nginx/* ]]; then
-  echo "ERROR: refusing to update an Nginx config outside /etc/nginx: $CSP_CONFIG_REAL"
-  exit 1
-fi
-CSP_BACKUP="${CSP_CONFIG_REAL}.bak-${SHORT_SHA}-${STAMP}"
-if sudo -n python3 - "$CSP_CONFIG_REAL" "$CSP_BACKUP" <<'PY'
+declare -a CSP_BACKUPS=()
+while IFS= read -r CSP_CONFIG; do
+  [ -n "$CSP_CONFIG" ] || continue
+  CSP_CONFIG_REAL="$(readlink -f "$CSP_CONFIG")"
+  if [[ "$CSP_CONFIG_REAL" != /etc/nginx/* ]]; then
+    echo "ERROR: refusing to update an Nginx config outside /etc/nginx: $CSP_CONFIG_REAL"
+    exit 1
+  fi
+  CSP_BACKUP="${CSP_CONFIG_REAL}.bak-${SHORT_SHA}-${STAMP}"
+  if ! sudo -n python3 - "$CSP_CONFIG_REAL" "$CSP_BACKUP" <<'PY'
 from pathlib import Path
 import re
 import shutil
@@ -294,26 +312,28 @@ else:
     config_path.write_text(updated, encoding="utf-8")
     print(f"Updated frame-ancestors policy in {config_path}; backup: {backup_path}")
 PY
-then
-  if ! sudo -n nginx -t; then
-    if [ -f "$CSP_BACKUP" ]; then
-      sudo -n cp -p "$CSP_BACKUP" "$CSP_CONFIG_REAL"
-      sudo -n nginx -t
-    fi
-    echo "ERROR: Nginx validation failed after the frame-ancestors update"
+  then
+    echo "ERROR: could not update the active Nginx frame-ancestors policy in $CSP_CONFIG_REAL"
     exit 1
   fi
-  if ! sudo -n systemctl reload nginx; then
-    if [ -f "$CSP_BACKUP" ]; then
-      sudo -n cp -p "$CSP_BACKUP" "$CSP_CONFIG_REAL"
-      sudo -n nginx -t
-      sudo -n systemctl reload nginx || true
-    fi
-    echo "ERROR: Nginx reload failed after the frame-ancestors update"
-    exit 1
+  if sudo -n test -f "$CSP_BACKUP"; then
+    CSP_BACKUPS+=("$CSP_CONFIG_REAL:$CSP_BACKUP")
   fi
-else
-  echo "ERROR: could not update the active Nginx frame-ancestors policy"
+done <<<"$CSP_CONFIGS"
+if ! sudo -n nginx -t; then
+  for backup in "${CSP_BACKUPS[@]}"; do
+    sudo -n cp -p "${backup#*:}" "${backup%%:*}" || true
+  done
+  sudo -n nginx -t || true
+  echo "ERROR: Nginx validation failed after the frame-ancestors update"
+  exit 1
+fi
+if ! sudo -n systemctl reload nginx; then
+  for backup in "${CSP_BACKUPS[@]}"; do
+    sudo -n cp -p "${backup#*:}" "${backup%%:*}" || true
+  done
+  sudo -n nginx -t && sudo -n systemctl reload nginx || true
+  echo "ERROR: Nginx reload failed after the frame-ancestors update"
   exit 1
 fi
 
@@ -326,6 +346,8 @@ if ! grep -qiF 'Content-Security-Policy:' <<<"$LOCAL_CSP_HEADERS" \
   || ! grep -qiF 'https://erp.madhushalasoftware.com' <<<"$LOCAL_CSP_HEADERS"; then
   echo "ERROR: local Nginx did not return the ERP frame-ancestors origin"
   printf '%s\n' "$LOCAL_CSP_HEADERS" | grep -i 'Content-Security-Policy:' || true
+  echo "Effective integrations frame-ancestors directives after reload:"
+  sudo -n nginx -T 2>&1 | grep -n -C 2 -E 'server_name[^;]*integrations\\.madhushalasoftware\\.com|add_header Content-Security-Policy' || true
   exit 1
 fi
 
