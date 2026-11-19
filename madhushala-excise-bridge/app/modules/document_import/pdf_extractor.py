@@ -1085,9 +1085,10 @@ def _extract_madhya_pradesh(
     """
     products: list[ExtractedProduct] = []
 
+    mapping: tuple[int, int, int, int | None] | None = None
+    mapped_width: int | None = None
     for page_no, _page_text, page_tables in pages:
         for rows in page_tables:
-            mapping: tuple[int, int, int, int | None] | None = None
             for cells in rows:
                 keys = [_key(cell) for cell in cells]
 
@@ -1103,9 +1104,12 @@ def _extract_madhya_pradesh(
                 batch_idx = next((i for i, key in enumerate(keys) if key in {"batch", "batchno", "batchnumber"}), None)
                 if label_idx is not None and capacity_idx is not None and cases_idx is not None:
                     mapping = (label_idx, capacity_idx, cases_idx, batch_idx)
+                    mapped_width = len(cells)
                     continue
 
-                if mapping is None or not cells:
+                # Headerless continuation rows must retain the validated grid.
+                # Payment summaries and unrelated table shapes are not products.
+                if mapping is None or not cells or len(cells) != mapped_width:
                     continue
 
                 label_idx, capacity_idx, cases_idx, batch_idx = mapping
@@ -1259,6 +1263,15 @@ def _candidate_row_count(
     only as a completeness signal: under-extraction triggers LlamaParse rather
     than inventing missing products.
     """
+    if profile == "MADHYA_PRADESH_DELIVERY_CHALLAN":
+        # Registration references belong to printed product labels, including
+        # continuation pages with no repeated column headings. Count them from
+        # text independently of table detection so a missing page cannot pass.
+        return sum(len(re.findall(
+            r"\[(?:FL|CL)/\d{4}\s*[-\u2013]\s*\d{4}/\d+\]", text,
+            re.IGNORECASE,
+        )) for _page, text, _tables in pages)
+
     selected_pages = pages
     if profile in {"WEST_BENGAL_FORM3", "WEST_BENGAL_FORM5"}:
         originals = [entry for entry in pages if _west_bengal_copy_label(entry[1]) == "ORIGINAL"]
