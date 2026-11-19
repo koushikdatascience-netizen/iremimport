@@ -855,3 +855,10 @@ MP payment-summary financials are optional source evidence. They are populated o
 The handoff adds `sourceFinancials` and `calculationMappingRequired: ["incomeTax"]` for this MP source. These are source/validation fields, not authorization to add a tax to a calculated purchase. The inspected upstream Calculate schema has no incomeTax field and the active company tax-tag lookup returns HTTP 403; an upstream supported field or confirmed ledger mapping is still required. The frontend must handle this requirement before applying source Income Tax in Calculate/Save, and must avoid adding it again if the calculated result already includes it. This bridge does not silently populate TCS, overwrite Item Master tax amounts, or add a second tax adjustment.
 
 Earlier import jobs retain their original stored source data; re-upload the PDF after deploying this feature to obtain the financial evidence.
+
+
+### MP per-item manufacturing amounts
+
+For a reconciled MP challan with a payment footer, each product is joined to its printed financial row by the full FL/CL registration reference, exact ML and exact case quantity. It is never joined by array position or fuzzy name. Missing, reused or ambiguous rows invalidate the source financials and block handoff. All matched Mfg Amount values must sum exactly to the printed Manufacturing Amount.
+
+The printed per-line Mfg Amount is persisted as invoiceAmount/source amount and returned as both items[].amount and items[].itemAmount in the read-only handoff. sourceLineFinancials keeps the registration, manufacturingAmount, dutyAmount and vat separately. Duty is not substituted for the item amount, and VAT is not silently added to it. Existing Item Master rates and tax inputs remain unchanged. The Calculate adapter still rebuilds the upstream request from the master and reviewed quantities, and the authoritative calculated result owns the final purchase values. Other states retain their existing amount semantics. Old stored jobs are not automatically rewritten; re-upload after this release to obtain per-line evidence.
