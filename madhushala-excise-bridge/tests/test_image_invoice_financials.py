@@ -1,5 +1,7 @@
 from decimal import Decimal
-import json
+from io import BytesIO
+
+from PIL import Image
 
 from app.modules.document_import.image_invoice_financials import reconcile
 from app.modules.document_import.schemas import ExtractedDocument
@@ -47,7 +49,9 @@ def test_image_verified_financials_reach_handoff(client, monkeypatch):
     monkeypatch.setattr(purchase_required, 'build_purchase_context', context)
     monkeypatch.setattr(reference_data_service, 'fresh_catalogue', catalogue)
     session = create_session(client)
-    response = client.post('/api/v1/document-import/upload/batch/image', headers=auth(session), files=[('files', ('invoice.jpg', b'image-test', 'image/jpeg'))])
+    source = BytesIO()
+    Image.new('RGB', (20, 20), 'white').save(source, 'JPEG')
+    response = client.post('/api/v1/document-import/upload/batch/image', headers=auth(session), files=[('files', ('invoice.jpg', source.getvalue(), 'image/jpeg'))])
     assert response.status_code == 200, response.text
     job = response.json()['job']['id']
     rows = client.get(f'/api/v1/document-import/jobs/{job}/items', headers=auth(session)).json()['items']
