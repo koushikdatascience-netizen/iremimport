@@ -1,6 +1,7 @@
 """Read clearly aligned case cells when image extraction omitted quantities."""
 from io import BytesIO
 from collections import Counter
+from dataclasses import dataclass
 import re
 from threading import Lock
 
@@ -15,6 +16,12 @@ _lock = Lock()
 _engine = None
 
 
+@dataclass(frozen=True)
+class ImageOcrContext:
+    image: np.ndarray
+    boxes: list[dict]
+
+
 def _compact(text):
     return re.sub(r"[^A-Z0-9]", "", str(text or "").upper())
 
@@ -24,22 +31,32 @@ def _box(raw):
     xs = [float(p[0]) for p in points]
     ys = [float(p[1]) for p in points]
     return {"text": str(text), "confidence": float(confidence), "x": sum(xs) / len(xs),
-            "y": sum(ys) / len(ys), "height": max(ys) - min(ys)}
+            "y": sum(ys) / len(ys), "height": max(ys) - min(ys),
+            "bounds": (min(xs), min(ys), max(xs), max(ys))}
 
 
-def recover_cases_from_image(data, document):
+def prepare_image_ocr(data):
+    """Read the unchanged source once; share evidence only within this upload."""
     global _engine
     with Image.open(BytesIO(data)) as source:
         image = ImageOps.exif_transpose(source).convert("RGB")
         if image.width * image.height > 30_000_000:
-            return document, 0
+            return None
         image = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
     with _lock:
         if _engine is None:
             from rapidocr_onnxruntime import RapidOCR
             _engine = RapidOCR(intra_op_num_threads=2, inter_op_num_threads=1)
         output, _ = _engine(image)
-        boxes = [_box(row) for row in (output or [])]
+        return ImageOcrContext(image, [_box(row) for row in (output or [])])
+
+
+def recover_cases_from_image(data, document, *, ocr_context=None):
+    context = ocr_context if ocr_context is not None else prepare_image_ocr(data)
+    if context is None:
+        return document, 0
+    image, boxes = context.image, context.boxes
+    with _lock:
         case_headers = [b for b in boxes if _compact(b['text']) == 'CS' and b['confidence'] >= .7]
         bottle_headers = [b for b in boxes if _compact(b['text']) == 'BT' and b['confidence'] >= .7]
         size_headers = [b for b in boxes if _compact(b['text']) == 'SIZE' and b['confidence'] >= .8]

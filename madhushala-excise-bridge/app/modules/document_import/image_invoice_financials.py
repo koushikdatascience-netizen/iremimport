@@ -1,12 +1,9 @@
 """Verified printed financial evidence for CS/BT commercial invoice photos."""
 from collections import Counter
 from decimal import Decimal, InvalidOperation
-from io import BytesIO
 import re
 
 import cv2
-import numpy as np
-from PIL import Image, ImageOps
 
 from app.modules.document_import import image_case_ocr as ocr
 from app.modules.document_import.schemas import ExtractedProduct
@@ -48,24 +45,13 @@ def _read_money(engine, image, bounds):
     return readings[0] if readings[0] is not None and readings[0] == readings[1] else None
 
 
-def extract_image_invoice_financials(data, document):
-    with Image.open(BytesIO(data)) as source:
-        image = ImageOps.exif_transpose(source).convert('RGB')
-        if image.width * image.height > 30_000_000:
-            return document, {'status': 'unsupported'}
-        image = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+def extract_image_invoice_financials(data, document, *, ocr_context=None):
+    context = ocr_context if ocr_context is not None else ocr.prepare_image_ocr(data)
+    if context is None:
+        return document, {'status': 'unsupported'}
+    image, boxes = context.image, context.boxes
     with ocr._lock:
-        if ocr._engine is None:
-            from rapidocr_onnxruntime import RapidOCR
-            ocr._engine = RapidOCR(intra_op_num_threads=2, inter_op_num_threads=1)
         engine = ocr._engine
-        result, _ = engine(image)
-        boxes = []
-        for raw in result or []:
-            box = ocr._box(raw)
-            box['bounds'] = (min(p[0] for p in raw[0]), min(p[1] for p in raw[0]),
-                             max(p[0] for p in raw[0]), max(p[1] for p in raw[0]))
-            boxes.append(box)
 
         def labels(text):
             return [b for b in boxes if ocr._compact(b['text']) == text and b['confidence'] >= (.7 if text == 'CS' else .8)]

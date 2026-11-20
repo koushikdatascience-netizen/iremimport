@@ -1119,36 +1119,60 @@ class DocumentImportService:
                     }
             else:
                 client = LlamaCloudClient()
-                extracted = await client.extract_products(temp_path, filename)
-                meta = {"engine": "llamaparse"}
+                async def prepare_ocr():
+                    try:
+                        from app.modules.document_import.image_case_ocr import prepare_image_ocr
+                        return await asyncio.to_thread(prepare_image_ocr, data)
+                    except Exception:
+                        logging.getLogger("madhushala-excise-bridge.document-import").exception(
+                            "image_ocr_prepare_failed file=%s", filename)
+                        return None
+
+                stage_started = time.perf_counter()
+                extracted, ocr_context = await asyncio.gather(
+                    client.extract_products(temp_path, filename), prepare_ocr())
+                meta = {"engine": "llamaparse", "imagePrimaryAndOcrMs": round((time.perf_counter() - stage_started) * 1000, 2)}
+                # The same full-page evidence serves case and financial reads.
+                # Keep cell confidence checks and financial reconciliation intact.
+                if any(not any(getattr(item, field, None) not in (None, "", 0, "0")
+                                   for field in ("box", "loose", "quantity"))
+                       for item in extracted.items) and ocr_context is not None:
+                    try:
+                        stage_started = time.perf_counter()
+                        from app.modules.document_import.image_case_ocr import recover_cases_from_image
+                        extracted, recovered = await asyncio.to_thread(
+                            recover_cases_from_image, data, extracted, ocr_context=ocr_context)
+                        meta["imageCaseOcrRowsRecovered"] = recovered
+                        meta["imageCaseOcrMs"] = round((time.perf_counter() - stage_started) * 1000, 2)
+                    except Exception:
+                        logging.getLogger("madhushala-excise-bridge.document-import").exception(
+                            "image_case_ocr_failed file=%s", filename)
+                # Retain the cloud fallback for layouts the local reader cannot
+                # resolve. A successful local cell read avoids this extra request.
                 if any(not any(getattr(item, field, None) not in (None, "", 0, "0")
                                    for field in ("box", "loose", "quantity"))
                        for item in extracted.items):
                     try:
+                        stage_started = time.perf_counter()
                         from app.modules.document_import.image_quantity_recovery import recover_image_quantities
                         evidence = await client.extract_image_quantities(temp_path, filename)
                         extracted, recovered = recover_image_quantities(extracted, evidence)
                         meta["imageQuantityRowsRecovered"] = recovered
+                        meta["imageQuantityFallbackMs"] = round((time.perf_counter() - stage_started) * 1000, 2)
                     except Exception:
                         logging.getLogger("madhushala-excise-bridge.document-import").exception(
                             "image_quantity_recovery_failed file=%s", filename)
-                if any(not any(getattr(item, field, None) not in (None, "", 0, "0")
-                                   for field in ("box", "loose", "quantity"))
-                       for item in extracted.items):
+                if ocr_context is not None:
                     try:
-                        from app.modules.document_import.image_case_ocr import recover_cases_from_image
-                        extracted, recovered = await asyncio.to_thread(recover_cases_from_image, data, extracted)
-                        meta["imageCaseOcrRowsRecovered"] = recovered
+                        stage_started = time.perf_counter()
+                        from app.modules.document_import.image_invoice_financials import extract_image_invoice_financials
+                        extracted, financial_status = await asyncio.to_thread(
+                            extract_image_invoice_financials, data, extracted, ocr_context=ocr_context)
+                        meta["imageFinancialValidation"] = financial_status
+                        meta["imageFinancialMs"] = round((time.perf_counter() - stage_started) * 1000, 2)
                     except Exception:
                         logging.getLogger("madhushala-excise-bridge.document-import").exception(
-                            "image_case_ocr_failed file=%s", filename)
-                try:
-                    from app.modules.document_import.image_invoice_financials import extract_image_invoice_financials
-                    extracted, financial_status = await asyncio.to_thread(extract_image_invoice_financials, data, extracted)
-                    meta["imageFinancialValidation"] = financial_status
-                except Exception:
-                    logging.getLogger("madhushala-excise-bridge.document-import").exception(
-                        "image_invoice_financials_failed file=%s", filename)
+                            "image_invoice_financials_failed file=%s", filename)
 
             # Image-only AP ICDC invoices have no embedded PDF text. After the
             # generic extractor identifies an AP invoice, verify its printed
