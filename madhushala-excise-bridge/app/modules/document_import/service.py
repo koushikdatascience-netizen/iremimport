@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import mimetypes
 import re
@@ -1007,7 +1008,6 @@ class DocumentImportService:
             evidence = None
             if ext == "pdf":
                 from app.modules.document_import.ap_icdc.detect_invoice import scanned_ap_icdc_evidence
-                import asyncio
                 evidence = await asyncio.to_thread(scanned_ap_icdc_evidence, data, filename)
             if evidence is not None:
                 from app.modules.document_import.ap_icdc.main import extract_pdf as extract_ap_icdc
@@ -1120,6 +1120,16 @@ class DocumentImportService:
                     except Exception:
                         logging.getLogger("madhushala-excise-bridge.document-import").exception(
                             "image_quantity_recovery_failed file=%s", filename)
+                if any(not any(getattr(item, field, None) not in (None, "", 0, "0")
+                                   for field in ("box", "loose", "quantity"))
+                       for item in extracted.items):
+                    try:
+                        from app.modules.document_import.image_case_ocr import recover_cases_from_image
+                        extracted, recovered = await asyncio.to_thread(recover_cases_from_image, data, extracted)
+                        meta["imageCaseOcrRowsRecovered"] = recovered
+                    except Exception:
+                        logging.getLogger("madhushala-excise-bridge.document-import").exception(
+                            "image_case_ocr_failed file=%s", filename)
 
             # Image-only AP ICDC invoices have no embedded PDF text. After the
             # generic extractor identifies an AP invoice, verify its printed
@@ -1130,7 +1140,6 @@ class DocumentImportService:
                     and str(extracted.invoiceNumber or "").upper().startswith("ICDC")):
                 from app.modules.document_import.ap_icdc.main import extract_pdf as extract_ap_icdc
                 from app.modules.document_import.ap_icdc.invoice_upload import verified_document_from_result, validation_failure_detail
-                import asyncio
                 ap_result = await asyncio.to_thread(extract_ap_icdc, temp_path, document_type="icdc")
                 try:
                     verified = verified_document_from_result(ap_result)
