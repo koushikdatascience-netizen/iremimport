@@ -83,9 +83,14 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
                 and isinstance(getattr(document, "invoiceFinancials", None), dict)
                 and getattr(document, "invoiceFinancials", {}).get("reconciled") is True
             )
+            is_verified_image = (
+                str(raw.get("sourceState") or "").upper() == "MAHARASHTRA"
+                and isinstance(raw.get("sourceFinancialValidation"), dict)
+                and raw["sourceFinancialValidation"].get("status") == "verified"
+            )
             source_amount = _float(
                 getattr(item, "invoiceAmount", None)
-                if is_ap_invoice or is_verified_mp or is_verified_telangana
+                if is_ap_invoice or is_verified_mp or is_verified_telangana or is_verified_image
                 else None
             )
             if is_ap_invoice:
@@ -146,7 +151,7 @@ def normalize_extracted_document(document: ExtractedDocument, source_type: str) 
                     quantity=float(box + loose) if (box or loose) else None,
                     rate=None,
                     mrp=None,
-                    amount=source_amount if is_ap_invoice or is_verified_mp or is_verified_telangana else None,
+                    amount=source_amount if is_ap_invoice or is_verified_mp or is_verified_telangana or is_verified_image else None,
                     batchNo=_clean_text(item.batchNo),
                     box=box or None,
                     loose=loose or None,

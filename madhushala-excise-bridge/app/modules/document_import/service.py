@@ -899,6 +899,18 @@ class DocumentImportService:
             if not isinstance(financials, dict):
                 continue
             taxes = financials.get("taxes") if isinstance(financials.get("taxes"), dict) else {}
+            if str(raw.get("sourceState") or "").upper() == "MAHARASHTRA":
+                if not financials.get("reconciled"):
+                    raise HTTPException(status_code=409, detail="Printed image financial totals require review before Purchase handoff")
+                return {
+                    "taxes": {"vat": taxes.get("vat"), "tcsEcSc": taxes.get("tcsEcSc")},
+                    "roundedOff": financials.get("roundedOff"),
+                    "totalAmount": financials.get("totalAmount"),
+                    "totalNet": financials.get("totalNet"),
+                    "subTotal": financials.get("subTotal"),
+                    "sourceFinancials": financials,
+                    "calculationMappingRequired": financials.get("calculationMappingRequired", []),
+                }
             if str(raw.get("sourceState") or "").upper() == "MADHYA_PRADESH":
                 if not financials.get("reconciled"):
                     raise HTTPException(status_code=409, detail="MP printed financial totals require review before Purchase handoff")
@@ -1130,6 +1142,13 @@ class DocumentImportService:
                     except Exception:
                         logging.getLogger("madhushala-excise-bridge.document-import").exception(
                             "image_case_ocr_failed file=%s", filename)
+                try:
+                    from app.modules.document_import.image_invoice_financials import extract_image_invoice_financials
+                    extracted, financial_status = await asyncio.to_thread(extract_image_invoice_financials, data, extracted)
+                    meta["imageFinancialValidation"] = financial_status
+                except Exception:
+                    logging.getLogger("madhushala-excise-bridge.document-import").exception(
+                        "image_invoice_financials_failed file=%s", filename)
 
             # Image-only AP ICDC invoices have no embedded PDF text. After the
             # generic extractor identifies an AP invoice, verify its printed
