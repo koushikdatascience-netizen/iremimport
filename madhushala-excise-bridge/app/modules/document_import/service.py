@@ -1140,7 +1140,6 @@ class DocumentImportService:
                     and str(extracted.invoiceNumber or "").upper().startswith("ICDC")):
                 from app.modules.document_import.ap_icdc.main import extract_pdf as extract_ap_icdc
                 from app.modules.document_import.ap_icdc.invoice_upload import verified_document_from_result, validation_failure_detail
-                import asyncio
                 ap_result = await asyncio.to_thread(extract_ap_icdc, temp_path, document_type="icdc")
                 try:
                     verified = verified_document_from_result(ap_result)
