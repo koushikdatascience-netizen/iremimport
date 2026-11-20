@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
@@ -62,6 +63,8 @@ async def lifespan(_app: FastAPI):
 
 
 PUBLIC_PREFIX = "/excise-import"
+ERP_ORIGIN = "https://erp.madhushalasoftware.com"
+ERP_SESSION_DATA_URL = f"{ERP_ORIGIN}/api/auth/session-data"
 INDEX_HTML_PATH = Path("app/static/index.html")
 STATIC_ASSET_VERSION = "20261026-odisha-financials-v25"
 DOCUMENT_IMPORT_SCRIPTS = (
@@ -418,6 +421,53 @@ async def validate_madhushala_context(shop_code: str, token: str, *, force: bool
         raise HTTPException(status_code=502, detail="Could not validate Madhushala session") from exc
 
 
+async def validate_erp_session_access(shop_code: str, token: str) -> None:
+    """Validate ERP browser auth and ensure its session-data grants this shop."""
+    if not token:
+        raise HTTPException(status_code=401, detail="ERP sign-in token is required")
+
+    timeout = httpx.Timeout(
+        connect=settings.MADHUSHALA_CONNECT_TIMEOUT_SECONDS,
+        read=settings.MADHUSHALA_READ_TIMEOUT_SECONDS,
+        write=settings.MADHUSHALA_WRITE_TIMEOUT_SECONDS,
+        pool=settings.MADHUSHALA_POOL_TIMEOUT_SECONDS,
+    )
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                ERP_SESSION_DATA_URL,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("erp_session_validation_failed reason=upstream_unavailable")
+        raise HTTPException(status_code=502, detail="Could not validate ERP sign-in") from exc
+
+    if response.status_code in (401, 403):
+        raise HTTPException(status_code=401, detail="ERP sign-in is invalid or expired")
+    if response.status_code != 200:
+        logger.warning("erp_session_validation_failed status=%s", response.status_code)
+        raise HTTPException(status_code=502, detail="Could not validate ERP sign-in")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="ERP session data response was invalid") from exc
+
+    companies = payload.get("companies") if isinstance(payload, dict) else None
+    allowed_shops = set()
+    if isinstance(companies, list):
+        allowed_shops = {
+            str(company.get("dbName") or "").strip().casefold()
+            for company in companies
+            if isinstance(company, dict) and str(company.get("dbName") or "").strip()
+        }
+    if shop_code.strip().casefold() not in allowed_shops:
+        raise HTTPException(status_code=403, detail="ERP user is not authorized for this shop")
+
+
 @app.post("/crm/session")
 async def create_crm_session(payload: CrmSessionRequest, request: Request):
     shop_code = payload.shopCode.strip()
@@ -453,9 +503,13 @@ async def create_crm_session(payload: CrmSessionRequest, request: Request):
     # Browser-direct mode always validates the user's JWT against the requested shop.
     # Server-to-server mode follows VALIDATE_MADHUSHALA_TOKEN_ON_SESSION.
     upstream_token = madhushala_token or settings.MADHUSHALA_SERVICE_TOKEN
-    await validate_madhushala_context(
-        shop_code, upstream_token, force=settings.is_production and not server_authenticated
-    )
+    is_erp_browser = request.headers.get("Origin", "").rstrip("/").casefold() == ERP_ORIGIN
+    if is_erp_browser and not server_authenticated:
+        await validate_erp_session_access(shop_code, madhushala_token)
+    else:
+        await validate_madhushala_context(
+            shop_code, upstream_token, force=settings.is_production and not server_authenticated
+        )
 
     # Persist the exact token that was validated for this upstream session.
     # In server-authenticated mode madhushala_token can be empty while
