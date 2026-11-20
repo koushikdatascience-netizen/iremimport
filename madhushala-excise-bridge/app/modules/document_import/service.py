@@ -1106,8 +1106,20 @@ class DocumentImportService:
                         "engine": meta.get("engine") or "pymupdf-state-adapter",
                     }
             else:
-                extracted = await LlamaCloudClient().extract_products(temp_path, filename)
+                client = LlamaCloudClient()
+                extracted = await client.extract_products(temp_path, filename)
                 meta = {"engine": "llamaparse"}
+                if any(not any(getattr(item, field, None) not in (None, "", 0, "0")
+                                   for field in ("box", "loose", "quantity"))
+                       for item in extracted.items):
+                    try:
+                        from app.modules.document_import.image_quantity_recovery import recover_image_quantities
+                        evidence = await client.extract_image_quantities(temp_path, filename)
+                        extracted, recovered = recover_image_quantities(extracted, evidence)
+                        meta["imageQuantityRowsRecovered"] = recovered
+                    except Exception:
+                        logging.getLogger("madhushala-excise-bridge.document-import").exception(
+                            "image_quantity_recovery_failed file=%s", filename)
 
             # Image-only AP ICDC invoices have no embedded PDF text. After the
             # generic extractor identifies an AP invoice, verify its printed

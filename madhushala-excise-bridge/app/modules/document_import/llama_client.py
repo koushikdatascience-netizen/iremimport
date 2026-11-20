@@ -77,6 +77,30 @@ PRODUCT_SCHEMA: dict[str, Any] = {
     "required": ["documentType", "items"],
 }
 
+IMAGE_QUANTITY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "items": {"type": "array", "items": {"type": "object", "properties": {
+            "itemName": {"type": "string"},
+            "ml": {"type": ["integer", "string", "null"]},
+            "caseHeader": {"type": ["string", "null"]},
+            "caseCell": {"type": ["string", "null"]},
+            "bottleHeader": {"type": ["string", "null"]},
+            "bottleCell": {"type": ["string", "null"]},
+        }}},
+    },
+    "required": ["items"],
+}
+
+IMAGE_QUANTITY_PROMPT = (
+    "Read the product table in this photograph at high resolution. For each product copy its full "
+    "printed name and size in ml, and copy the exact column heading and cell text for cases and "
+    "loose bottles. CS, C.S., CASE, CASES and BOX denote cases; BT, BTL and BOTTLES denote "
+    "loose bottles. Read each cell on its own product row, even if the digits are small. Do not "
+    "use totals, prices, packing, or calculated values as quantities. Use null for unreadable "
+    "or absent cells and headings. Do not guess. Ignore summary and total rows."
+)
+
 EXTRACTION_PROMPT = (
     "Extract only the source-document facts needed for liquor purchase review. At document level extract "
     "supplierName when visible. Extract invoiceNumber as the business document number (invoice number, delivery "
@@ -252,6 +276,13 @@ class LlamaCloudClient:
         result = await self.poll_extraction(result_or_job) if isinstance(result_or_job, str) else result_or_job
         payload = result.get("data") or result.get("result") or result if isinstance(result, dict) else {}
         return ExtractedDocument.model_validate(payload)
+
+    async def extract_image_quantities(self, file_path: Path, filename: str) -> dict[str, Any]:
+        file_id = await self.upload_file(file_path, filename)
+        job = await self.start_extraction(file_id, prompt=IMAGE_QUANTITY_PROMPT, data_schema=IMAGE_QUANTITY_SCHEMA)
+        result = await self.poll_extraction(job) if isinstance(job, str) else job
+        payload = result.get("data") or result.get("result") or result if isinstance(result, dict) else {}
+        return payload if isinstance(payload, dict) else {}
 
 
     async def extract_scanned_pdf_pages(self, file_path: Path, filename: str) -> ExtractedDocument:
