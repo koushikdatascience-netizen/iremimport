@@ -93,6 +93,7 @@ COMPOSE_CONFIG="$(mktemp)"
 dc config >"$COMPOSE_CONFIG"
 grep -q 'madhushala-automation-platform_madhushala_automation_data' "$COMPOSE_CONFIG"
 grep -q 'container_name: madhushala_automation_web' "$COMPOSE_CONFIG"
+grep -Fq 'MADHUSHALA_BASE_URL: https://erp.madhushalasoftware.com' "$COMPOSE_CONFIG"
 
 rm -f "$COMPOSE_CONFIG"
 

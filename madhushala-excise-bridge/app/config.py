@@ -41,7 +41,7 @@ class Settings:
     MAPPINGS_DIR: str = os.getenv("MAPPINGS_DIR", "data/mappings")
     MADHUSHALA_BASE_URL: str = os.getenv(
         "MADHUSHALA_BASE_URL",
-        "https://reportapi.madhushalasoftware.com",
+        "https://erp.madhushalasoftware.com",
     )
     MADHUSHALA_SHOP_CODE: str = os.getenv("MADHUSHALA_SHOP_CODE", "hedu_test3")
     MADHUSHALA_COMPANY_CODE: str = os.getenv("MADHUSHALA_COMPANY_CODE", "2")
