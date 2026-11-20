@@ -66,7 +66,7 @@ PUBLIC_PREFIX = "/excise-import"
 ERP_ORIGIN = "https://erp.madhushalasoftware.com"
 ERP_SESSION_DATA_URL = f"{ERP_ORIGIN}/api/auth/session-data"
 INDEX_HTML_PATH = Path("app/static/index.html")
-STATIC_ASSET_VERSION = "20261026-odisha-financials-v25"
+STATIC_ASSET_VERSION = "20261120-return-site-v26"
 DOCUMENT_IMPORT_SCRIPTS = (
     f'<script src="./static/qr-browser-fallback.js?v={STATIC_ASSET_VERSION}"></script>',
     f'<script src="./static/purchase-context.js?v={STATIC_ASSET_VERSION}"></script>',
@@ -519,6 +519,7 @@ async def create_crm_session(payload: CrmSessionRequest, request: Request):
         normalize_company_code(payload.companyCode),
         normalize_bill_type(payload.billType),
         upstream_token,
+        return_origin=request.headers.get("Origin"),
     )
     return response
 

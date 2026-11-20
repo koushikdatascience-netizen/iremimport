@@ -877,6 +877,52 @@
     };
 
     const MADHUSHALA_PURCHASE_URL = "https://report.madhushalasoftware.com";
+    const PURCHASE_RETURN_ORIGINS = new Set([
+        "https://report.madhushalasoftware.com",
+        "https://erp.madhushalasoftware.com",
+    ]);
+
+    function getPurchaseReturnOrigin() {
+        const fromQuery = new URLSearchParams(window.location.search).get("returnOrigin");
+        let fromStorage = "";
+        try {
+            fromStorage = window.sessionStorage.getItem("madhushalaPurchaseReturnOrigin") || "";
+        } catch (_) {
+            // Storage may be unavailable in a third-party iframe.
+        }
+        const fromReferrer = document.referrer;
+        const ancestorOrigins = [];
+        try {
+            const ancestors = window.location.ancestorOrigins;
+            for (let index = 0; ancestors && index < ancestors.length; index += 1) {
+                ancestorOrigins.push(ancestors[index]);
+            }
+        } catch (_) {
+            // Some browsers do not expose ancestor origins.
+        }
+        const candidates = [fromQuery, fromReferrer, ...ancestorOrigins, fromStorage];
+
+        for (const candidate of candidates) {
+            if (!candidate) continue;
+            try {
+                const origin = new URL(candidate, window.location.href).origin;
+                if (!PURCHASE_RETURN_ORIGINS.has(origin)) continue;
+                try {
+                    window.sessionStorage.setItem("madhushalaPurchaseReturnOrigin", origin);
+                } catch (_) {
+                    // The query/referrer will remain available for this page.
+                }
+                return origin;
+            } catch (_) {
+                // Ignore invalid or non-URL values and try the next source.
+            }
+        }
+        return MADHUSHALA_PURCHASE_URL;
+    }
+
+    // Capture the source while the bridge still has the original referrer/query,
+    // before navigation from the launch page to Document Import changes it.
+    getPurchaseReturnOrigin();
 
     function openPurchaseInMadhushala(purchase) {
         if (!purchase || typeof purchase !== "object") {
@@ -912,8 +958,10 @@
             .replace(/\//g, "_")
             .replace(/=+$/, "");
 
-        const url = MADHUSHALA_PURCHASE_URL.replace(/\/+$/, "")
-            + "/app/purchase#prefill=" + encoded;
+        const returnOrigin = getPurchaseReturnOrigin();
+        const url = returnOrigin === MADHUSHALA_PURCHASE_URL
+            ? MADHUSHALA_PURCHASE_URL.replace(/\/+$/, "") + "/app/purchase#prefill=" + encoded
+            : returnOrigin + "/app/purchase#prefill=" + encoded;
         window.top.location.href = url;
     }
 
