@@ -55,6 +55,7 @@ services:
       LOCAL_PORT: 8091
       DISPLAY: :99
       HEADLESS: "false"
+      MADHUSHALA_BASE_URL: https://erp.madhushalasoftware.com
       BROWSER_PROFILE_DIR: /app/data/browser_profile
       CAPTURES_DIR: /app/data/captures
       MAPPINGS_DIR: /app/data/mappings
@@ -94,6 +95,7 @@ services:
       LOCAL_HOST: 0.0.0.0
       LOCAL_PORT: 8091
       HEADLESS: "true"
+      MADHUSHALA_BASE_URL: https://erp.madhushalasoftware.com
       REDIS_URL: redis://redis:6379/0
     volumes:
       - madhushala_automation_data:/app/data
@@ -127,6 +129,7 @@ services:
       LOCAL_HOST: 0.0.0.0
       LOCAL_PORT: 8091
       HEADLESS: "true"
+      MADHUSHALA_BASE_URL: https://erp.madhushalasoftware.com
       REDIS_URL: redis://redis:6379/0
     volumes:
       - madhushala_automation_data:/app/data
