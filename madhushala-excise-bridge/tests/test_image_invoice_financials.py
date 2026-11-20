@@ -62,7 +62,9 @@ def test_image_verified_financials_reach_handoff(client, monkeypatch):
     response = client.get(f'/api/v1/document-import/jobs/{job}/purchase/handoff', headers=auth(session))
     assert response.status_code == 200, response.text
     purchase = response.json()['purchasePayload']
-    assert [(item['box'], item['amount'], item['itemAmount']) for item in purchase['items']] == [(5, 17730.75, 17730.75), (5, 9696.5, 9696.5)]
+    assert {item['itemName']: (item['box'], item['amount'], item['itemAmount']) for item in purchase['items']} == {
+        'Image Beer A': (5, 17730.75, 17730.75), 'Image Beer B': (5, 9696.5, 9696.5),
+    }
     assert purchase['taxes']['vat'] == 0
     assert purchase['taxes']['tcsEcSc'] == 545.56
     assert purchase['taxes']['tcs'] is None
