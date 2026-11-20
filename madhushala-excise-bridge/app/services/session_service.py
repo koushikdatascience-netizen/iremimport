@@ -10,6 +10,10 @@ from app.db import conn
 
 
 CANONICAL_PUBLIC_BASE_URL = "https://integrations.madhushalasoftware.com/excise-import"
+ALLOWED_RETURN_ORIGINS = {
+    "https://report.madhushalasoftware.com",
+    "https://erp.madhushalasoftware.com",
+}
 
 
 def _safe_public_base_url(raw_url: str) -> str:
@@ -26,6 +30,11 @@ def _safe_public_base_url(raw_url: str) -> str:
     if parsed.scheme == "http" and hostname not in {"127.0.0.1", "localhost"}:
         return CANONICAL_PUBLIC_BASE_URL
     return (raw_url or CANONICAL_PUBLIC_BASE_URL).rstrip("/")
+
+
+def _safe_return_origin(raw_origin: str | None) -> str | None:
+    origin = (raw_origin or "").strip().rstrip("/")
+    return origin if origin in ALLOWED_RETURN_ORIGINS else None
 
 
 class SessionService:
@@ -54,7 +63,7 @@ class SessionService:
         except InvalidToken as exc:
             raise HTTPException(401, "Invalid encrypted integration session") from exc
 
-    def create(self, shop_code, company_code, bill_type, madhushala_token):
+    def create(self, shop_code, company_code, bill_type, madhushala_token, return_origin=None):
         sid = secrets.token_urlsafe(18)
         token = secrets.token_urlsafe(32)
         stored_madhushala_token = self._encrypt_token(madhushala_token)
@@ -64,13 +73,17 @@ class SessionService:
             db.execute("INSERT INTO integration_sessions(session_id,session_token,shop_code,company_code,bill_type,madhushala_token,created_at,expires_at,state) VALUES(?,?,?,?,?,?,?,?,?)",
                 (sid, token, shop_code, company_code, bill_type, stored_madhushala_token, now.isoformat(), exp.isoformat(), "created"))
         base = _safe_public_base_url(settings.APP_BASE_URL)
+        safe_return_origin = _safe_return_origin(return_origin)
+        return_query = f"sessionId={quote(sid)}"
+        if safe_return_origin:
+            return_query += f"&returnOrigin={quote(safe_return_origin, safe='')}"
         return {
             "sessionId": sid,
             "sessionToken": token,
             "expiresAt": exp.isoformat(),
-            "launchUrl": f"{base}/?sessionId={quote(sid)}#session={quote(token)}",
-            "documentImportUrl": f"{base}/document-import?sessionId={quote(sid)}#session={quote(token)}",
-            "mappingUrl": f"{base}/?view=mapping&sessionId={quote(sid)}#session={quote(token)}",
+            "launchUrl": f"{base}/?{return_query}#session={quote(token)}",
+            "documentImportUrl": f"{base}/document-import?{return_query}#session={quote(token)}",
+            "mappingUrl": f"{base}/?view=mapping&{return_query}#session={quote(token)}",
         }
 
     def by_token(self, token):
